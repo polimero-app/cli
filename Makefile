@@ -1,8 +1,22 @@
-.PHONY: test test-race lint ci
+.PHONY: help build install clean test test-race lint ci
 
-GO ?= go
+GO      ?= go
+BINARY  := polimero
 
-test:
+help: ## Show available targets
+	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
+
+build: ## Build the binary (output: ./polimero)
+	$(GO) build -o $(BINARY) .
+
+install: ## Install the binary to GOPATH/bin
+	$(GO) install .
+
+clean: ## Remove the built binary
+	rm -f $(BINARY)
+
+test: ## Run tests
 	@packages="$$( $(GO) list ./... )"; \
 	if [ -n "$$packages" ]; then \
 		$(GO) test $$packages; \
@@ -10,7 +24,7 @@ test:
 		echo "no Go packages yet; skipping tests"; \
 	fi
 
-test-race:
+test-race: ## Run tests with race detector
 	@packages="$$( $(GO) list ./... )"; \
 	if [ -n "$$packages" ]; then \
 		$(GO) test -race $$packages; \
@@ -18,7 +32,7 @@ test-race:
 		echo "no Go packages yet; skipping race tests"; \
 	fi
 
-lint:
+lint: ## Run golangci-lint (skipped if not installed)
 	@if [ -z "$$( $(GO) list ./... 2>/dev/null )" ]; then \
 		echo "no Go packages yet; skipping lint"; \
 	elif command -v golangci-lint >/dev/null 2>&1; then \
@@ -27,4 +41,4 @@ lint:
 		echo "golangci-lint not installed; skipping lint"; \
 	fi
 
-ci: test test-race lint
+ci: test test-race lint ## Run full CI suite (test + test-race + lint)
