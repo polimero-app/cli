@@ -48,7 +48,7 @@ type configFile struct {
 func Open(dir string) (*Config, error) {
 	path := filepath.Join(dir, "polimero.yaml")
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return &Config{profiles: make(map[string]Profile)}, nil
 	}
 	if err != nil {

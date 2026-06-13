@@ -89,6 +89,9 @@ func listWriteError(out, errOut io.Writer, format output.Format, err error) erro
 	code := listExitCode(err)
 	msg := sanitizeConfigErr(err)
 	if format == output.FormatJSON {
+		// WriteEnvelope error is intentionally ignored here: the config load error
+		// is what matters for exit code, and a write failure (e.g. broken pipe)
+		// should not override it.
 		_ = output.WriteEnvelope(out, output.Envelope{
 			OK:    false,
 			Data:  nil,
