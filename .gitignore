@@ -1,0 +1,19 @@
+# Binary
+polimero
+polimero.exe
+
+# Test and coverage output
+*.test
+*.out
+coverage.html
+
+# macOS
+.DS_Store
+
+# Go workspace (not used in this project)
+go.work
+go.work.sum
+
+# IDEs
+.idea/
+.vscode/
