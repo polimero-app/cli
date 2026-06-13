@@ -78,9 +78,9 @@ func listWriteHuman(w io.Writer, profiles []config.Profile) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tDRIVER\tHOST\tSERIAL\tTIMEOUT\tINSECURE")
+	_, _ = fmt.Fprintln(tw, "NAME\tDRIVER\tHOST\tSERIAL\tTIMEOUT\tINSECURE")
 	for _, p := range profiles {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%v\n", p.Name, p.Driver, p.Host, p.Serial, p.Timeout, p.Insecure)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%v\n", p.Name, p.Driver, p.Host, p.Serial, p.Timeout, p.Insecure)
 	}
 	return tw.Flush()
 }
@@ -99,7 +99,7 @@ func listWriteError(out, errOut io.Writer, format output.Format, err error) erro
 			Meta:  output.Meta{Command: "printer list"},
 		})
 	} else {
-		fmt.Fprintf(errOut, "Error: %s\n", msg)
+		_, _ = fmt.Fprintf(errOut, "Error: %s\n", msg)
 	}
 	return apperr.New(code, "")
 }
