@@ -3,8 +3,8 @@ package tty
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
-	"strings"
 
 	"golang.org/x/term"
 )
@@ -33,10 +33,10 @@ func (r *Real) ReadLine(prompt string) (string, error) {
 	_, _ = fmt.Fprint(os.Stderr, prompt)
 	scanner := bufio.NewScanner(os.Stdin)
 	if scanner.Scan() {
-		return strings.TrimRight(scanner.Text(), "\r\n"), nil
+		return scanner.Text(), nil
 	}
 	if err := scanner.Err(); err != nil {
 		return "", err
 	}
-	return "", nil
+	return "", io.EOF
 }

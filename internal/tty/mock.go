@@ -15,7 +15,10 @@ type Mock struct {
 func (m *Mock) IsTerminal() bool { return m.Terminal }
 
 func (m *Mock) ReadHidden(_ string) (string, error) {
-	return m.HiddenVal, m.Err
+	if m.Err != nil {
+		return "", m.Err
+	}
+	return m.HiddenVal, nil
 }
 
 func (m *Mock) ReadLine(_ string) (string, error) {
