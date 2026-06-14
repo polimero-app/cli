@@ -37,6 +37,10 @@ func (s *stubRefreshDriver) CaptureFingerprint(_ context.Context, _, _ string) (
 	return s.fp, s.err
 }
 
+func (s *stubRefreshDriver) Discover(_ context.Context) ([]driver.DiscoveredPrinter, error) {
+	return []driver.DiscoveredPrinter{}, nil
+}
+
 func defaultRefreshDriver() *stubRefreshDriver {
 	return &stubRefreshDriver{
 		fp:   "sha256:deadbeef",

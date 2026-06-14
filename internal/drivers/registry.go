@@ -41,6 +41,16 @@ func Names() []string {
 	return names
 }
 
+// All returns all registered driver instances in alphabetical order by name.
+func All() []driver.Driver {
+	names := Names()
+	out := make([]driver.Driver, 0, len(names))
+	for _, name := range names {
+		out = append(out, registry[name].driver)
+	}
+	return out
+}
+
 // List returns registered driver metadata in alphabetical order by name.
 func List() []Info {
 	names := Names()

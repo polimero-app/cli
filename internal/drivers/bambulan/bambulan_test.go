@@ -56,3 +56,10 @@ func TestCapabilities_TLSRefreshTrue(t *testing.T) {
 		t.Error("Capabilities().TLSRefresh should be true for bambu-lan driver")
 	}
 }
+
+func TestCapabilities_DiscoveryTrue(t *testing.T) {
+	d := bambulan.New()
+	if !d.Capabilities().Discovery {
+		t.Error("expected Capabilities().Discovery to be true")
+	}
+}

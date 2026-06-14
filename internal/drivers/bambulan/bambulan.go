@@ -64,7 +64,7 @@ func (d *Driver) Name() string { return "bambu-lan" }
 
 // Capabilities returns the bambu-lan driver's supported operations.
 func (d *Driver) Capabilities() driver.Capabilities {
-	return driver.Capabilities{Status: true, TLSRefresh: true}
+	return driver.Capabilities{Status: true, TLSRefresh: true, Discovery: true}
 }
 
 // buildTLSConfig returns a TLS config for connecting to a Bambu LAN printer.
@@ -377,6 +377,11 @@ func (d *Driver) CaptureFingerprint(ctx context.Context, host, serial string) (s
 	}
 	sum := sha256.Sum256(state.PeerCertificates[0].Raw)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// Discover is implemented in full in bambulan_discover.go. This stub satisfies the interface.
+func (d *Driver) Discover(_ context.Context) ([]driver.DiscoveredPrinter, error) {
+	return nil, apperr.New(4, "discover: not yet implemented")
 }
 
 func randomClientID() string {

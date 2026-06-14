@@ -69,6 +69,16 @@ type StatusWarning struct {
 	Message string `json:"message"`
 }
 
+// DiscoveredPrinter holds the information about a printer found via network discovery.
+type DiscoveredPrinter struct {
+	Host   string // IP address
+	Port   int    // service port from mDNS SRV record (e.g. 8883)
+	Serial string // serial number from service metadata; empty if unavailable
+	Model  string // model identifier from service metadata; empty if unavailable
+	Name   string // friendly name from service metadata; empty if unavailable
+	Driver string // driver name that discovered this printer (e.g. "bambu-lan")
+}
+
 // StatusResult is the portable representation of printer state returned by Driver.Status.
 // Errors and Warnings are always non-nil slices (serialize as [] not null).
 type StatusResult struct {

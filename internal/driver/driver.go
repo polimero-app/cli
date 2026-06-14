@@ -33,4 +33,10 @@ type Driver interface {
 	) (*StatusResult, error)
 
 	CaptureFingerprint(ctx context.Context, host, serial string) (fingerprint string, err error)
+
+	// Discover scans the local network for printers using driver-specific discovery
+	// protocols (e.g. mDNS). ctx controls the scan duration. Returns a non-nil
+	// empty slice when no printers are found. Returns exit code 4 if discovery
+	// cannot be started.
+	Discover(ctx context.Context) ([]DiscoveredPrinter, error)
 }
