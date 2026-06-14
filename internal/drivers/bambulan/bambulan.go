@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/eclipse/paho.mqtt.golang/packets"
+	zeroconf "github.com/grandcat/zeroconf"
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
 )
@@ -26,6 +28,13 @@ type mqttConn interface {
 	Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token
 	Publish(topic string, qos byte, retained bool, payload any) mqtt.Token
 	Disconnect(quiesce uint)
+}
+
+// mdnsEntry is the bambulan-internal representation of a single mDNS service response.
+type mdnsEntry struct {
+	Host string
+	Port int
+	Text []string // raw "key=value" TXT records
 }
 
 // fingerprintMismatchError is returned by buildTLSConfig's VerifyConnection
@@ -43,6 +52,7 @@ func (e *fingerprintMismatchError) Error() string {
 type Driver struct {
 	newClient func(*mqtt.ClientOptions) mqttConn
 	dialTLS   func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)
+	browse    func(ctx context.Context, service string) (<-chan *mdnsEntry, error)
 }
 
 // New returns a bambu-lan Driver backed by a real paho MQTT client.
@@ -57,7 +67,38 @@ func New() *Driver {
 			}
 			return conn.(*tls.Conn), nil
 		},
+		browse: realBrowse,
 	}
+}
+
+const bambuMDNSService = "_bambu._tcp"
+
+func realBrowse(ctx context.Context, service string) (<-chan *mdnsEntry, error) {
+	resolver, err := zeroconf.NewResolver(nil)
+	if err != nil {
+		return nil, err
+	}
+	raw := make(chan *zeroconf.ServiceEntry)
+	if err := resolver.Browse(ctx, service, "local.", raw); err != nil {
+		return nil, err
+	}
+	out := make(chan *mdnsEntry)
+	go func() {
+		defer close(out)
+		for e := range raw {
+			var host string
+			if len(e.AddrIPv4) > 0 {
+				host = e.AddrIPv4[0].String()
+			} else if len(e.AddrIPv6) > 0 {
+				host = e.AddrIPv6[0].String()
+			}
+			if host == "" {
+				continue
+			}
+			out <- &mdnsEntry{Host: host, Port: e.Port, Text: e.Text}
+		}
+	}()
+	return out, nil
 }
 
 func (d *Driver) Name() string { return "bambu-lan" }
@@ -379,9 +420,34 @@ func (d *Driver) CaptureFingerprint(ctx context.Context, host, serial string) (s
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// Discover is implemented in full in bambulan_discover.go. This stub satisfies the interface.
-func (d *Driver) Discover(_ context.Context) ([]driver.DiscoveredPrinter, error) {
-	return nil, apperr.New(4, "discover: not yet implemented")
+func (d *Driver) Discover(ctx context.Context) ([]driver.DiscoveredPrinter, error) {
+	entries, err := d.browse(ctx, bambuMDNSService)
+	if err != nil {
+		return nil, apperr.Newf(4, "mDNS browse failed: %s", err)
+	}
+	result := []driver.DiscoveredPrinter{}
+	for e := range entries {
+		result = append(result, driver.DiscoveredPrinter{
+			Host:   e.Host,
+			Port:   e.Port,
+			Driver: d.Name(),
+			Serial: txtValue(e.Text, "sn"),
+			Model:  txtValue(e.Text, "dev_model_name"),
+			Name:   txtValue(e.Text, "dev_name"),
+		})
+	}
+	return result, nil
+}
+
+// txtValue returns the value for a "key=value" TXT record, or "" if not found.
+func txtValue(records []string, key string) string {
+	prefix := key + "="
+	for _, r := range records {
+		if strings.HasPrefix(r, prefix) {
+			return r[len(prefix):]
+		}
+	}
+	return ""
 }
 
 func randomClientID() string {
