@@ -2,14 +2,17 @@ package driver
 
 import (
 	"context"
+	"log/slog"
 	"time"
 )
 
 // Driver defines the interface every printer driver must satisfy.
-// Plan 2 exposes Name and ConnectCheck only; Status and Capabilities are added in Plan 3.
 type Driver interface {
 	// Name returns the driver identifier string (e.g. "bambu-lan").
 	Name() string
+
+	// Capabilities returns which optional operations this driver supports.
+	Capabilities() Capabilities
 
 	// ConnectCheck verifies that the printer is reachable and credentials are valid.
 	// Returns the SHA-256 leaf certificate fingerprint as "sha256:<lowercase-hex>".
@@ -20,4 +23,12 @@ type Driver interface {
 		insecure bool,
 		timeout time.Duration,
 	) (fingerprint string, err error)
+
+	// Status fetches the current printer state over the driver protocol.
+	Status(
+		ctx context.Context,
+		p ProfileInput,
+		s SecretsBundle,
+		log *slog.Logger,
+	) (*StatusResult, error)
 }

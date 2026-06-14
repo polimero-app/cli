@@ -8,12 +8,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/eclipse/paho.mqtt.golang/packets"
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/driver"
 )
 
 // Driver implements the bambu-lan protocol for Bambu Lab printers.
@@ -23,6 +25,18 @@ type Driver struct{}
 func New() *Driver { return &Driver{} }
 
 func (d *Driver) Name() string { return "bambu-lan" }
+
+// Capabilities returns the bambu-lan driver's supported operations.
+// Status is implemented; all other capabilities are added in future plans.
+func (d *Driver) Capabilities() driver.Capabilities {
+	return driver.Capabilities{Status: true}
+}
+
+// Status fetches current printer state via the Bambu LAN MQTT protocol.
+// Implemented in Task 3; this stub satisfies the Driver interface for now.
+func (d *Driver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
+	return nil, apperr.New(5, "status not yet implemented")
+}
 
 // ConnectCheck performs a full TLS+MQTT handshake to verify credentials.
 // The leaf certificate SHA-256 fingerprint is captured via VerifyConnection

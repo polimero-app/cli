@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,10 @@ func (s *stubDriver) ConnectCheck(_ context.Context, _, _, _ string, insecure bo
 		return "", nil
 	}
 	return s.fingerprint, s.err
+}
+func (s *stubDriver) Capabilities() driver.Capabilities { return driver.Capabilities{} }
+func (s *stubDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
+	return nil, nil
 }
 
 func defaultAddDeps(kc *keychain.Mock, p *tty.Mock) printer.AddDeps {
