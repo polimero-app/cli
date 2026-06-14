@@ -220,6 +220,9 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 	case data := <-ch:
 		return parseReport(data)
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, apperr.New(4, "status check cancelled")
+		}
 		return nil, apperr.New(4, "status check timed out")
 	}
 }

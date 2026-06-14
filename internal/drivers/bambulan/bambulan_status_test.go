@@ -251,16 +251,21 @@ func TestParseReport_InvalidJSON(t *testing.T) {
 
 // --- fakeClient helpers ---
 
-type fakeToken struct{ err error }
+type fakeToken struct {
+	err  error
+	done chan struct{}
+}
+
+func newFakeToken(err error) *fakeToken {
+	ch := make(chan struct{})
+	close(ch)
+	return &fakeToken{err: err, done: ch}
+}
 
 func (t *fakeToken) Wait() bool                       { return true }
 func (t *fakeToken) WaitTimeout(_ time.Duration) bool { return true }
-func (t *fakeToken) Done() <-chan struct{} {
-	ch := make(chan struct{})
-	close(ch)
-	return ch
-}
-func (t *fakeToken) Error() error { return t.err }
+func (t *fakeToken) Done() <-chan struct{}             { return t.done }
+func (t *fakeToken) Error() error                     { return t.err }
 
 type fakeMessage struct {
 	topic   string
@@ -284,18 +289,18 @@ type fakeClient struct {
 }
 
 func (f *fakeClient) Connect() mqtt.Token {
-	return &fakeToken{err: f.connectErr}
+	return newFakeToken(f.connectErr)
 }
 
 func (f *fakeClient) Subscribe(topic string, _ byte, cb mqtt.MessageHandler) mqtt.Token {
 	if f.payload != nil {
 		cb(nil, &fakeMessage{topic: topic, payload: f.payload})
 	}
-	return &fakeToken{}
+	return newFakeToken(nil)
 }
 
 func (f *fakeClient) Publish(_ string, _ byte, _ bool, _ any) mqtt.Token {
-	return &fakeToken{}
+	return newFakeToken(nil)
 }
 
 func (f *fakeClient) Disconnect(_ uint) {}
@@ -336,7 +341,7 @@ func TestStatus_HappyPath(t *testing.T) {
 	if result.Job == nil || result.Job.Name != "part.3mf" {
 		t.Errorf("Job = %v, want part.3mf", result.Job)
 	}
-	if result.Capabilities.Status != true {
+	if !result.Capabilities.Status {
 		t.Error("Capabilities.Status should be true")
 	}
 }
