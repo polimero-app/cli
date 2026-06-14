@@ -323,6 +323,60 @@ func TestTlsRefresh_ConnectionError_ExitsCode4(t *testing.T) {
 	}
 }
 
+func TestTlsRefresh_CapabilityUnsupported_ExitsCode5(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	noCapDrv := &stubRefreshDriver{caps: driver.Capabilities{Status: true, TLSRefresh: false}}
+	deps := tlsRefreshDeps(t, dir, kc, noCapDrv, &tty.Mock{Terminal: false})
+	_, err := runTlsRefreshCmd(t, deps, "myprinter", "--yes")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
+		t.Errorf("expected exit 5 for unsupported capability, got %v", err)
+	}
+}
+
+func TestTlsRefresh_JSON_ErrorEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	deps := tlsRefreshDeps(t, dir, kc,
+		&stubRefreshDriver{caps: driver.Capabilities{Status: true, TLSRefresh: true}, err: apperr.New(4, "TLS connect failed: connection refused")},
+		&tty.Mock{Terminal: false},
+	)
+	out, err := runTlsRefreshCmd(t, deps, "myprinter", "--yes", "--output", "json")
+	// The command returns an apperr exit error to caller; JSON was already written to out
+	_ = err
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	if env["ok"] != false {
+		t.Errorf("ok = %v, want false", env["ok"])
+	}
+	errMap, ok := env["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error field missing or wrong type: %v", env["error"])
+	}
+	if errMap["code"] != "connection_failed" {
+		t.Errorf("error.code = %v, want connection_failed", errMap["code"])
+	}
+	details, ok := errMap["details"].(map[string]any)
+	if !ok {
+		t.Fatalf("error.details missing or wrong type: %v", errMap["details"])
+	}
+	if details["profile"] != "myprinter" {
+		t.Errorf("error.details.profile = %v, want myprinter", details["profile"])
+	}
+	meta := env["meta"].(map[string]any)
+	if meta["command"] != "printer tls refresh" {
+		t.Errorf("meta.command = %v, want printer tls refresh", meta["command"])
+	}
+	if meta["durationMs"] != nil {
+		t.Errorf("meta.durationMs should be absent in error response, got %v", meta["durationMs"])
+	}
+}
+
 func TestTlsRefresh_JSON_SuccessEnvelope(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()

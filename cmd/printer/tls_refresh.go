@@ -104,7 +104,6 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 		return "", 0, name, apperr.Newf(2, "printer profile %q not found", name)
 	}
 
-	// Confirmation
 	if !yes {
 		if !deps.Prompter.IsTerminal() {
 			return "", 0, name, apperr.New(2, "non-interactive mode requires --yes")
@@ -120,7 +119,6 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 		}
 	}
 
-	// Resolve driver and check capability
 	drv, ok := deps.GetDriver(p.Driver)
 	if !ok {
 		return "", 0, name, apperr.Newf(2, "unknown driver %q", p.Driver)
@@ -129,7 +127,6 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 		return "", 0, name, apperr.Newf(5, "driver %q does not support the tls refresh command", p.Driver)
 	}
 
-	// Resolve timeout
 	timeoutStr := p.Timeout
 	if timeoutFlag != "" {
 		timeoutStr = timeoutFlag
@@ -148,7 +145,6 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
 
 	if insecureFlag {
-		// --insecure path: delete fingerprint, mark profile insecure
 		if delErr := deps.KC.Delete("polimero", kcFpAcct); delErr != nil && !errors.Is(delErr, keychain.ErrNotFound) {
 			return "", 0, name, apperr.Newf(1, "cannot delete TLS fingerprint from keychain: %s", delErr)
 		}
@@ -163,7 +159,6 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 		return "", 0, "", nil
 	}
 
-	// Secure path: capture fingerprint from printer
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 	defer cancel()
 
@@ -174,7 +169,6 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 		return "", 0, name, err
 	}
 
-	// Store fingerprint in keychain
 	if setErr := deps.KC.Set("polimero", kcFpAcct, fp); setErr != nil {
 		return "", 0, name, apperr.Newf(3, "cannot store TLS fingerprint in keychain: %s", setErr)
 	}
