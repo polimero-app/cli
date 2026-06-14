@@ -94,7 +94,10 @@ func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode stri
 		return "", nil
 	}
 
-	tlsCfg, _ := buildTLSConfig(serial, "", false) // capture mode: no fingerprint to check yet
+	tlsCfg, err := buildTLSConfig(serial, "", false) // capture mode: no fingerprint to check yet
+	if err != nil {
+		return "", apperr.Newf(4, "TLS config: %s", err)
+	}
 
 	var (
 		mu      sync.Mutex
@@ -167,10 +170,13 @@ func classifyMQTTError(err error) error {
 }
 
 // classifyStatusError extends classifyMQTTError with fingerprint mismatch handling.
+// Called by Status — wired in Task 3.
+//
+//nolint:unused
 func classifyStatusError(err error) error {
 	var fpErr *fingerprintMismatchError
 	if errors.As(err, &fpErr) {
-		return apperr.Newf(3, "%s", err)
+		return apperr.Wrap(3, err.Error(), err)
 	}
 	return classifyMQTTError(err)
 }
