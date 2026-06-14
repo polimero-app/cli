@@ -74,13 +74,9 @@ func Open(dir string) (*Config, error) {
 // Load loads config from the OS default config dir.
 // POLIMERO_CONFIG_DIR env var overrides the default (used in tests).
 func Load() (*Config, error) {
-	dir := os.Getenv("POLIMERO_CONFIG_DIR")
-	if dir == "" {
-		base, err := os.UserConfigDir()
-		if err != nil {
-			return nil, fmt.Errorf("locating config directory: %w", err)
-		}
-		dir = filepath.Join(base, "polimero")
+	dir, err := ConfigDir()
+	if err != nil {
+		return nil, err
 	}
 	return Open(dir)
 }
@@ -101,4 +97,83 @@ func (c *Config) SortedProfiles() []Profile {
 		out = append(out, p)
 	}
 	return out
+}
+
+var (
+	// ErrProfileAlreadyExists is returned by AddProfile when the name is taken.
+	ErrProfileAlreadyExists = errors.New("profile already exists")
+	// ErrProfileNotFound is returned by RemoveProfile when the name is absent.
+	ErrProfileNotFound = errors.New("profile not found")
+)
+
+// ConfigDir resolves the config directory.
+// POLIMERO_CONFIG_DIR env var overrides os.UserConfigDir()/polimero.
+func ConfigDir() (string, error) {
+	if d := os.Getenv("POLIMERO_CONFIG_DIR"); d != "" {
+		return d, nil
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("locating config directory: %w", err)
+	}
+	return filepath.Join(base, "polimero"), nil
+}
+
+// GetProfile returns the named profile and true if found.
+func (c *Config) GetProfile(name string) (Profile, bool) {
+	p, ok := c.profiles[name]
+	return p, ok
+}
+
+// AddProfile inserts a new profile. Returns ErrProfileAlreadyExists if the name is taken.
+func (c *Config) AddProfile(name string, p Profile) error {
+	if _, exists := c.profiles[name]; exists {
+		return ErrProfileAlreadyExists
+	}
+	c.profiles[name] = p
+	return nil
+}
+
+// RemoveProfile deletes the named profile and returns it.
+// Returns ErrProfileNotFound if the name is absent.
+func (c *Config) RemoveProfile(name string) (Profile, error) {
+	p, ok := c.profiles[name]
+	if !ok {
+		return Profile{}, ErrProfileNotFound
+	}
+	delete(c.profiles, name)
+	return p, nil
+}
+
+// Save atomically writes the config to dir/polimero.yaml with 0600 permissions.
+// Creates dir if it does not exist (0700). Uses write-to-temp + rename for atomicity.
+func Save(dir string, c *Config) error {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+
+	data, err := yaml.Marshal(configFile{Version: currentVersion, Profiles: c.profiles})
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".polimero-*.yaml")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op if rename succeeds
+
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("setting temp file permissions: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing temp file: %w", err)
+	}
+	return os.Rename(tmpName, filepath.Join(dir, "polimero.yaml"))
 }
