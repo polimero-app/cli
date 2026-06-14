@@ -4,15 +4,15 @@ import "time"
 
 // Capabilities describes which optional operations a driver supports.
 type Capabilities struct {
-	Status           bool
-	Discovery        bool
-	JobUpload        bool
-	JobStart         bool
-	JobPause         bool
-	JobCancel        bool
-	TemperatureRead  bool
-	TemperatureWrite bool
-	MotionControl    bool
+	Status           bool `json:"status"`
+	Discovery        bool `json:"discovery"`
+	JobUpload        bool `json:"jobUpload"`
+	JobStart         bool `json:"jobStart"`
+	JobPause         bool `json:"jobPause"`
+	JobCancel        bool `json:"jobCancel"`
+	TemperatureRead  bool `json:"temperatureRead"`
+	TemperatureWrite bool `json:"temperatureWrite"`
+	MotionControl    bool `json:"motionControl"`
 }
 
 // SecretsBundle carries runtime secrets for a printer connection.
@@ -72,9 +72,9 @@ type StatusWarning struct {
 // Errors and Warnings are always non-nil slices (serialize as [] not null).
 type StatusResult struct {
 	State        string          `json:"state"`
-	Temperatures *Temperatures   `json:"temperatures"`
-	Job          *Job            `json:"job"`
-	Progress     *Progress       `json:"progress"`
+	Temperatures *Temperatures   `json:"temperatures,omitempty"`
+	Job          *Job            `json:"job,omitempty"`
+	Progress     *Progress       `json:"progress,omitempty"`
 	Errors       []StatusError   `json:"errors"`
 	Warnings     []StatusWarning `json:"warnings"`
 	Capabilities Capabilities    `json:"capabilities"`
