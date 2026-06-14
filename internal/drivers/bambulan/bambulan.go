@@ -79,6 +79,7 @@ func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode stri
 			return "", classifyMQTTError(err)
 		}
 	case <-ctx.Done():
+		go client.Disconnect(0) // unblock the connect goroutine
 		return "", apperr.New(4, "connection cancelled")
 	}
 	client.Disconnect(250)
