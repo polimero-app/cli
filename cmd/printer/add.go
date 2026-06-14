@@ -68,8 +68,6 @@ func AddCommandWithDeps(deps AddDeps) *cobra.Command {
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "10s", "connection timeout")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS verification and MQTT auth check")
 	cmd.Flags().StringVar(&flags.accessCodeFile, "access-code-file", "", "file containing the access code")
-	_ = cmd.MarkFlagRequired("driver")
-	_ = cmd.MarkFlagRequired("host")
 
 	return cmd
 }
@@ -92,6 +90,12 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 	name := strings.ToLower(nameArg)
 
 	// 1. Validate
+	if driverName == "" {
+		return apperr.New(2, "--driver is required")
+	}
+	if host == "" {
+		return apperr.New(2, "--host is required")
+	}
 	if err := validateProfileName(name); err != nil {
 		return err
 	}
