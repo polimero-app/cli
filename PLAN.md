@@ -142,6 +142,7 @@ Initial ADRs:
 Initial command specs:
 
 - `docs/specs/commands/printer-add.md`
+- `docs/specs/commands/printer-drivers.md`
 - `docs/specs/commands/printer-list.md`
 - `docs/specs/commands/printer-remove.md`
 - `docs/specs/commands/printer-status.md`
@@ -153,4 +154,3 @@ Initial driver and security docs:
 - `docs/specs/drivers/bambu-lan.md`
 - `docs/security/threat-model.md`
 - `docs/security/secret-handling.md`
-

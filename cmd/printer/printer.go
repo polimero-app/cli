@@ -8,6 +8,7 @@ func Command() *cobra.Command {
 		Use:   "printer",
 		Short: "Manage 3D printer profiles",
 	}
+	cmd.AddCommand(driversCommand())
 	cmd.AddCommand(listCommand())
 	cmd.AddCommand(addCommand())
 	cmd.AddCommand(removeCommand())

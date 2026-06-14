@@ -6,9 +6,9 @@ The project is intentionally ADR and spec driven. Code implementation should hap
 
 ## Current Status
 
-This repository currently contains the planning, ADR, and specification foundation for the CLI.
+This repository contains the ADR/spec foundation and the first profile-management command slices.
 
-No printer-control implementation exists yet.
+Implemented commands currently include `printer add`, `printer list`, `printer remove`, and `printer drivers`.
 
 ## Key Decisions
 
@@ -40,5 +40,4 @@ make lint
 make ci
 ```
 
-The current repository has no Go packages beyond `go.mod`, so these targets are placeholders for the first implementation slice.
-
+`make ci` runs tests, race tests, and linting when the relevant tools are available.

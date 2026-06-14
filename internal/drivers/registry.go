@@ -7,14 +7,28 @@ import (
 	"github.com/polimero-app/cli/internal/drivers/bambulan"
 )
 
-var registry = map[string]driver.Driver{
-	"bambu-lan": bambulan.New(),
+// Info describes a registered driver for user-facing listings.
+type Info struct {
+	Name        string
+	Description string
+}
+
+type registration struct {
+	driver      driver.Driver
+	description string
+}
+
+var registry = map[string]registration{
+	"bambu-lan": {
+		driver:      bambulan.New(),
+		description: "Bambu Lab printers over LAN mode",
+	},
 }
 
 // Get returns the driver registered under name and true, or (nil, false) if not found.
 func Get(name string) (driver.Driver, bool) {
-	d, ok := registry[name]
-	return d, ok
+	reg, ok := registry[name]
+	return reg.driver, ok
 }
 
 // Names returns all registered driver names in alphabetical order.
@@ -25,4 +39,18 @@ func Names() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// List returns registered driver metadata in alphabetical order by name.
+func List() []Info {
+	names := Names()
+	out := make([]Info, 0, len(names))
+	for _, name := range names {
+		reg := registry[name]
+		out = append(out, Info{
+			Name:        name,
+			Description: reg.description,
+		})
+	}
+	return out
 }

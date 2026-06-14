@@ -1,6 +1,7 @@
 package drivers_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/polimero-app/cli/internal/drivers"
@@ -29,4 +30,24 @@ func TestNames_ContainsBambuLan(t *testing.T) {
 		}
 	}
 	t.Error("bambu-lan missing from Names()")
+}
+
+func TestNames_Sorted(t *testing.T) {
+	names := drivers.Names()
+	if !slices.IsSorted(names) {
+		t.Fatalf("Names() = %v, want sorted", names)
+	}
+}
+
+func TestList_IncludesDescriptions(t *testing.T) {
+	infos := drivers.List()
+	for _, info := range infos {
+		if info.Name == "bambu-lan" {
+			if info.Description == "" {
+				t.Fatal("bambu-lan description is empty")
+			}
+			return
+		}
+	}
+	t.Fatal("bambu-lan missing from List()")
 }
