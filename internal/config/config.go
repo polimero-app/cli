@@ -134,6 +134,7 @@ func (c *Config) AddProfile(name string, p Profile) error {
 	return nil
 }
 
+// SetProfile replaces an existing profile in place. Returns ErrProfileNotFound if absent.
 func (c *Config) SetProfile(name string, p Profile) error {
 	if _, ok := c.profiles[name]; !ok {
 		return ErrProfileNotFound
