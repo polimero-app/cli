@@ -370,7 +370,7 @@ func (d *Driver) CaptureFingerprint(ctx context.Context, host, serial string) (s
 	if err != nil {
 		return "", apperr.Newf(4, "TLS connect failed: %s", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	state := conn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
 		return "", apperr.New(4, "TLS handshake completed but no certificate received")
