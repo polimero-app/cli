@@ -14,10 +14,13 @@ func NewReal() *Real { return &Real{} }
 
 func (r *Real) Get(service, account string) (string, error) {
 	v, err := gokeyring.Get(service, account)
-	if errors.Is(err, gokeyring.ErrNotFound) {
-		return "", ErrNotFound
+	if err != nil {
+		if errors.Is(err, gokeyring.ErrNotFound) {
+			return "", ErrNotFound
+		}
+		return "", err
 	}
-	return v, err
+	return v, nil
 }
 
 func (r *Real) Set(service, account, secret string) error {

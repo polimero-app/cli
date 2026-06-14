@@ -9,6 +9,8 @@ type Mock struct {
 }
 
 // NewMock returns an empty in-memory keychain.
+// It is exported for use by command-layer tests and is safe to include in binaries
+// (no OS calls, no sensitive data, just an in-memory map).
 func NewMock() *Mock {
 	return &Mock{data: make(map[string]string)}
 }
