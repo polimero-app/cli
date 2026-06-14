@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -146,6 +147,43 @@ func TestRemove_ProfileNotFound(t *testing.T) {
 	}
 }
 
+func TestRemove_InvalidProfileName(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, Lines: []string{"yes"}}
+	_, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: p}, "_invalid", "--yes")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for invalid profile name, got %v", err)
+	}
+}
+
+func TestRemove_InvalidProfileNameSkipsPromptAndKeychain(t *testing.T) {
+	dir := t.TempDir()
+	kc := &trackingKeychain{inner: keychain.NewMock()}
+	seedProfile(t, dir, kc.inner, "_invalid", false)
+	p := &trackingPrompter{terminal: true, lines: []string{"yes"}}
+
+	_, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: p}, "_invalid")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for invalid profile name, got %v", err)
+	}
+	if p.readLineCalls != 0 {
+		t.Fatalf("prompt should not be used for invalid profile name")
+	}
+	if kc.deleteCalls != 0 {
+		t.Fatalf("keychain should not be touched for invalid profile name")
+	}
+	cfg, cfgErr := config.Open(dir)
+	if cfgErr != nil {
+		t.Fatal(cfgErr)
+	}
+	if _, ok := cfg.GetProfile("_invalid"); !ok {
+		t.Fatal("invalid profile fixture should remain in config")
+	}
+}
+
 func TestRemove_MissingAccessCode_Warning(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
@@ -257,4 +295,44 @@ func TestRemove_ConfigFilePath(t *testing.T) {
 	if _, ok := cfg.GetProfile("myprinter"); ok {
 		t.Error("profile still in config file after remove")
 	}
+}
+
+type trackingKeychain struct {
+	inner       *keychain.Mock
+	deleteCalls int
+}
+
+func (k *trackingKeychain) Get(service, account string) (string, error) {
+	return k.inner.Get(service, account)
+}
+
+func (k *trackingKeychain) Set(service, account, secret string) error {
+	return k.inner.Set(service, account, secret)
+}
+
+func (k *trackingKeychain) Delete(service, account string) error {
+	k.deleteCalls++
+	return k.inner.Delete(service, account)
+}
+
+type trackingPrompter struct {
+	terminal      bool
+	lines         []string
+	readLineCalls int
+}
+
+func (p *trackingPrompter) IsTerminal() bool { return p.terminal }
+
+func (p *trackingPrompter) ReadHidden(_ string) (string, error) {
+	return "", fmt.Errorf("ReadHidden should not be called")
+}
+
+func (p *trackingPrompter) ReadLine(_ string) (string, error) {
+	p.readLineCalls++
+	if len(p.lines) == 0 {
+		return "", nil
+	}
+	line := p.lines[0]
+	p.lines = p.lines[1:]
+	return line, nil
 }

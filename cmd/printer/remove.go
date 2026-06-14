@@ -66,6 +66,9 @@ func runRemove(cmd *cobra.Command, nameArg string, yes bool, deps RemoveDeps) er
 
 func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format, deps RemoveDeps) error {
 	name := strings.ToLower(nameArg)
+	if err := validateProfileName(name); err != nil {
+		return err
+	}
 
 	dir, err := config.ConfigDir()
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"regexp"
 	"strings"
@@ -21,6 +22,7 @@ import (
 )
 
 var profileNameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+var dnsLabelRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 // AddDeps holds injectable dependencies for the printer add command.
 // Tests supply mocks; the real command wires real implementations.
@@ -96,6 +98,9 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 	if host == "" {
 		return apperr.New(2, "--host is required")
 	}
+	if err := validateHost(host); err != nil {
+		return err
+	}
 	if err := validateProfileName(name); err != nil {
 		return err
 	}
@@ -111,6 +116,9 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 	timeout, err := time.ParseDuration(timeoutStr)
 	if err != nil {
 		return apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
+	}
+	if timeout <= 0 {
+		return apperr.Newf(2, "--timeout must be greater than zero")
 	}
 
 	dir, err := config.ConfigDir()
@@ -291,6 +299,50 @@ func validateProfileName(name string) error {
 		return apperr.Newf(2, "invalid profile name %q: use only ASCII letters, digits, '.', '_', '-', starting with a letter or digit", name)
 	}
 	return nil
+}
+
+func validateHost(host string) error {
+	if strings.TrimSpace(host) != host || host == "" {
+		return apperr.Newf(2, "invalid --host %q: must be an IP address or DNS hostname", host)
+	}
+	if strings.ContainsAny(host, " \t\r\n") {
+		return apperr.Newf(2, "invalid --host %q: must not contain whitespace", host)
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return nil
+	}
+	host = strings.TrimSuffix(host, ".")
+	if len(host) > 253 {
+		return apperr.Newf(2, "invalid --host %q: hostname too long", host)
+	}
+	if looksLikeIPv4Literal(host) {
+		return apperr.Newf(2, "invalid --host %q: must be a valid IP address or DNS hostname", host)
+	}
+	labels := strings.Split(host, ".")
+	for _, label := range labels {
+		if !dnsLabelRE.MatchString(label) {
+			return apperr.Newf(2, "invalid --host %q: must be an IP address or DNS hostname", host)
+		}
+	}
+	return nil
+}
+
+func looksLikeIPv4Literal(host string) bool {
+	labels := strings.Split(host, ".")
+	if len(labels) != 4 {
+		return false
+	}
+	for _, label := range labels {
+		if label == "" {
+			return false
+		}
+		for _, c := range label {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validateSerial(serial string) error {

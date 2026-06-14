@@ -232,6 +232,64 @@ func TestAdd_InvalidProfileName(t *testing.T) {
 	}
 }
 
+func TestAdd_MissingDriver(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "code"}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--host", "192.0.2.10", "--serial", "SN001")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for missing driver, got %v", err)
+	}
+}
+
+func TestAdd_UnknownDriver(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "code"}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--driver", "unknown", "--host", "192.0.2.10", "--serial", "SN001")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for unknown driver, got %v", err)
+	}
+}
+
+func TestAdd_MissingHost(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "code"}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--driver", "bambu-lan", "--serial", "SN001")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for missing host, got %v", err)
+	}
+}
+
+func TestAdd_InvalidHost(t *testing.T) {
+	cases := []string{
+		"bad host",
+		"-printer.local",
+		"printer..local",
+		"999.999.999.999",
+	}
+	for _, host := range cases {
+		t.Run(host, func(t *testing.T) {
+			dir := t.TempDir()
+			kc := keychain.NewMock()
+			p := &tty.Mock{Terminal: true, HiddenVal: "code"}
+			_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+				"myprinter", "--driver", "bambu-lan", "--host", host, "--serial", "SN001")
+			var exitErr *apperr.ExitError
+			if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+				t.Errorf("expected exit 2 for invalid host, got %v", err)
+			}
+		})
+	}
+}
+
 func TestAdd_MissingSerial(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
@@ -241,6 +299,58 @@ func TestAdd_MissingSerial(t *testing.T) {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
 		t.Errorf("expected exit 2 for missing serial, got %v", err)
+	}
+}
+
+func TestAdd_InvalidSerialFormat(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "code"}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", "SN 001")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for invalid serial, got %v", err)
+	}
+}
+
+func TestAdd_SerialTooLong(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "code"}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", strings.Repeat("A", 65))
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for long serial, got %v", err)
+	}
+}
+
+func TestAdd_InvalidTimeout(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "code"}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", "SN001", "--timeout", "not-a-duration")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for invalid timeout, got %v", err)
+	}
+}
+
+func TestAdd_NonPositiveTimeout(t *testing.T) {
+	for _, timeout := range []string{"0s", "-1s"} {
+		t.Run(timeout, func(t *testing.T) {
+			dir := t.TempDir()
+			kc := keychain.NewMock()
+			p := &tty.Mock{Terminal: true, HiddenVal: "code"}
+			_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+				"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", "SN001", "--timeout", timeout)
+			var exitErr *apperr.ExitError
+			if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+				t.Errorf("expected exit 2 for timeout %s, got %v", timeout, err)
+			}
+		})
 	}
 }
 
@@ -312,6 +422,36 @@ func TestAdd_AccessCodeFile_InsecurePermissions(t *testing.T) {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
 		t.Errorf("expected exit 2 for insecure file permissions, got %v", err)
+	}
+}
+
+func TestAdd_AccessCodeFile_TooLarge(t *testing.T) {
+	dir := t.TempDir()
+	codeFile := filepath.Join(dir, "code.txt")
+	if err := os.WriteFile(codeFile, []byte(strings.Repeat("x", 4097)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", "SN001",
+		"--access-code-file", codeFile, "--insecure")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for too-large access-code file, got %v", err)
+	}
+}
+
+func TestAdd_AccessCodeFile_NotRegular(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", "SN001",
+		"--access-code-file", dir, "--insecure")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for non-regular access-code file, got %v", err)
 	}
 }
 

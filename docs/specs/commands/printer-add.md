@@ -30,9 +30,9 @@ Profile names must:
 ## Flags
 
 - `--driver <driver>`: required. Initial accepted value: `bambu-lan`.
-- `--host <host>`: required. IP address or DNS hostname.
+- `--host <host>`: required. IP address or DNS hostname. Must be a valid IP address or a conservative ASCII DNS hostname with labels separated by dots; labels must start and end with an ASCII letter or digit and may contain hyphens internally.
 - `--serial <serial>`: required for `bambu-lan`. The printer's serial number, used for TLS SNI and MQTT topic construction. Stored verbatim in the profile; must be non-empty, printable ASCII with no whitespace, and at most 64 characters.
-- `--timeout <duration>`: optional. Default: `10s`.
+- `--timeout <duration>`: optional. Default: `10s`. Must parse as a Go duration and be greater than zero.
 - `--access-code-file <path>`: optional. Reads a secret from a file.
 - `--insecure`: optional. Skips TLS verification and MQTT auth check. Profile is stored with `insecure: true`. No TLS fingerprint is stored. Human output includes a warning.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
@@ -225,6 +225,7 @@ JSON error example:
 - Invalid profile name.
 - Unsupported driver.
 - Missing host.
+- Invalid host format.
 - Missing serial for `bambu-lan`.
 - Invalid serial format.
 - Invalid timeout.
