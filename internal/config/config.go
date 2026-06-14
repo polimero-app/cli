@@ -162,14 +162,14 @@ func Save(dir string, c *Config) error {
 		return fmt.Errorf("creating temp file: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op if rename succeeds
+	defer func() { _ = os.Remove(tmpName) }() // no-op if rename succeeds
 
 	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("setting temp file permissions: %w", err)
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("writing config: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
