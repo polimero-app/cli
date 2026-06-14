@@ -308,17 +308,17 @@ func parseReport(data []byte) (*driver.StatusResult, error) {
 }
 
 func mapTemperatures(p bambuPrint) *driver.Temperatures {
-	nozzleTarget := p.NozzleTargetTemper
-	bedTarget := p.BedTargetTemper
 	temps := &driver.Temperatures{
-		Nozzle: &driver.Temperature{
-			CurrentCelsius: p.NozzleTemper,
-			TargetCelsius:  &nozzleTarget,
-		},
-		Bed: &driver.Temperature{
-			CurrentCelsius: p.BedTemper,
-			TargetCelsius:  &bedTarget,
-		},
+		Nozzle: &driver.Temperature{CurrentCelsius: p.NozzleTemper},
+		Bed:    &driver.Temperature{CurrentCelsius: p.BedTemper},
+	}
+	if p.NozzleTargetTemper > 0 {
+		t := p.NozzleTargetTemper
+		temps.Nozzle.TargetCelsius = &t
+	}
+	if p.BedTargetTemper > 0 {
+		t := p.BedTargetTemper
+		temps.Bed.TargetCelsius = &t
 	}
 	if p.ChamberTemper > 0 {
 		temps.Chamber = &driver.Temperature{CurrentCelsius: p.ChamberTemper}

@@ -72,9 +72,9 @@ type StatusWarning struct {
 // Errors and Warnings are always non-nil slices (serialize as [] not null).
 type StatusResult struct {
 	State        string          `json:"state"`
-	Temperatures *Temperatures   `json:"temperatures,omitempty"`
-	Job          *Job            `json:"job,omitempty"`
-	Progress     *Progress       `json:"progress,omitempty"`
+	Temperatures *Temperatures   `json:"temperatures"`
+	Job          *Job            `json:"job"`
+	Progress     *Progress       `json:"progress"`
 	Errors       []StatusError   `json:"errors"`
 	Warnings     []StatusWarning `json:"warnings"`
 	Capabilities Capabilities    `json:"capabilities"`

@@ -265,8 +265,11 @@ func TestStatus_HumanOutput_WithWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !bytes.Contains([]byte(out), []byte("Warning: filament running low")) {
-		t.Errorf("expected warning in output:\n%s", out)
+	if !bytes.Contains([]byte(out), []byte("Warnings:")) {
+		t.Errorf("expected 'Warnings:' header in output:\n%s", out)
+	}
+	if !bytes.Contains([]byte(out), []byte("- filament running low")) {
+		t.Errorf("expected '- filament running low' in output:\n%s", out)
 	}
 }
 
@@ -288,6 +291,16 @@ func TestStatus_JSON_Envelope(t *testing.T) {
 	}
 	if env["data"] == nil {
 		t.Error("data must be present")
+	}
+	data, ok := env["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data is %T, want map", env["data"])
+	}
+	if data["profile"] != "myprinter" {
+		t.Errorf("data.profile = %v, want myprinter", data["profile"])
+	}
+	if data["driver"] != "bambu-lan" {
+		t.Errorf("data.driver = %v, want bambu-lan", data["driver"])
 	}
 	meta, ok := env["meta"].(map[string]any)
 	if !ok {

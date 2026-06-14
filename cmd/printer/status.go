@@ -75,29 +75,29 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag boo
 	}
 
 	name := strings.ToLower(nameArg)
-	result, durationMs, err := doStatus(cmd, name, timeoutFlag, insecureFlag, deps)
+	result, durationMs, driverName, err := doStatus(cmd, name, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err)
 	}
-	return writeStatusSuccess(cmd.OutOrStdout(), format, name, result, durationMs)
+	return writeStatusSuccess(cmd.OutOrStdout(), format, name, driverName, result, durationMs)
 }
 
-func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, deps StatusDeps) (*driver.StatusResult, int64, error) {
+func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, deps StatusDeps) (*driver.StatusResult, int64, string, error) {
 	if err := validateProfileName(name); err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 
 	dir, err := config.ConfigDir()
 	if err != nil {
-		return nil, 0, apperr.Newf(1, "cannot resolve config directory: %s", err)
+		return nil, 0, "", apperr.Newf(1, "cannot resolve config directory: %s", err)
 	}
 	cfg, err := config.Open(dir)
 	if err != nil {
-		return nil, 0, apperr.Newf(2, "cannot load config: %s", err)
+		return nil, 0, "", apperr.Newf(2, "cannot load config: %s", err)
 	}
 	p, ok := cfg.GetProfile(name)
 	if !ok {
-		return nil, 0, apperr.Newf(2, "printer profile %q not found", name)
+		return nil, 0, "", apperr.Newf(2, "printer profile %q not found", name)
 	}
 
 	timeoutStr := p.Timeout
@@ -109,10 +109,10 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 	}
 	timeout, err := time.ParseDuration(timeoutStr)
 	if err != nil {
-		return nil, 0, apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
+		return nil, 0, "", apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
 	}
 	if timeout <= 0 {
-		return nil, 0, apperr.Newf(2, "--timeout must be greater than zero")
+		return nil, 0, "", apperr.Newf(2, "--timeout must be greater than zero")
 	}
 
 	insecure := p.Insecure || insecureFlag
@@ -121,9 +121,9 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 	accessCode, err := deps.KC.Get("polimero", kcAcct)
 	if err != nil {
 		if errors.Is(err, keychain.ErrNotFound) {
-			return nil, 0, apperr.Newf(3, "access code not found in keychain for %q", name)
+			return nil, 0, "", apperr.Newf(3, "access code not found in keychain for %q", name)
 		}
-		return nil, 0, apperr.Newf(3, "cannot read access code from keychain: %s", err)
+		return nil, 0, "", apperr.Newf(3, "cannot read access code from keychain: %s", err)
 	}
 
 	var tlsFingerprint string
@@ -132,18 +132,18 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 		tlsFingerprint, err = deps.KC.Get("polimero", kcFpAcct)
 		if err != nil {
 			if errors.Is(err, keychain.ErrNotFound) {
-				return nil, 0, apperr.Newf(3, "TLS fingerprint not found in keychain for %q", name)
+				return nil, 0, "", apperr.Newf(3, "TLS fingerprint not found in keychain for %q", name)
 			}
-			return nil, 0, apperr.Newf(3, "cannot read TLS fingerprint from keychain: %s", err)
+			return nil, 0, "", apperr.Newf(3, "cannot read TLS fingerprint from keychain: %s", err)
 		}
 	}
 
 	drv, ok := deps.GetDriver(p.Driver)
 	if !ok {
-		return nil, 0, apperr.Newf(2, "unknown driver %q", p.Driver)
+		return nil, 0, "", apperr.Newf(2, "unknown driver %q", p.Driver)
 	}
 	if !drv.Capabilities().Status {
-		return nil, 0, apperr.Newf(5, "driver %q does not support the status command", p.Driver)
+		return nil, 0, "", apperr.Newf(5, "driver %q does not support the status command", p.Driver)
 	}
 
 	pi := driver.ProfileInput{
@@ -166,17 +166,27 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 	result, err := drv.Status(ctx, pi, secrets, deps.Log)
 	durationMs := time.Since(start).Milliseconds()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
-	return result, durationMs, nil
+	return result, durationMs, p.Driver, nil
 }
 
-func writeStatusSuccess(w io.Writer, format output.Format, name string, result *driver.StatusResult, durationMs int64) error {
+func writeStatusSuccess(w io.Writer, format output.Format, name, driverName string, result *driver.StatusResult, durationMs int64) error {
 	if format == output.FormatJSON {
 		dm := durationMs
+		type statusData struct {
+			Profile string `json:"profile"`
+			Driver  string `json:"driver"`
+			*driver.StatusResult
+		}
+		data := statusData{
+			Profile:      name,
+			Driver:       driverName,
+			StatusResult: result,
+		}
 		return output.WriteEnvelope(w, output.Envelope{
 			OK:    true,
-			Data:  result,
+			Data:  data,
 			Error: nil,
 			Meta:  output.Meta{Command: "printer status", DurationMs: &dm},
 		})
@@ -210,8 +220,11 @@ func writeStatusSuccess(w io.Writer, format output.Format, name string, result *
 	if result.Job != nil {
 		lines = append(lines, fmt.Sprintf("Job: %s", result.Job.Name))
 	}
-	for _, warn := range result.Warnings {
-		lines = append(lines, fmt.Sprintf("Warning: %s", warn.Message))
+	if len(result.Warnings) > 0 {
+		lines = append(lines, "Warnings:")
+		for _, warn := range result.Warnings {
+			lines = append(lines, fmt.Sprintf("- %s", warn.Message))
+		}
 	}
 	for _, l := range lines {
 		if _, err := fmt.Fprintln(w, l); err != nil {
