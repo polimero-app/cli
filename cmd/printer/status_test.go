@@ -240,7 +240,7 @@ func TestStatus_HumanOutput_FullResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, want := range []string{"State: printing", "Progress: 42%", "Nozzle:", "Bed:", "Job: bracket.3mf"} {
+	for _, want := range []string{"Printer: myprinter", "State: printing", "Progress: 42%", "Nozzle:", "Bed:", "Job: bracket.3mf"} {
 		if !bytes.Contains([]byte(out), []byte(want)) {
 			t.Errorf("expected %q in output:\n%s", want, out)
 		}
@@ -265,7 +265,7 @@ func TestStatus_HumanOutput_WithWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !bytes.Contains([]byte(out), []byte("filament running low")) {
+	if !bytes.Contains([]byte(out), []byte("Warning: filament running low")) {
 		t.Errorf("expected warning in output:\n%s", out)
 	}
 }
@@ -298,5 +298,73 @@ func TestStatus_JSON_Envelope(t *testing.T) {
 	}
 	if meta["durationMs"] == nil {
 		t.Error("meta.durationMs must be present for successful status call")
+	}
+}
+
+func TestStatus_JSON_ErrorEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	drv := &stubStatusDriver{
+		caps: driver.Capabilities{Status: true},
+		err:  apperr.New(4, "status check timed out"),
+	}
+	deps := statusDeps(t, dir, kc, drv)
+	out, err := runStatusCmd(t, deps, "myprinter", "--output", "json")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit 4, got %v", err)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	if env["ok"] != false {
+		t.Errorf("ok = %v, want false", env["ok"])
+	}
+	meta, ok := env["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("meta is %T, want map", env["meta"])
+	}
+	if meta["command"] != "printer status" {
+		t.Errorf("meta.command = %v, want printer status", meta["command"])
+	}
+	if meta["durationMs"] != nil {
+		t.Errorf("meta.durationMs should be absent in error envelope, got %v", meta["durationMs"])
+	}
+}
+
+func TestStatus_TimeoutFlag_Override(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "myprinter", "--timeout", "30s")
+	if err != nil {
+		t.Fatalf("expected success with valid --timeout, got: %v", err)
+	}
+}
+
+func TestStatus_TimeoutFlag_InvalidFormat_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "myprinter", "--timeout", "notaduration")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for invalid --timeout, got %v", err)
+	}
+}
+
+func TestStatus_TimeoutFlag_Zero_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "myprinter", "--timeout", "0s")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for zero --timeout, got %v", err)
 	}
 }

@@ -74,11 +74,12 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag boo
 		return apperr.New(2, fmtErr.Error())
 	}
 
+	name := strings.ToLower(nameArg)
 	result, durationMs, err := doStatus(cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err)
 	}
-	return writeStatusSuccess(cmd.OutOrStdout(), format, nameArg, result, durationMs)
+	return writeStatusSuccess(cmd.OutOrStdout(), format, name, result, durationMs)
 }
 
 func doStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps StatusDeps) (*driver.StatusResult, int64, error) {
