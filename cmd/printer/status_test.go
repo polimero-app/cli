@@ -1,0 +1,302 @@
+package printer_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"testing"
+	"time"
+
+	"github.com/polimero-app/cli/cmd/printer"
+	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/driver"
+	"github.com/polimero-app/cli/internal/keychain"
+	"github.com/spf13/cobra"
+)
+
+// stubStatusDriver satisfies driver.Driver for status command tests.
+type stubStatusDriver struct {
+	result *driver.StatusResult
+	err    error
+	caps   driver.Capabilities
+}
+
+func (s *stubStatusDriver) Name() string                       { return "bambu-lan" }
+func (s *stubStatusDriver) Capabilities() driver.Capabilities { return s.caps }
+func (s *stubStatusDriver) ConnectCheck(_ context.Context, _, _, _ string, _ bool, _ time.Duration) (string, error) {
+	return "", nil
+}
+func (s *stubStatusDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
+	return s.result, s.err
+}
+
+func defaultStatusDriver() *stubStatusDriver {
+	nozzleTarget := 220.0
+	bedTarget := 60.0
+	layer := 10
+	total := 50
+	return &stubStatusDriver{
+		caps: driver.Capabilities{Status: true},
+		result: &driver.StatusResult{
+			State: "printing",
+			Temperatures: &driver.Temperatures{
+				Nozzle: &driver.Temperature{CurrentCelsius: 215.0, TargetCelsius: &nozzleTarget},
+				Bed:    &driver.Temperature{CurrentCelsius: 60.0, TargetCelsius: &bedTarget},
+			},
+			Job:      &driver.Job{Name: "bracket.3mf"},
+			Progress: &driver.Progress{Percent: 42, CurrentLayer: &layer, TotalLayers: &total},
+			Errors:   []driver.StatusError{},
+			Warnings: []driver.StatusWarning{},
+			Capabilities: driver.Capabilities{Status: true},
+		},
+	}
+}
+
+func statusDeps(t *testing.T, dir string, kc *keychain.Mock, drv driver.Driver) printer.StatusDeps {
+	t.Helper()
+	t.Setenv("POLIMERO_CONFIG_DIR", dir)
+	return printer.StatusDeps{
+		KC: kc,
+		GetDriver: func(name string) (driver.Driver, bool) {
+			if name == "bambu-lan" && drv != nil {
+				return drv, true
+			}
+			return nil, false
+		},
+		Log: slog.Default(),
+	}
+}
+
+func testRootForStatus(deps printer.StatusDeps) *cobra.Command {
+	root := &cobra.Command{Use: "polimero", SilenceErrors: true, SilenceUsage: true}
+	root.PersistentFlags().String("output", "human", "")
+	sub := &cobra.Command{Use: "printer"}
+	sub.AddCommand(printer.StatusCommandWithDeps(deps))
+	root.AddCommand(sub)
+	return root
+}
+
+func runStatusCmd(t *testing.T, deps printer.StatusDeps, args ...string) (string, error) {
+	t.Helper()
+	root := testRootForStatus(deps)
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs(append([]string{"printer", "status"}, args...))
+	err := root.Execute()
+	return buf.String(), err
+}
+
+// --- Tests ---
+
+func TestStatus_NoArgs_ShowsHelp(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	out, err := runStatusCmd(t, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out == "" {
+		t.Error("expected help output")
+	}
+}
+
+func TestStatus_TooManyArgs_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "one", "two")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2, got %v", err)
+	}
+}
+
+func TestStatus_InvalidProfileName_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "_invalid")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2, got %v", err)
+	}
+}
+
+func TestStatus_ProfileNotFound_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "nonexistent")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2, got %v", err)
+	}
+}
+
+func TestStatus_MissingAccessCode_ExitsCode3(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	_ = kc.Delete("polimero", "bambu-lan:myprinter:access-code")
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "myprinter")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Errorf("expected exit 3, got %v", err)
+	}
+}
+
+func TestStatus_MissingTLSFingerprint_ExitsCode3(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false) // secure profile
+	_ = kc.Delete("polimero", "bambu-lan:myprinter:tls-fingerprint")
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "myprinter")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Errorf("expected exit 3, got %v", err)
+	}
+}
+
+func TestStatus_InsecureProfile_SkipsFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true) // insecure: no fingerprint stored
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "myprinter")
+	if err != nil {
+		t.Fatalf("expected success for insecure profile, got: %v", err)
+	}
+}
+
+func TestStatus_InsecureFlag_SkipsFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false) // secure profile in config
+	_ = kc.Delete("polimero", "bambu-lan:myprinter:tls-fingerprint") // but fingerprint missing
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "myprinter", "--insecure")
+	if err != nil {
+		t.Fatalf("expected success with --insecure flag, got: %v", err)
+	}
+}
+
+func TestStatus_CapabilityUnsupported_ExitsCode5(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	drv := &stubStatusDriver{caps: driver.Capabilities{Status: false}}
+	deps := statusDeps(t, dir, kc, drv)
+	_, err := runStatusCmd(t, deps, "myprinter")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
+		t.Errorf("expected exit 5, got %v", err)
+	}
+}
+
+func TestStatus_AuthFailure_ExitsCode3(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	drv := &stubStatusDriver{
+		caps: driver.Capabilities{Status: true},
+		err:  apperr.New(3, "MQTT authentication rejected"),
+	}
+	deps := statusDeps(t, dir, kc, drv)
+	_, err := runStatusCmd(t, deps, "myprinter")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Errorf("expected exit 3, got %v", err)
+	}
+}
+
+func TestStatus_NetworkTimeout_ExitsCode4(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	drv := &stubStatusDriver{
+		caps: driver.Capabilities{Status: true},
+		err:  apperr.New(4, "status check timed out"),
+	}
+	deps := statusDeps(t, dir, kc, drv)
+	_, err := runStatusCmd(t, deps, "myprinter")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit 4, got %v", err)
+	}
+}
+
+func TestStatus_HumanOutput_FullResult(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	out, err := runStatusCmd(t, deps, "myprinter")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{"State: printing", "Progress: 42%", "Nozzle:", "Bed:", "Job: bracket.3mf"} {
+		if !bytes.Contains([]byte(out), []byte(want)) {
+			t.Errorf("expected %q in output:\n%s", want, out)
+		}
+	}
+}
+
+func TestStatus_HumanOutput_WithWarnings(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	drv := &stubStatusDriver{
+		caps: driver.Capabilities{Status: true},
+		result: &driver.StatusResult{
+			State:    "idle",
+			Errors:   []driver.StatusError{},
+			Warnings: []driver.StatusWarning{{Code: "low_filament", Message: "filament running low"}},
+			Capabilities: driver.Capabilities{Status: true},
+		},
+	}
+	deps := statusDeps(t, dir, kc, drv)
+	out, err := runStatusCmd(t, deps, "myprinter")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains([]byte(out), []byte("filament running low")) {
+		t.Errorf("expected warning in output:\n%s", out)
+	}
+}
+
+func TestStatus_JSON_Envelope(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	out, err := runStatusCmd(t, deps, "myprinter", "--output", "json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	if env["ok"] != true {
+		t.Errorf("ok = %v, want true", env["ok"])
+	}
+	if env["data"] == nil {
+		t.Error("data must be present")
+	}
+	meta, ok := env["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("meta is %T, want map", env["meta"])
+	}
+	if meta["command"] != "printer status" {
+		t.Errorf("meta.command = %v, want printer status", meta["command"])
+	}
+	if meta["durationMs"] == nil {
+		t.Error("meta.durationMs must be present for successful status call")
+	}
+}
