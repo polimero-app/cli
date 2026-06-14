@@ -49,3 +49,10 @@ func TestCapabilities_StatusTrue(t *testing.T) {
 		t.Error("Capabilities().Status should be true for bambu-lan driver")
 	}
 }
+
+func TestCapabilities_TLSRefreshTrue(t *testing.T) {
+	caps := bambulan.New().Capabilities()
+	if !caps.TLSRefresh {
+		t.Error("Capabilities().TLSRefresh should be true for bambu-lan driver")
+	}
+}

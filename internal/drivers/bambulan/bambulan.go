@@ -42,12 +42,21 @@ func (e *fingerprintMismatchError) Error() string {
 // Driver implements the bambu-lan protocol for Bambu Lab printers.
 type Driver struct {
 	newClient func(*mqtt.ClientOptions) mqttConn
+	dialTLS   func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)
 }
 
 // New returns a bambu-lan Driver backed by a real paho MQTT client.
 func New() *Driver {
 	return &Driver{
 		newClient: func(o *mqtt.ClientOptions) mqttConn { return mqtt.NewClient(o) },
+		dialTLS: func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error) {
+			dialer := &tls.Dialer{Config: cfg}
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if err != nil {
+				return nil, err
+			}
+			return conn.(*tls.Conn), nil
+		},
 	}
 }
 
@@ -55,7 +64,7 @@ func (d *Driver) Name() string { return "bambu-lan" }
 
 // Capabilities returns the bambu-lan driver's supported operations.
 func (d *Driver) Capabilities() driver.Capabilities {
-	return driver.Capabilities{Status: true}
+	return driver.Capabilities{Status: true, TLSRefresh: true}
 }
 
 // buildTLSConfig returns a TLS config for connecting to a Bambu LAN printer.
@@ -352,8 +361,22 @@ func mapHMSErrors(p bambuPrint) []driver.StatusError {
 	return errs
 }
 
-func (d *Driver) CaptureFingerprint(_ context.Context, _, _ string) (string, error) {
-	return "", apperr.New(5, "CaptureFingerprint not yet implemented")
+func (d *Driver) CaptureFingerprint(ctx context.Context, host, serial string) (string, error) {
+	cfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // Bambu CA not in OS trust stores; capturing cert for TOFU pin (ADR 0007)
+		ServerName:         serial,
+	}
+	conn, err := d.dialTLS(ctx, fmt.Sprintf("%s:8883", host), cfg)
+	if err != nil {
+		return "", apperr.Newf(4, "TLS connect failed: %s", err)
+	}
+	defer conn.Close()
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return "", apperr.New(4, "TLS handshake completed but no certificate received")
+	}
+	sum := sha256.Sum256(state.PeerCertificates[0].Raw)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func randomClientID() string {
