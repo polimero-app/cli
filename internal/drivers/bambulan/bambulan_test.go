@@ -42,3 +42,10 @@ func TestConnectCheck_UnreachableHost_ExitsCode4(t *testing.T) {
 		t.Errorf("exit code = %d, want 4 (network error)", exitErr.Code)
 	}
 }
+
+func TestCapabilities_StatusTrue(t *testing.T) {
+	caps := bambulan.New().Capabilities()
+	if !caps.Status {
+		t.Error("Capabilities().Status should be true for bambu-lan driver")
+	}
+}

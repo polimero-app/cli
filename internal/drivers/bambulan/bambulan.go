@@ -18,55 +18,95 @@ import (
 	"github.com/polimero-app/cli/internal/driver"
 )
 
-// Driver implements the bambu-lan protocol for Bambu Lab printers.
-type Driver struct{}
+// mqttConn is the subset of mqtt.Client used by this driver.
+// mqtt.Client already satisfies this interface — no wrapper needed.
+type mqttConn interface {
+	Connect() mqtt.Token
+	Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token
+	Publish(topic string, qos byte, retained bool, payload any) mqtt.Token
+	Disconnect(quiesce uint)
+}
 
-// New returns a bambu-lan Driver.
-func New() *Driver { return &Driver{} }
+// fingerprintMismatchError is returned by buildTLSConfig's VerifyConnection
+// when the presented cert does not match the pinned fingerprint.
+type fingerprintMismatchError struct {
+	got  string
+	want string
+}
+
+func (e *fingerprintMismatchError) Error() string {
+	return fmt.Sprintf("TLS fingerprint mismatch: got %s, want %s", e.got, e.want)
+}
+
+// Driver implements the bambu-lan protocol for Bambu Lab printers.
+type Driver struct {
+	newClient func(*mqtt.ClientOptions) mqttConn
+}
+
+// New returns a bambu-lan Driver backed by a real paho MQTT client.
+func New() *Driver {
+	return &Driver{
+		newClient: func(o *mqtt.ClientOptions) mqttConn { return mqtt.NewClient(o) },
+	}
+}
 
 func (d *Driver) Name() string { return "bambu-lan" }
 
 // Capabilities returns the bambu-lan driver's supported operations.
-// Status is implemented; all other capabilities are added in future plans.
 func (d *Driver) Capabilities() driver.Capabilities {
 	return driver.Capabilities{Status: true}
 }
 
-// Status fetches current printer state via the Bambu LAN MQTT protocol.
-// Implemented in Task 3; this stub satisfies the Driver interface for now.
-func (d *Driver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
-	return nil, apperr.New(5, "status not yet implemented")
+// buildTLSConfig returns a TLS config for connecting to a Bambu LAN printer.
+// When insecure is false and fingerprint is non-empty, VerifyConnection compares
+// the leaf cert's SHA-256 hash against fingerprint and returns fingerprintMismatchError
+// on mismatch. When fingerprint is empty (ConnectCheck capture mode), no verification
+// callback is set.
+func buildTLSConfig(serial, fingerprint string, insecure bool) (*tls.Config, error) {
+	cfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // Bambu CA not in OS trust stores; leaf cert pinned by TOFU (ADR 0007)
+		ServerName:         serial,
+	}
+	if !insecure && fingerprint != "" {
+		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return apperr.New(4, "TLS handshake completed but no certificate received")
+			}
+			sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
+			got := "sha256:" + hex.EncodeToString(sum[:])
+			if got != fingerprint {
+				return &fingerprintMismatchError{got: got, want: fingerprint}
+			}
+			return nil
+		}
+	}
+	return cfg, nil
 }
 
-// ConnectCheck performs a full TLS+MQTT handshake to verify credentials.
-// The leaf certificate SHA-256 fingerprint is captured via VerifyConnection
-// (fired during paho's internal TLS dial — no second connection needed).
-// Returns ("", nil) immediately when insecure=true.
+// ConnectCheck performs a full TLS+MQTT handshake to verify credentials and capture the
+// leaf certificate fingerprint. Returns ("", nil) immediately when insecure=true.
 //
 // Exit codes on error:
-//   - 3: MQTT auth rejected (CONNACK non-zero for bad credentials)
+//   - 3: MQTT auth rejected
 //   - 4: TLS dial failure, network timeout, or context cancelled
 func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode string, insecure bool, timeout time.Duration) (string, error) {
 	if insecure {
 		return "", nil
 	}
 
+	tlsCfg, _ := buildTLSConfig(serial, "", false) // capture mode: no fingerprint to check yet
+
 	var (
 		mu      sync.Mutex
 		leafDER []byte
 	)
-
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // Bambu CA not in OS trust stores; leaf cert pinned by TOFU (ADR 0007)
-		ServerName:         serial,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) > 0 {
-				mu.Lock()
-				leafDER = cs.PeerCertificates[0].Raw
-				mu.Unlock()
-			}
-			return nil
-		},
+	tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) > 0 {
+			mu.Lock()
+			leafDER = cs.PeerCertificates[0].Raw
+			mu.Unlock()
+		}
+		return nil
 	}
 
 	opts := mqtt.NewClientOptions()
@@ -79,7 +119,7 @@ func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode stri
 	opts.SetAutoReconnect(false)
 	opts.SetKeepAlive(60)
 
-	client := mqtt.NewClient(opts)
+	client := d.newClient(opts)
 	done := make(chan error, 1)
 	go func() {
 		token := client.Connect()
@@ -93,7 +133,7 @@ func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode stri
 			return "", classifyMQTTError(err)
 		}
 	case <-ctx.Done():
-		go client.Disconnect(0) // unblock the connect goroutine
+		go client.Disconnect(0)
 		return "", apperr.New(4, "connection cancelled")
 	}
 	client.Disconnect(250)
@@ -111,15 +151,44 @@ func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode stri
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+// Status fetches current printer state via the Bambu LAN MQTT protocol.
+// Implemented in Task 3.
+func (d *Driver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
+	return nil, apperr.New(5, "status not yet implemented")
+}
+
 // classifyMQTTError maps paho connect errors to apperr exit codes.
-// CONNACK codes 4 (bad credentials) and 5 (not authorised) → exit 3.
-// All other errors (network, TLS, timeout) → exit 4.
 func classifyMQTTError(err error) error {
 	if errors.Is(err, packets.ErrorRefusedBadUsernameOrPassword) ||
 		errors.Is(err, packets.ErrorRefusedNotAuthorised) {
 		return apperr.Newf(3, "MQTT authentication rejected: %s", err)
 	}
 	return apperr.Newf(4, "connection failed: %s", err)
+}
+
+// classifyStatusError extends classifyMQTTError with fingerprint mismatch handling.
+func classifyStatusError(err error) error {
+	var fpErr *fingerprintMismatchError
+	if errors.As(err, &fpErr) {
+		return apperr.Newf(3, "%s", err)
+	}
+	return classifyMQTTError(err)
+}
+
+// mapState converts a Bambu gcode_state string to a portable state name.
+func mapState(gcodeState string) string {
+	switch gcodeState {
+	case "IDLE", "FINISH":
+		return "idle"
+	case "PRINTING", "PREPARE", "RUNNING", "SLICING":
+		return "printing"
+	case "PAUSED":
+		return "paused"
+	case "FAILED":
+		return "error"
+	default:
+		return "unknown"
+	}
 }
 
 func randomClientID() string {
