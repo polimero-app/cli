@@ -217,6 +217,47 @@ func TestDiscover_InvalidTimeout_ExitsCode2(t *testing.T) {
 	checkExitCode(t, err, 2)
 }
 
+func TestDiscover_ZeroTimeout_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	deps := discoverDeps(t, dir, defaultDiscoverDriver())
+	_, err := runDiscoverCmd(t, deps, "--timeout", "0s")
+	if err == nil {
+		t.Fatal("expected error for zero timeout")
+	}
+	checkExitCode(t, err, 2)
+}
+
+func TestDiscover_DriverError_ExitsCode4(t *testing.T) {
+	dir := t.TempDir()
+	drv := &stubDiscoverDriver{
+		name: "bambu-lan",
+		caps: driver.Capabilities{Discovery: true},
+		discErr: apperr.New(4, "mDNS socket unavailable"),
+	}
+	deps := discoverDeps(t, dir, drv)
+	out, err := runDiscoverCmd(t, deps, "--output", "json")
+	if err == nil {
+		t.Fatal("expected error when driver.Discover fails")
+	}
+	checkExitCode(t, err, 4)
+
+	var env struct {
+		OK    bool `json:"ok"`
+		Error *struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", jsonErr, out)
+	}
+	if env.OK {
+		t.Error("expected ok=false in error envelope")
+	}
+	if env.Error == nil || env.Error.Code != "connection_failed" {
+		t.Errorf("error code = %v, want %q", env.Error, "connection_failed")
+	}
+}
+
 func TestDiscover_JSON_EmptyPrintersArray(t *testing.T) {
 	dir := t.TempDir()
 	drv := &stubDiscoverDriver{name: "bambu-lan", caps: driver.Capabilities{Discovery: true}, found: []driver.DiscoveredPrinter{}}

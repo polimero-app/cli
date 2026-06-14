@@ -152,7 +152,7 @@ func writeDiscoverSuccess(w io.Writer, format output.Format, found []discoverRes
 		printers := make([]printerJSON, 0, len(found))
 		for _, r := range found {
 			pj := printerJSON{
-				Driver: r.DiscoveredPrinter.Driver,
+				Driver: r.Driver,
 				Host:   r.Host,
 				Serial: r.Serial,
 				Model:  r.Model,
