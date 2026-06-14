@@ -352,6 +352,10 @@ func mapHMSErrors(p bambuPrint) []driver.StatusError {
 	return errs
 }
 
+func (d *Driver) CaptureFingerprint(_ context.Context, _, _ string) (string, error) {
+	return "", apperr.New(5, "CaptureFingerprint not yet implemented")
+}
+
 func randomClientID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)

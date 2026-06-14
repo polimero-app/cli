@@ -32,6 +32,10 @@ func (s *stubStatusDriver) Status(_ context.Context, _ driver.ProfileInput, _ dr
 	return s.result, s.err
 }
 
+func (s *stubStatusDriver) CaptureFingerprint(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+
 func defaultStatusDriver() *stubStatusDriver {
 	nozzleTarget := 220.0
 	bedTarget := 60.0

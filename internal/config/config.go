@@ -134,6 +134,14 @@ func (c *Config) AddProfile(name string, p Profile) error {
 	return nil
 }
 
+func (c *Config) SetProfile(name string, p Profile) error {
+	if _, ok := c.profiles[name]; !ok {
+		return ErrProfileNotFound
+	}
+	c.profiles[name] = p
+	return nil
+}
+
 // RemoveProfile deletes the named profile and returns it.
 // Returns ErrProfileNotFound if the name is absent.
 func (c *Config) RemoveProfile(name string) (Profile, error) {

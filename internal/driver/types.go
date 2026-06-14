@@ -13,6 +13,7 @@ type Capabilities struct {
 	TemperatureRead  bool `json:"temperatureRead"`
 	TemperatureWrite bool `json:"temperatureWrite"`
 	MotionControl    bool `json:"motionControl"`
+	TLSRefresh       bool `json:"tlsRefresh"`
 }
 
 // SecretsBundle carries runtime secrets for a printer connection.

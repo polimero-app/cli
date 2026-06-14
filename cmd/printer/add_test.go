@@ -39,6 +39,10 @@ func (s *stubDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.S
 	return nil, nil
 }
 
+func (s *stubDriver) CaptureFingerprint(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+
 func defaultAddDeps(kc *keychain.Mock, p *tty.Mock) printer.AddDeps {
 	return printer.AddDeps{
 		KC:       kc,

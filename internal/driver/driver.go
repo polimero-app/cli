@@ -31,4 +31,6 @@ type Driver interface {
 		s SecretsBundle,
 		log *slog.Logger,
 	) (*StatusResult, error)
+
+	CaptureFingerprint(ctx context.Context, host, serial string) (fingerprint string, err error)
 }
