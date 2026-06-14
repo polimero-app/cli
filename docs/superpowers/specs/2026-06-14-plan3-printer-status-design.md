@@ -201,8 +201,8 @@ A `fakeToken` struct satisfies `mqtt.Token`. A `fakeMessage` struct satisfies `m
 
 | Flag | Type | Notes |
 |---|---|---|
-| `<name>` | positional | normalized to lowercase; show help if omitted |
-| `--timeout` | string | overrides profile timeout |
+| `<name>` | positional | normalized to lowercase; show help if omitted, usage error if more than one |
+| `--timeout` | string | overrides profile timeout; must parse as a Go duration and be greater than zero |
 | `--insecure` | bool | skips TLS verification for this invocation |
 
 ### `StatusDeps`
@@ -217,8 +217,10 @@ type StatusDeps struct {
 
 ### Execution sequence
 
-1. Normalize name to lowercase. Load config; look up profile → exit 2 if not found.
-2. Resolve timeout: `--timeout` flag overrides profile's stored string; parse with `time.ParseDuration`. Default `10s`.
+The command has no `Args:` field. Instead: if `len(args) == 0` return `cmd.Help()`; if `len(args) > 1` return a usage error via a `writeStatusUsageError` helper (same pattern as `add`/`remove`).
+
+1. Normalize name to lowercase. Validate with `validateProfileName` → exit 2 if invalid. Load config; look up profile → exit 2 if not found.
+2. Resolve timeout: `--timeout` flag overrides profile's stored string; parse with `time.ParseDuration`; must be > 0. Default `10s`.
 3. Effective insecure: `p.Insecure || insecureFlag`.
 4. Load secrets:
    - Access code → exit 3 on `ErrNotFound`.
@@ -253,6 +255,8 @@ Follows the envelope shape from the command spec, including `durationMs` in `met
 | Full status from stub driver | exit 0, all fields present |
 | Partial status with warnings | exit 0, warnings in output |
 | No args | help printed |
+| Too many args | exit 2, usage error |
+| Invalid profile name | exit 2 |
 | Profile not found | exit 2 |
 | Missing access code | exit 3 |
 | Missing TLS fingerprint (secure profile) | exit 3 |
