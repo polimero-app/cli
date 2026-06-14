@@ -100,6 +100,35 @@ The driver-neutral status operation returns:
 
 Partial status is allowed if optional fields fail. The driver must report partial-data warnings.
 
+## Discovery Operation
+
+Drivers that declare `Discovery: true` in their `Capabilities` must implement:
+
+```go
+Discover(ctx context.Context) ([]DiscoveredPrinter, error)
+```
+
+Where `DiscoveredPrinter` is:
+
+```go
+type DiscoveredPrinter struct {
+    Host   string // IP address of the discovered printer
+    Port   int    // service port from the mDNS SRV record (e.g. 8883)
+    Serial string // serial number from service metadata; empty if absent
+    Model  string // model identifier from service metadata; empty if absent
+    Name   string // friendly name from service metadata; empty if absent
+    Driver string // driver name (e.g. "bambu-lan"), populated by the driver
+}
+```
+
+Contract:
+
+- `ctx` deadline controls the scan duration; stop listening when context is done.
+- Return a non-nil empty slice when no printers are found.
+- Return exit code `4` if the mDNS socket cannot be opened.
+- Do not connect to any printer during discovery.
+- Do not read or access any secrets.
+
 ## Errors
 
 Drivers return typed errors that map to public error codes:

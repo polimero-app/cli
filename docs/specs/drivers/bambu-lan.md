@@ -193,6 +193,28 @@ Behavior:
 
 If secure transport cannot be established, return a sanitized connection or authentication error.
 
+## mDNS Discovery
+
+Capability: `Discovery: true`.
+
+Bambu printers advertise their presence on the local network via mDNS/DNS-SD.
+
+Service type: `_bambu._tcp` (local domain).
+
+TXT record mapping:
+
+| TXT key | `DiscoveredPrinter` field |
+|---|---|
+| `sn` | `Serial` |
+| `dev_model_name` | `Model` |
+| `dev_name` | `Name` |
+
+Host is taken from the A record (IPv4 preferred, IPv6 fallback). Port is taken from the SRV record (typically 8883). Entries with no resolvable IP address are skipped silently.
+
+The `Driver` field is always `"bambu-lan"`.
+
+Discovery does not perform TLS handshakes, MQTT connections, or secret reads.
+
 ## External Sources
 
 Allowed protocol research sources:
