@@ -54,10 +54,12 @@ func AddCommandWithDeps(deps AddDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Add a printer profile",
-		Args:  cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				return cmd.Help()
+			}
+			if len(args) > 1 {
+				return writeAddUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
 			return runAdd(cmd, args[0], flags.driverName, flags.host, flags.serial,
 				flags.timeout, flags.insecure, flags.accessCodeFile, deps)
@@ -72,6 +74,15 @@ func AddCommandWithDeps(deps AddDeps) *cobra.Command {
 	cmd.Flags().StringVar(&flags.accessCodeFile, "access-code-file", "", "file containing the access code")
 
 	return cmd
+}
+
+func writeAddUsageError(cmd *cobra.Command, message string) error {
+	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
+	format, fmtErr := output.ParseFormat(formatStr)
+	if fmtErr != nil {
+		return apperr.New(2, fmtErr.Error())
+	}
+	return writeAddError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message))
 }
 
 func runAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr string, insecure bool, accessCodeFile string, deps AddDeps) error {

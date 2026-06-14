@@ -232,6 +232,45 @@ func TestAdd_InvalidProfileName(t *testing.T) {
 	}
 }
 
+func TestAdd_TooManyArgsShowsHumanError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	out, err := runAddCmd(t, dir, defaultAddDeps(kc, p), "one", "two")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for too many args, got %v", err)
+	}
+	if out == "" {
+		t.Fatal("expected human error output")
+	}
+	if want := "Error: expected exactly one profile name, got 2"; !strings.Contains(out, want) {
+		t.Fatalf("expected %q in output, got:\n%s", want, out)
+	}
+}
+
+func TestAdd_TooManyArgsShowsJSONError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	out, err := runAddCmd(t, dir, defaultAddDeps(kc, p), "one", "two", "--output", "json")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for too many args, got %v", err)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	if env["ok"] != false {
+		t.Fatalf("ok = %v, want false", env["ok"])
+	}
+	errDetail := env["error"].(map[string]any)
+	if errDetail["message"] != "expected exactly one profile name, got 2" {
+		t.Fatalf("error.message = %v", errDetail["message"])
+	}
+}
+
 func TestAdd_MissingDriver(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()

@@ -223,6 +223,7 @@ JSON error example:
 ## Error Cases
 
 - Invalid profile name.
+- Too many arguments.
 - Unsupported driver.
 - Missing host.
 - Invalid host format.

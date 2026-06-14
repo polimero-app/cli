@@ -33,16 +33,27 @@ func RemoveCommandWithDeps(deps RemoveDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove a printer profile",
-		Args:  cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				return cmd.Help()
+			}
+			if len(args) > 1 {
+				return writeRemoveUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
 			return runRemove(cmd, args[0], yes, deps)
 		},
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip interactive confirmation")
 	return cmd
+}
+
+func writeRemoveUsageError(cmd *cobra.Command, message string) error {
+	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
+	format, fmtErr := output.ParseFormat(formatStr)
+	if fmtErr != nil {
+		return apperr.New(2, fmtErr.Error())
+	}
+	return writeRemoveError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message))
 }
 
 type removeWarning struct {

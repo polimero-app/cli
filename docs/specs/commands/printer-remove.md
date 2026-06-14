@@ -111,6 +111,7 @@ JSON success example with warnings (access code missing):
 ## Error Cases
 
 - Invalid profile name.
+- Too many arguments.
 - Profile not found.
 - Confirmation declined.
 - Non-interactive execution without `--yes`.
@@ -142,4 +143,3 @@ JSON success example with warnings (access code missing):
 - Removing discovered but unconfigured printers.
 - Bulk removal.
 - Secret rotation.
-

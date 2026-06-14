@@ -147,6 +147,45 @@ func TestRemove_ProfileNotFound(t *testing.T) {
 	}
 }
 
+func TestRemove_TooManyArgsShowsHumanError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	out, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: p}, "one", "two", "--yes")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for too many args, got %v", err)
+	}
+	if out == "" {
+		t.Fatal("expected human error output")
+	}
+	if want := "Error: expected exactly one profile name, got 2"; !bytes.Contains([]byte(out), []byte(want)) {
+		t.Fatalf("expected %q in output, got:\n%s", want, out)
+	}
+}
+
+func TestRemove_TooManyArgsShowsJSONError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	out, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: p}, "one", "two", "--yes", "--output", "json")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for too many args, got %v", err)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	if env["ok"] != false {
+		t.Fatalf("ok = %v, want false", env["ok"])
+	}
+	errDetail := env["error"].(map[string]any)
+	if errDetail["message"] != "expected exactly one profile name, got 2" {
+		t.Fatalf("error.message = %v", errDetail["message"])
+	}
+}
+
 func TestRemove_InvalidProfileName(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
