@@ -23,7 +23,7 @@ type stubStatusDriver struct {
 	caps   driver.Capabilities
 }
 
-func (s *stubStatusDriver) Name() string                       { return "bambu-lan" }
+func (s *stubStatusDriver) Name() string                      { return "bambu-lan" }
 func (s *stubStatusDriver) Capabilities() driver.Capabilities { return s.caps }
 func (s *stubStatusDriver) ConnectCheck(_ context.Context, _, _, _ string, _ bool, _ time.Duration) (string, error) {
 	return "", nil
@@ -45,10 +45,10 @@ func defaultStatusDriver() *stubStatusDriver {
 				Nozzle: &driver.Temperature{CurrentCelsius: 215.0, TargetCelsius: &nozzleTarget},
 				Bed:    &driver.Temperature{CurrentCelsius: 60.0, TargetCelsius: &bedTarget},
 			},
-			Job:      &driver.Job{Name: "bracket.3mf"},
-			Progress: &driver.Progress{Percent: 42, CurrentLayer: &layer, TotalLayers: &total},
-			Errors:   []driver.StatusError{},
-			Warnings: []driver.StatusWarning{},
+			Job:          &driver.Job{Name: "bracket.3mf"},
+			Progress:     &driver.Progress{Percent: 42, CurrentLayer: &layer, TotalLayers: &total},
+			Errors:       []driver.StatusError{},
+			Warnings:     []driver.StatusWarning{},
 			Capabilities: driver.Capabilities{Status: true},
 		},
 	}
@@ -177,7 +177,7 @@ func TestStatus_InsecureProfile_SkipsFingerprint(t *testing.T) {
 func TestStatus_InsecureFlag_SkipsFingerprint(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
-	seedProfile(t, dir, kc, "myprinter", false) // secure profile in config
+	seedProfile(t, dir, kc, "myprinter", false)                      // secure profile in config
 	_ = kc.Delete("polimero", "bambu-lan:myprinter:tls-fingerprint") // but fingerprint missing
 	deps := statusDeps(t, dir, kc, defaultStatusDriver())
 	_, err := runStatusCmd(t, deps, "myprinter", "--insecure")
@@ -240,7 +240,39 @@ func TestStatus_HumanOutput_FullResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, want := range []string{"Printer: myprinter", "State: printing", "Progress: 42%", "Nozzle:", "Bed:", "Job: bracket.3mf"} {
+	for _, want := range []string{
+		"Printer: myprinter",
+		"State: printing",
+		"Progress: 42%",
+		"Nozzle: 215.0 C / 220.0 C",
+		"Bed: 60.0 C / 60.0 C",
+		"Job: bracket.3mf",
+	} {
+		if !bytes.Contains([]byte(out), []byte(want)) {
+			t.Errorf("expected %q in output:\n%s", want, out)
+		}
+	}
+}
+
+func TestStatus_HumanOutput_WithErrors(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	drv := &stubStatusDriver{
+		caps: driver.Capabilities{Status: true},
+		result: &driver.StatusResult{
+			State:        "error",
+			Errors:       []driver.StatusError{{Code: "hms:00000001:00000002", Message: "hardware error"}},
+			Warnings:     []driver.StatusWarning{},
+			Capabilities: driver.Capabilities{Status: true},
+		},
+	}
+	deps := statusDeps(t, dir, kc, drv)
+	out, err := runStatusCmd(t, deps, "myprinter")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{"State: error", "Errors:", "- hms:00000001:00000002 hardware error"} {
 		if !bytes.Contains([]byte(out), []byte(want)) {
 			t.Errorf("expected %q in output:\n%s", want, out)
 		}
@@ -254,9 +286,9 @@ func TestStatus_HumanOutput_WithWarnings(t *testing.T) {
 	drv := &stubStatusDriver{
 		caps: driver.Capabilities{Status: true},
 		result: &driver.StatusResult{
-			State:    "idle",
-			Errors:   []driver.StatusError{},
-			Warnings: []driver.StatusWarning{{Code: "low_filament", Message: "filament running low"}},
+			State:        "idle",
+			Errors:       []driver.StatusError{},
+			Warnings:     []driver.StatusWarning{{Code: "low_filament", Message: "filament running low"}},
 			Capabilities: driver.Capabilities{Status: true},
 		},
 	}
@@ -334,6 +366,26 @@ func TestStatus_JSON_ErrorEnvelope(t *testing.T) {
 	}
 	if env["ok"] != false {
 		t.Errorf("ok = %v, want false", env["ok"])
+	}
+	errData, ok := env["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error is %T, want map", env["error"])
+	}
+	if errData["code"] != "timeout" {
+		t.Errorf("error.code = %v, want timeout", errData["code"])
+	}
+	if errData["message"] != "printer status request timed out" {
+		t.Errorf("error.message = %v, want printer status request timed out", errData["message"])
+	}
+	details, ok := errData["details"].(map[string]any)
+	if !ok {
+		t.Fatalf("error.details is %T, want map", errData["details"])
+	}
+	if details["profile"] != "myprinter" {
+		t.Errorf("details.profile = %v, want myprinter", details["profile"])
+	}
+	if details["timeout"] != "10s" {
+		t.Errorf("details.timeout = %v, want 10s", details["timeout"])
 	}
 	meta, ok := env["meta"].(map[string]any)
 	if !ok {

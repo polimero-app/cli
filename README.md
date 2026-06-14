@@ -8,7 +8,7 @@ The project is intentionally ADR and spec driven. Code implementation should hap
 
 This repository contains the ADR/spec foundation and the first profile-management command slices.
 
-Implemented commands currently include `printer add`, `printer list`, `printer remove`, and `printer drivers`.
+Implemented commands currently include `printer add`, `printer list`, `printer remove`, `printer drivers`, and `printer status`.
 
 ## Key Decisions
 

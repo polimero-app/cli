@@ -11,7 +11,7 @@ Query current status from a configured printer through the driver-neutral status
 ## Syntax
 
 ```text
-polimero printer status <name> [--timeout <duration>] [--output <format>]
+polimero printer status <name> [--timeout <duration>] [--insecure] [--output <format>]
 ```
 
 ## Arguments
@@ -66,7 +66,7 @@ Portable status fields:
 - `state`: one of `unknown`, `offline`, `idle`, `printing`, `paused`, `error`. `offline` means the connection attempt failed or timed out (printer is unreachable). `unknown` means the driver connected but could not determine a clear state from the response.
 - `temperatures`: available nozzle, bed, chamber, and target temperatures. `null` if unavailable.
 - `job`: active job summary when available. `null` if no active job or unavailable.
-- `progress`: percentage and time estimates when available. `null` if unavailable.
+- `progress`: percentage and layer counts when available. `null` if unavailable.
 - `errors`: active printer errors. Always an array; empty when no active errors. Each element is an object with `code` (string) and `message` (string).
 - `warnings`: partial-data or non-fatal retrieval warnings. Always an array; empty when none.
 - `capabilities`: driver capability metadata. Always present.
@@ -84,6 +84,15 @@ Progress: 42%
 Nozzle: 215.0 C / 220.0 C
 Bed: 60.0 C / 60.0 C
 Job: bracket.3mf
+```
+
+Human output with active printer errors:
+
+```text
+Printer: garage-x1c
+State: error
+Errors:
+- hms:00000001:00000002 hardware error
 ```
 
 Human partial-data example:
@@ -210,4 +219,3 @@ JSON timeout example:
 - Discovering printers.
 - Showing Bambu cloud state.
 - Retrying transient failures.
-

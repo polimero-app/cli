@@ -64,7 +64,7 @@ func writeStatusUsageError(cmd *cobra.Command, message string) error {
 	if fmtErr != nil {
 		return apperr.New(2, fmtErr.Error())
 	}
-	return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message))
+	return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), statusErrorContext{})
 }
 
 func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps StatusDeps) error {
@@ -75,29 +75,34 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag boo
 	}
 
 	name := strings.ToLower(nameArg)
-	result, durationMs, driverName, err := doStatus(cmd, name, timeoutFlag, insecureFlag, deps)
+	result, durationMs, driverName, errCtx, err := doStatus(cmd, name, timeoutFlag, insecureFlag, deps)
 	if err != nil {
-		return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err)
+		return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err, errCtx)
 	}
 	return writeStatusSuccess(cmd.OutOrStdout(), format, name, driverName, result, durationMs)
 }
 
-func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, deps StatusDeps) (*driver.StatusResult, int64, string, error) {
+type statusErrorContext struct {
+	profile string
+	timeout string
+}
+
+func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, deps StatusDeps) (*driver.StatusResult, int64, string, statusErrorContext, error) {
 	if err := validateProfileName(name); err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", statusErrorContext{}, err
 	}
 
 	dir, err := config.ConfigDir()
 	if err != nil {
-		return nil, 0, "", apperr.Newf(1, "cannot resolve config directory: %s", err)
+		return nil, 0, "", statusErrorContext{}, apperr.Newf(1, "cannot resolve config directory: %s", err)
 	}
 	cfg, err := config.Open(dir)
 	if err != nil {
-		return nil, 0, "", apperr.Newf(2, "cannot load config: %s", err)
+		return nil, 0, "", statusErrorContext{}, apperr.Newf(2, "cannot load config: %s", err)
 	}
 	p, ok := cfg.GetProfile(name)
 	if !ok {
-		return nil, 0, "", apperr.Newf(2, "printer profile %q not found", name)
+		return nil, 0, "", statusErrorContext{}, apperr.Newf(2, "printer profile %q not found", name)
 	}
 
 	timeoutStr := p.Timeout
@@ -109,11 +114,12 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 	}
 	timeout, err := time.ParseDuration(timeoutStr)
 	if err != nil {
-		return nil, 0, "", apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
+		return nil, 0, "", statusErrorContext{profile: name, timeout: timeoutStr}, apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
 	}
 	if timeout <= 0 {
-		return nil, 0, "", apperr.Newf(2, "--timeout must be greater than zero")
+		return nil, 0, "", statusErrorContext{profile: name, timeout: timeoutStr}, apperr.Newf(2, "--timeout must be greater than zero")
 	}
+	errCtx := statusErrorContext{profile: name, timeout: timeout.String()}
 
 	insecure := p.Insecure || insecureFlag
 
@@ -121,9 +127,9 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 	accessCode, err := deps.KC.Get("polimero", kcAcct)
 	if err != nil {
 		if errors.Is(err, keychain.ErrNotFound) {
-			return nil, 0, "", apperr.Newf(3, "access code not found in keychain for %q", name)
+			return nil, 0, "", errCtx, apperr.Newf(3, "access code not found in keychain for %q", name)
 		}
-		return nil, 0, "", apperr.Newf(3, "cannot read access code from keychain: %s", err)
+		return nil, 0, "", errCtx, apperr.Newf(3, "cannot read access code from keychain: %s", err)
 	}
 
 	var tlsFingerprint string
@@ -132,18 +138,18 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 		tlsFingerprint, err = deps.KC.Get("polimero", kcFpAcct)
 		if err != nil {
 			if errors.Is(err, keychain.ErrNotFound) {
-				return nil, 0, "", apperr.Newf(3, "TLS fingerprint not found in keychain for %q", name)
+				return nil, 0, "", errCtx, apperr.Newf(3, "TLS fingerprint not found in keychain for %q", name)
 			}
-			return nil, 0, "", apperr.Newf(3, "cannot read TLS fingerprint from keychain: %s", err)
+			return nil, 0, "", errCtx, apperr.Newf(3, "cannot read TLS fingerprint from keychain: %s", err)
 		}
 	}
 
 	drv, ok := deps.GetDriver(p.Driver)
 	if !ok {
-		return nil, 0, "", apperr.Newf(2, "unknown driver %q", p.Driver)
+		return nil, 0, "", errCtx, apperr.Newf(2, "unknown driver %q", p.Driver)
 	}
 	if !drv.Capabilities().Status {
-		return nil, 0, "", apperr.Newf(5, "driver %q does not support the status command", p.Driver)
+		return nil, 0, "", errCtx, apperr.Newf(5, "driver %q does not support the status command", p.Driver)
 	}
 
 	pi := driver.ProfileInput{
@@ -166,9 +172,9 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 	result, err := drv.Status(ctx, pi, secrets, deps.Log)
 	durationMs := time.Since(start).Milliseconds()
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", errCtx, err
 	}
-	return result, durationMs, p.Driver, nil
+	return result, durationMs, p.Driver, statusErrorContext{}, nil
 }
 
 func writeStatusSuccess(w io.Writer, format output.Format, name, driverName string, result *driver.StatusResult, durationMs int64) error {
@@ -201,24 +207,34 @@ func writeStatusSuccess(w io.Writer, format output.Format, name, driverName stri
 	if result.Temperatures != nil {
 		if n := result.Temperatures.Nozzle; n != nil {
 			if n.TargetCelsius != nil {
-				lines = append(lines, fmt.Sprintf("Nozzle: %.1f °C / %.1f °C", n.CurrentCelsius, *n.TargetCelsius))
+				lines = append(lines, fmt.Sprintf("Nozzle: %.1f C / %.1f C", n.CurrentCelsius, *n.TargetCelsius))
 			} else {
-				lines = append(lines, fmt.Sprintf("Nozzle: %.1f °C", n.CurrentCelsius))
+				lines = append(lines, fmt.Sprintf("Nozzle: %.1f C", n.CurrentCelsius))
 			}
 		}
 		if b := result.Temperatures.Bed; b != nil {
 			if b.TargetCelsius != nil {
-				lines = append(lines, fmt.Sprintf("Bed: %.1f °C / %.1f °C", b.CurrentCelsius, *b.TargetCelsius))
+				lines = append(lines, fmt.Sprintf("Bed: %.1f C / %.1f C", b.CurrentCelsius, *b.TargetCelsius))
 			} else {
-				lines = append(lines, fmt.Sprintf("Bed: %.1f °C", b.CurrentCelsius))
+				lines = append(lines, fmt.Sprintf("Bed: %.1f C", b.CurrentCelsius))
 			}
 		}
 		if c := result.Temperatures.Chamber; c != nil {
-			lines = append(lines, fmt.Sprintf("Chamber: %.1f °C", c.CurrentCelsius))
+			lines = append(lines, fmt.Sprintf("Chamber: %.1f C", c.CurrentCelsius))
 		}
 	}
 	if result.Job != nil {
 		lines = append(lines, fmt.Sprintf("Job: %s", result.Job.Name))
+	}
+	if len(result.Errors) > 0 {
+		lines = append(lines, "Errors:")
+		for _, statusErr := range result.Errors {
+			if statusErr.Code != "" {
+				lines = append(lines, fmt.Sprintf("- %s %s", statusErr.Code, statusErr.Message))
+			} else {
+				lines = append(lines, fmt.Sprintf("- %s", statusErr.Message))
+			}
+		}
 	}
 	if len(result.Warnings) > 0 {
 		lines = append(lines, "Warnings:")
@@ -234,23 +250,42 @@ func writeStatusSuccess(w io.Writer, format output.Format, name, driverName stri
 	return nil
 }
 
-func writeStatusError(out, errOut io.Writer, format output.Format, err error) error {
+func writeStatusError(out, errOut io.Writer, format output.Format, err error, errCtx statusErrorContext) error {
 	var exitErr *apperr.ExitError
 	code := 1
 	if errors.As(err, &exitErr) {
 		code = exitErr.Code
 	}
 	if format == output.FormatJSON {
+		errDetail := statusErrorDetail(err, errCtx)
 		_ = output.WriteEnvelope(out, output.Envelope{
 			OK:    false,
 			Data:  nil,
-			Error: &output.ErrDetail{Code: statusErrorCode(err), Message: err.Error()},
+			Error: &errDetail,
 			Meta:  output.Meta{Command: "printer status"},
 		})
 	} else {
 		_, _ = fmt.Fprintf(errOut, "Error: %s\n", err)
 	}
 	return apperr.New(code, "")
+}
+
+func statusErrorDetail(err error, errCtx statusErrorContext) output.ErrDetail {
+	detail := output.ErrDetail{Code: statusErrorCode(err), Message: err.Error()}
+	if isStatusTimeout(err) {
+		detail.Code = "timeout"
+		detail.Message = "printer status request timed out"
+		if errCtx.profile != "" || errCtx.timeout != "" {
+			detail.Details = map[string]any{}
+			if errCtx.profile != "" {
+				detail.Details["profile"] = errCtx.profile
+			}
+			if errCtx.timeout != "" {
+				detail.Details["timeout"] = errCtx.timeout
+			}
+		}
+	}
+	return detail
 }
 
 func statusErrorCode(err error) string {
@@ -270,4 +305,13 @@ func statusErrorCode(err error) string {
 	default:
 		return "error"
 	}
+}
+
+func isStatusTimeout(err error) bool {
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout")
 }
