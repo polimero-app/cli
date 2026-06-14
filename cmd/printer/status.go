@@ -75,15 +75,14 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag boo
 	}
 
 	name := strings.ToLower(nameArg)
-	result, durationMs, err := doStatus(cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	result, durationMs, err := doStatus(cmd, name, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err)
 	}
 	return writeStatusSuccess(cmd.OutOrStdout(), format, name, result, durationMs)
 }
 
-func doStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps StatusDeps) (*driver.StatusResult, int64, error) {
-	name := strings.ToLower(nameArg)
+func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, deps StatusDeps) (*driver.StatusResult, int64, error) {
 	if err := validateProfileName(name); err != nil {
 		return nil, 0, err
 	}
