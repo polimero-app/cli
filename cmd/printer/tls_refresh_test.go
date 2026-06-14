@@ -191,6 +191,34 @@ func TestTlsRefresh_HappyPath_SecureProfile(t *testing.T) {
 	}
 }
 
+func TestTlsRefresh_UpdatesTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+
+	before := time.Now().Add(-time.Second)
+	deps := tlsRefreshDeps(t, dir, kc, &stubRefreshDriver{fp: "sha256:new", caps: driver.Capabilities{TLSRefresh: true}}, &tty.Mock{Terminal: false})
+	_, err := runTlsRefreshCmd(t, deps, "myprinter", "--yes")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cfg, cfgErr := config.Open(dir)
+	if cfgErr != nil {
+		t.Fatalf("config.Open: %v", cfgErr)
+	}
+	p, ok := cfg.GetProfile("myprinter")
+	if !ok {
+		t.Fatal("profile not found after refresh")
+	}
+	if !p.Updated.After(before) {
+		t.Errorf("profile.Updated = %v, want after %v", p.Updated, before)
+	}
+	if p.Insecure {
+		t.Error("profile.Insecure should be false after secure refresh")
+	}
+}
+
 func TestTlsRefresh_InsecureToSecure(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
