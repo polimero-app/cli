@@ -52,8 +52,11 @@ func AddCommandWithDeps(deps AddDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Add a printer profile",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return cmd.Help()
+			}
 			return runAdd(cmd, args[0], flags.driverName, flags.host, flags.serial,
 				flags.timeout, flags.insecure, flags.accessCodeFile, deps)
 		},
