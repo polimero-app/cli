@@ -68,6 +68,7 @@ func discoverDeps(t *testing.T, dir string, drvs ...driver.Driver) printer.Disco
 func testRootForDiscover(deps printer.DiscoverDeps) *cobra.Command {
 	root := &cobra.Command{Use: "polimero", SilenceErrors: true, SilenceUsage: true}
 	root.PersistentFlags().String("output", "human", "")
+	root.PersistentFlags().Bool("verbose", false, "")
 	sub := &cobra.Command{Use: "printer"}
 	sub.AddCommand(printer.DiscoverCommandWithDeps(deps))
 	root.AddCommand(sub)
@@ -326,5 +327,53 @@ func TestDiscover_JSON_IncludesDurationMs(t *testing.T) {
 	}
 	if env.Meta.DurationMs == nil {
 		t.Error("expected durationMs in meta")
+	}
+}
+
+func TestDiscover_Verbose_ShowsScanningMessage(t *testing.T) {
+	dir := t.TempDir()
+	deps := discoverDeps(t, dir, defaultDiscoverDriver())
+	out, err := runDiscoverCmd(t, deps, "--verbose")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains([]byte(out), []byte("Scanning local network")) {
+		t.Errorf("expected scanning message in output, got: %s", out)
+	}
+	if !bytes.Contains([]byte(out), []byte("5s")) {
+		t.Errorf("expected timeout value (5s) in output, got: %s", out)
+	}
+}
+
+func TestDiscover_Verbose_SuppressedInJSONMode(t *testing.T) {
+	dir := t.TempDir()
+	deps := discoverDeps(t, dir, defaultDiscoverDriver())
+	out, err := runDiscoverCmd(t, deps, "--verbose", "--output", "json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bytes.Contains([]byte(out), []byte("Scanning")) {
+		t.Errorf("expected no scanning message in JSON mode, got: %s", out)
+	}
+	var env struct {
+		OK bool `json:"ok"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", jsonErr, out)
+	}
+	if !env.OK {
+		t.Error("expected ok=true in JSON output")
+	}
+}
+
+func TestDiscover_NoVerbose_NoScanningLine(t *testing.T) {
+	dir := t.TempDir()
+	deps := discoverDeps(t, dir, defaultDiscoverDriver())
+	out, err := runDiscoverCmd(t, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bytes.Contains([]byte(out), []byte("Scanning local network")) {
+		t.Errorf("expected no scanning message without --verbose, got: %s", out)
 	}
 }

@@ -66,6 +66,9 @@ func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag string, deps Discov
 			apperr.New(2, "--timeout must be greater than zero"))
 	}
 
+	verboseFlag, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+	verbose := verboseFlag && format == output.FormatHuman
+
 	drvs, resolveErr := resolveDiscoveryDrivers(driverFlag, deps)
 	if resolveErr != nil {
 		return writeDiscoverError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, resolveErr)
@@ -84,6 +87,8 @@ func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag string, deps Discov
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 	defer cancel()
+
+	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Scanning local network for printers (timeout: %s)...", timeout))
 
 	start := time.Now()
 	var found []discoverResult
