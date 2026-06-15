@@ -37,7 +37,20 @@ type Envelope struct {
 type ErrDetail struct {
 	Code    string         `json:"code"`
 	Message string         `json:"message"`
-	Details map[string]any `json:"details,omitempty"`
+	Details map[string]any `json:"details"`
+}
+
+// MarshalJSON ensures Details always serializes as {} rather than null when empty.
+func (e ErrDetail) MarshalJSON() ([]byte, error) {
+	details := e.Details
+	if details == nil {
+		details = map[string]any{}
+	}
+	return json.Marshal(struct {
+		Code    string         `json:"code"`
+		Message string         `json:"message"`
+		Details map[string]any `json:"details"`
+	}{e.Code, e.Message, details})
 }
 
 // Meta carries metadata about the command invocation.

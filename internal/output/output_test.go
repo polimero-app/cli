@@ -130,3 +130,41 @@ func TestVerbose_SilentWhenFalse(t *testing.T) {
 		t.Errorf("Verbose(false) wrote %q, want empty", buf.String())
 	}
 }
+
+func TestErrDetail_NilDetails_MarshalAsEmptyObject(t *testing.T) {
+	detail := output.ErrDetail{Code: "some_error", Message: "something failed"}
+	data, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	details, ok := got["details"]
+	if !ok {
+		t.Fatal("details field missing from JSON")
+	}
+	m, ok := details.(map[string]any)
+	if !ok {
+		t.Fatalf("details is not an object, got %T", details)
+	}
+	if len(m) != 0 {
+		t.Errorf("expected empty object for nil Details, got %v", m)
+	}
+}
+
+func TestErrDetail_WithDetails_MarshalCorrectly(t *testing.T) {
+	detail := output.ErrDetail{
+		Code:    "timeout",
+		Message: "timed out",
+		Details: map[string]any{"profile": "myprinter", "timeout": "5s"},
+	}
+	data, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if !strings.Contains(string(data), `"profile"`) {
+		t.Errorf("expected details contents in JSON, got: %s", data)
+	}
+}
