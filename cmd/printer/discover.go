@@ -39,7 +39,7 @@ func DiscoverCommandWithDeps(deps DiscoverDeps) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "discover",
-		Short: "Scan the local network for printers via mDNS",
+		Short: "Scan the local network for printers (mDNS, SSDP, UDP broadcast)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runDiscover(cmd, flags.driverName, flags.timeout, deps)
 		},
