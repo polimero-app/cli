@@ -39,7 +39,7 @@ The command group does not include:
 - Deleting, renaming, moving, or creating directories.
 - Editing file contents.
 
-The command layer remains driver-neutral. Device file management is represented by capabilities (`FileList`, `FileDownload`, and `FileUpload`) and driver operations that use portable roots, paths, directory entries, and transfer results. Drivers that do not support a requested file capability return `unsupported_capability`.
+The command layer remains driver-neutral. Device file management is represented by capabilities (`FileList`, `FileDownload`, and `FileUpload`) and driver operations that use portable roots, paths, directory entries, and transfer results. The `files roots` subcommand is gated by the `FileList` capability. Drivers that do not support a requested file capability return `unsupported_capability`.
 
 Device paths use named roots, such as `sdcard:/models/cube.3mf`, rather than raw protocol paths. The command validates and normalizes device paths before dispatch and rejects traversal components. Drivers map named roots to protocol-specific storage paths internally.
 

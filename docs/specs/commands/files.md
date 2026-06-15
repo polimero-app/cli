@@ -110,6 +110,7 @@ Common behavior:
 
 `files roots` behavior:
 
+- Requires the `FileList` capability; returns exit code `5` if the driver does not support `FileList`.
 - Lists device storage roots supported by the driver for the named printer.
 - Returns exit code `0` when roots are retrieved.
 - Returns at least one root for drivers that support file operations.
@@ -118,11 +119,11 @@ Common behavior:
 
 - Follows `ls` behavior for one or more device paths.
 - If no device path is provided and the driver exposes exactly one root, lists that root.
-- If no device path is provided and the driver exposes multiple roots, lists the roots.
-- If a device path names a directory, lists its direct children.
+- If no device path is provided and the driver exposes multiple roots, lists the roots using the same table format as `files roots`.
+- If a device path names a directory, lists its direct children. An empty directory prints the path header followed by `(empty)` in human output and returns `entries: []` in JSON.
 - If a device path names a file, lists that file's metadata.
 - If multiple paths are listed in human output, each result is headed by its normalized path.
-- `--recursive` recursively lists directory descendants, matching `ls -R` behavior.
+- `--recursive` recursively lists directory descendants, matching `ls -R` behavior. When applied to a file path, `--recursive` has no effect; the file is listed normally.
 - Entries are sorted by name using bytewise ascending order after path normalization.
 - Human output includes name, type, size, and modified time.
 - JSON output includes all metadata returned by the driver.
@@ -213,6 +214,37 @@ Human upload example:
 Uploaded ./bracket.3mf to sdcard:/models/bracket.3mf (1.8 MiB).
 ```
 
+JSON roots success example:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "profile": "garage-x1c",
+    "driver": "bambu-lan",
+    "roots": [
+      {
+        "name": "sdcard",
+        "description": "SD card",
+        "writable": true,
+        "capacityBytes": 31900131328,
+        "freeBytes": 13314390016,
+        "metadata": {}
+      }
+    ],
+    "warnings": [],
+    "capabilities": {
+      "fileList": true
+    }
+  },
+  "error": null,
+  "meta": {
+    "command": "files roots",
+    "durationMs": 87
+  }
+}
+```
+
 JSON list success example:
 
 ```json
@@ -259,6 +291,30 @@ JSON list success example:
   "meta": {
     "command": "files list",
     "durationMs": 153
+  }
+}
+```
+
+JSON download success example:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "profile": "garage-x1c",
+    "driver": "bambu-lan",
+    "source": "sdcard:/calibration-cube.3mf",
+    "destination": "./calibration-cube.3mf",
+    "bytesTransferred": 240640,
+    "warnings": [],
+    "capabilities": {
+      "fileDownload": true
+    }
+  },
+  "error": null,
+  "meta": {
+    "command": "files download",
+    "durationMs": 312
   }
 }
 ```
