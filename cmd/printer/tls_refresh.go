@@ -76,8 +76,11 @@ func runTlsRefresh(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag
 		return apperr.New(2, fmtErr.Error())
 	}
 
+	verboseFlag, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+	verbose := verboseFlag && format == output.FormatHuman
+
 	name := strings.ToLower(nameArg)
-	fp, durationMs, errName, err := doTlsRefresh(cmd, name, timeoutFlag, insecureFlag, yes, deps)
+	fp, durationMs, errName, err := doTlsRefresh(cmd, name, timeoutFlag, insecureFlag, yes, verbose, deps)
 	if err != nil {
 		return writeTlsRefreshError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err, errName)
 	}
@@ -86,7 +89,7 @@ func runTlsRefresh(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag
 
 // doTlsRefresh executes the core logic. Returns (fingerprint, durationMs, profileName, error).
 // profileName is used for error details; it is empty when the error occurs before name is known.
-func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, yes bool, deps TlsRefreshDeps) (string, int64, string, error) {
+func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, yes, verbose bool, deps TlsRefreshDeps) (string, int64, string, error) {
 	if err := validateProfileName(name); err != nil {
 		return "", 0, "", err
 	}
@@ -161,6 +164,7 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 		return "", 0, "", nil
 	}
 
+	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Connecting to %s:8883...", p.Host))
 	start := time.Now()
 	fp, err := drv.CaptureFingerprint(ctx, p.Host, p.Serial)
 	durationMs := time.Since(start).Milliseconds()
@@ -170,7 +174,9 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 	if !driver.ValidTLSFingerprint(fp) {
 		return "", 0, name, apperr.New(4, "driver returned invalid TLS fingerprint")
 	}
+	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("TLS certificate captured. New fingerprint: %s", fp))
 
+	output.Verbose(cmd.OutOrStdout(), verbose, "Updating TLS fingerprint in keychain...")
 	if setErr := deps.KC.Set(ctx, "polimero", kcFpAcct, fp); setErr != nil {
 		return "", 0, name, apperr.Wrap(3, "cannot store TLS fingerprint in keychain", setErr)
 	}

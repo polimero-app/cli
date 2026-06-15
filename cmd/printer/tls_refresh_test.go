@@ -67,6 +67,7 @@ func tlsRefreshDeps(t *testing.T, dir string, kc *keychain.Mock, drv driver.Driv
 func testRootForTlsRefresh(deps printer.TlsRefreshDeps) *cobra.Command {
 	root := &cobra.Command{Use: "polimero", SilenceErrors: true, SilenceUsage: true}
 	root.PersistentFlags().String("output", "human", "")
+	root.PersistentFlags().Bool("verbose", false, "")
 	sub := &cobra.Command{Use: "printer"}
 	tlsSub := &cobra.Command{Use: "tls"}
 	tlsSub.AddCommand(printer.TlsRefreshCommandWithDeps(deps))
@@ -482,5 +483,60 @@ func TestTlsRefresh_JSON_InsecureEnvelope(t *testing.T) {
 	}
 	if meta["durationMs"] != nil {
 		t.Errorf("meta.durationMs should be absent for insecure path, got %v", meta["durationMs"])
+	}
+}
+
+func TestTlsRefresh_Verbose_ShowsProgressSteps(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	deps := tlsRefreshDeps(t, dir, kc, defaultRefreshDriver(), &tty.Mock{Terminal: false})
+	out, err := runTlsRefreshCmd(t, deps, "myprinter", "--yes", "--verbose")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Connecting to 192.0.2.10:8883...") {
+		t.Errorf("expected 'Connecting to 192.0.2.10:8883...' in output:\n%s", out)
+	}
+	if !strings.Contains(out, "TLS certificate captured.") {
+		t.Errorf("expected 'TLS certificate captured.' in output:\n%s", out)
+	}
+	if !strings.Contains(out, "Updating TLS fingerprint in keychain...") {
+		t.Errorf("expected 'Updating TLS fingerprint in keychain...' in output:\n%s", out)
+	}
+}
+
+func TestTlsRefresh_Verbose_SuppressedInJSONMode(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	deps := tlsRefreshDeps(t, dir, kc, defaultRefreshDriver(), &tty.Mock{Terminal: false})
+	out, err := runTlsRefreshCmd(t, deps, "myprinter", "--yes", "--verbose", "--output", "json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "Connecting") {
+		t.Errorf("expected no 'Connecting' in JSON mode output:\n%s", out)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	if env["ok"] != true {
+		t.Errorf("ok = %v, want true", env["ok"])
+	}
+}
+
+func TestTlsRefresh_NoVerbose_NoProgressLines(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	deps := tlsRefreshDeps(t, dir, kc, defaultRefreshDriver(), &tty.Mock{Terminal: false})
+	out, err := runTlsRefreshCmd(t, deps, "myprinter", "--yes")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "Connecting") {
+		t.Errorf("expected no 'Connecting' in non-verbose output:\n%s", out)
 	}
 }
