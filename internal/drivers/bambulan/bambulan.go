@@ -108,28 +108,35 @@ func (d *Driver) Capabilities() driver.Capabilities {
 	return driver.Capabilities{Status: true, TLSRefresh: true, Discovery: true}
 }
 
-// buildTLSConfig returns a TLS config for connecting to a Bambu LAN printer.
-// When insecure is false and fingerprint is non-empty, VerifyConnection compares
-// the leaf cert's SHA-256 hash against fingerprint and returns fingerprintMismatchError
-// on mismatch. When fingerprint is empty (ConnectCheck capture mode), no verification
-// callback is set.
-func buildTLSConfig(serial, fingerprint string, insecure bool) (*tls.Config, error) {
-	cfg := &tls.Config{
+func buildCaptureTLSConfig(serial string) *tls.Config {
+	return &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // Bambu CA not in OS trust stores; leaf cert pinned by TOFU (ADR 0007)
 		ServerName:         serial,
 	}
-	if !insecure && fingerprint != "" {
-		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return apperr.New(4, "TLS handshake completed but no certificate received")
-			}
-			sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
-			got := "sha256:" + hex.EncodeToString(sum[:])
-			if got != fingerprint {
-				return &fingerprintMismatchError{got: got, want: fingerprint}
-			}
-			return nil
+}
+
+// buildTLSConfig returns a TLS config for connecting to a Bambu LAN printer.
+// When insecure is false, VerifyConnection compares
+// the leaf cert's SHA-256 hash against fingerprint and returns fingerprintMismatchError
+// on mismatch.
+func buildTLSConfig(serial, fingerprint string, insecure bool) (*tls.Config, error) {
+	cfg := buildCaptureTLSConfig(serial)
+	if insecure {
+		return cfg, nil
+	}
+	if !driver.ValidTLSFingerprint(fingerprint) {
+		return nil, apperr.New(3, "TLS fingerprint is missing or invalid")
+	}
+	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return apperr.New(4, "TLS handshake completed but no certificate received")
 		}
+		sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
+		got := "sha256:" + hex.EncodeToString(sum[:])
+		if got != fingerprint {
+			return &fingerprintMismatchError{got: got, want: fingerprint}
+		}
+		return nil
 	}
 	return cfg, nil
 }
@@ -145,10 +152,7 @@ func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode stri
 		return "", nil
 	}
 
-	tlsCfg, err := buildTLSConfig(serial, "", false) // capture mode: no fingerprint to check yet
-	if err != nil {
-		return "", apperr.Newf(4, "TLS config: %s", err)
-	}
+	tlsCfg := buildCaptureTLSConfig(serial)
 
 	var (
 		mu      sync.Mutex
@@ -174,21 +178,12 @@ func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode stri
 	opts.SetKeepAlive(60)
 
 	client := d.newClient(opts)
-	done := make(chan error, 1)
-	go func() {
-		token := client.Connect()
-		token.Wait()
-		done <- token.Error()
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			return "", classifyMQTTError(err)
+	if err := waitMQTTToken(ctx, client.Connect()); err != nil {
+		if isContextDoneErr(err) {
+			go client.Disconnect(0)
+			return "", apperr.New(4, "connection cancelled")
 		}
-	case <-ctx.Done():
-		go client.Disconnect(0)
-		return "", apperr.New(4, "connection cancelled")
+		return "", classifyMQTTError(err)
 	}
 	client.Disconnect(250)
 
@@ -212,7 +207,10 @@ func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode stri
 //   - 3: TLS fingerprint mismatch or MQTT auth rejected
 //   - 4: network failure, subscribe/publish failure, or context deadline exceeded
 func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
-	tlsCfg, _ := buildTLSConfig(p.Serial, s.TLSFingerprint, p.Insecure)
+	tlsCfg, err := buildTLSConfig(p.Serial, s.TLSFingerprint, p.Insecure)
+	if err != nil {
+		return nil, err
+	}
 
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(fmt.Sprintf("tls://%s:8883", p.Host))
@@ -226,21 +224,12 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 
 	client := d.newClient(opts)
 
-	connectDone := make(chan error, 1)
-	go func() {
-		token := client.Connect()
-		token.Wait()
-		connectDone <- token.Error()
-	}()
-
-	select {
-	case err := <-connectDone:
-		if err != nil {
-			return nil, classifyStatusError(err)
+	if err := waitMQTTToken(ctx, client.Connect()); err != nil {
+		if isContextDoneErr(err) {
+			go client.Disconnect(0)
+			return nil, statusContextError(err)
 		}
-	case <-ctx.Done():
-		go client.Disconnect(0)
-		return nil, apperr.New(4, "status check cancelled")
+		return nil, classifyStatusError(err)
 	}
 	defer client.Disconnect(250)
 
@@ -254,16 +243,20 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 		default: // drop duplicate reports
 		}
 	})
-	subToken.Wait()
-	if err := subToken.Error(); err != nil {
-		return nil, apperr.Newf(4, "subscribe failed: %s", err)
+	if err := waitMQTTToken(ctx, subToken); err != nil {
+		if isContextDoneErr(err) {
+			return nil, statusContextError(err)
+		}
+		return nil, apperr.Wrap(4, "status subscription failed", err)
 	}
 
 	const pushall = `{"pushing":{"sequence_id":"1","command":"pushall","version":1,"push_target":1}}`
 	pubToken := client.Publish(requestTopic, 0, false, pushall)
-	pubToken.Wait()
-	if err := pubToken.Error(); err != nil {
-		return nil, apperr.Newf(4, "publish failed: %s", err)
+	if err := waitMQTTToken(ctx, pubToken); err != nil {
+		if isContextDoneErr(err) {
+			return nil, statusContextError(err)
+		}
+		return nil, apperr.Wrap(4, "status request failed", err)
 	}
 
 	select {
@@ -277,20 +270,43 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 	}
 }
 
+func waitMQTTToken(ctx context.Context, token mqtt.Token) error {
+	if token == nil {
+		return errors.New("MQTT operation failed")
+	}
+	select {
+	case <-token.Done():
+		return token.Error()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func isContextDoneErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func statusContextError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return apperr.New(4, "status check cancelled")
+	}
+	return apperr.New(4, "status check timed out")
+}
+
 // classifyMQTTError maps paho connect errors to apperr exit codes.
 func classifyMQTTError(err error) error {
 	if errors.Is(err, packets.ErrorRefusedBadUsernameOrPassword) ||
 		errors.Is(err, packets.ErrorRefusedNotAuthorised) {
-		return apperr.Newf(3, "MQTT authentication rejected: %s", err)
+		return apperr.Wrap(3, "MQTT authentication rejected", err)
 	}
-	return apperr.Newf(4, "connection failed: %s", err)
+	return apperr.Wrap(4, "connection failed", err)
 }
 
 // classifyStatusError extends classifyMQTTError with fingerprint mismatch handling.
 func classifyStatusError(err error) error {
 	var fpErr *fingerprintMismatchError
 	if errors.As(err, &fpErr) {
-		return apperr.Wrap(3, err.Error(), err)
+		return apperr.Wrap(3, "TLS fingerprint mismatch", err)
 	}
 	return classifyMQTTError(err)
 }
@@ -313,21 +329,24 @@ func mapState(gcodeState string) string {
 
 // bambuReport is the top-level shape of a Bambu LAN pushall report.
 type bambuReport struct {
-	Print bambuPrint `json:"print"`
+	Print *bambuPrint `json:"print"`
 }
 
 type bambuPrint struct {
-	GcodeState         string     `json:"gcode_state"`
-	NozzleTemper       float64    `json:"nozzle_temper"`
-	NozzleTargetTemper float64    `json:"nozzle_target_temper"`
-	BedTemper          float64    `json:"bed_temper"`
-	BedTargetTemper    float64    `json:"bed_target_temper"`
-	ChamberTemper      float64    `json:"chamber_temper"`
-	SubtaskName        string     `json:"subtask_name"`
-	McPercent          int        `json:"mc_percent"`
-	McLayerNum         int        `json:"mc_layer_num"`
-	TotalLayerNum      int        `json:"total_layer_num"`
-	HMS                []bambuHMS `json:"hms"`
+	GcodeState         *string         `json:"gcode_state"`
+	NozzleTemper       *float64        `json:"nozzle_temper"`
+	NozzleTargetTemper *float64        `json:"nozzle_target_temper"`
+	BedTemper          *float64        `json:"bed_temper"`
+	BedTargetTemper    *float64        `json:"bed_target_temper"`
+	ChamberTemper      *float64        `json:"chamber_temper"`
+	SubtaskName        *string         `json:"subtask_name"`
+	GcodeFile          *string         `json:"gcode_file"`
+	McPercent          *int            `json:"mc_percent"`
+	LayerNum           *int            `json:"layer_num"`
+	McLayerNum         *int            `json:"mc_layer_num"`
+	TotalLayerNum      *int            `json:"total_layer_num"`
+	McPrintErrorCode   *rawValueString `json:"mc_print_error_code"`
+	HMS                []bambuHMS      `json:"hms"`
 }
 
 type bambuHMS struct {
@@ -335,61 +354,143 @@ type bambuHMS struct {
 	Code uint32 `json:"code"`
 }
 
+type rawValueString string
+
+func (v *rawValueString) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "null" {
+		*v = ""
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*v = rawValueString(s)
+		return nil
+	}
+	*v = rawValueString(trimmed)
+	return nil
+}
+
 // parseReport unmarshals a Bambu pushall report payload into a StatusResult.
 // This is a pure function — no network access, safe to unit test with raw bytes.
 func parseReport(data []byte) (*driver.StatusResult, error) {
 	var rep bambuReport
 	if err := json.Unmarshal(data, &rep); err != nil {
-		return nil, apperr.Newf(4, "invalid status report: %s", err)
+		return nil, apperr.Wrap(4, "invalid status report", err)
 	}
 	p := rep.Print
+	state := "unknown"
+	warnings := []driver.StatusWarning{}
+	if p == nil || p.GcodeState == nil || *p.GcodeState == "" {
+		warnings = append(warnings, driver.StatusWarning{
+			Code:    "state_unavailable",
+			Message: "printer state unavailable",
+		})
+	} else {
+		state = mapState(*p.GcodeState)
+	}
+	temps, tempWarnings := mapTemperatures(p)
+	warnings = append(warnings, tempWarnings...)
+	progress, progressWarnings := mapProgress(p)
+	warnings = append(warnings, progressWarnings...)
+
 	result := &driver.StatusResult{
-		State:        mapState(p.GcodeState),
-		Temperatures: mapTemperatures(p),
-		Progress:     mapProgress(p),
-		Errors:       mapHMSErrors(p),
-		Warnings:     []driver.StatusWarning{},
+		State:        state,
+		Temperatures: temps,
+		Progress:     progress,
+		Errors:       mapStatusErrors(p),
+		Warnings:     warnings,
 		Capabilities: driver.Capabilities{Status: true},
 	}
-	if p.SubtaskName != "" {
-		result.Job = &driver.Job{Name: p.SubtaskName}
-	}
+	result.Job = mapJob(p)
 	return result, nil
 }
 
-func mapTemperatures(p bambuPrint) *driver.Temperatures {
-	temps := &driver.Temperatures{
-		Nozzle: &driver.Temperature{CurrentCelsius: p.NozzleTemper},
-		Bed:    &driver.Temperature{CurrentCelsius: p.BedTemper},
+func mapTemperatures(p *bambuPrint) (*driver.Temperatures, []driver.StatusWarning) {
+	if p == nil {
+		return nil, []driver.StatusWarning{{Code: "temperature_data_unavailable", Message: "temperature data unavailable"}}
 	}
-	if p.NozzleTargetTemper > 0 {
-		t := p.NozzleTargetTemper
-		temps.Nozzle.TargetCelsius = &t
+	temps := &driver.Temperatures{}
+	if p.NozzleTemper != nil {
+		temps.Nozzle = &driver.Temperature{CurrentCelsius: *p.NozzleTemper}
+		if p.NozzleTargetTemper != nil && *p.NozzleTargetTemper > 0 {
+			t := *p.NozzleTargetTemper
+			temps.Nozzle.TargetCelsius = &t
+		}
 	}
-	if p.BedTargetTemper > 0 {
-		t := p.BedTargetTemper
-		temps.Bed.TargetCelsius = &t
+	if p.BedTemper != nil {
+		temps.Bed = &driver.Temperature{CurrentCelsius: *p.BedTemper}
+		if p.BedTargetTemper != nil && *p.BedTargetTemper > 0 {
+			t := *p.BedTargetTemper
+			temps.Bed.TargetCelsius = &t
+		}
 	}
-	if p.ChamberTemper > 0 {
-		temps.Chamber = &driver.Temperature{CurrentCelsius: p.ChamberTemper}
+	if p.ChamberTemper != nil && *p.ChamberTemper > 0 {
+		temps.Chamber = &driver.Temperature{CurrentCelsius: *p.ChamberTemper}
 	}
-	return temps
+	if temps.Nozzle == nil && temps.Bed == nil && temps.Chamber == nil {
+		return nil, []driver.StatusWarning{{Code: "temperature_data_unavailable", Message: "temperature data unavailable"}}
+	}
+	if p.ChamberTemper == nil {
+		return temps, []driver.StatusWarning{{Code: "chamber_temperature_unavailable", Message: "chamber temperature unavailable"}}
+	}
+	return temps, nil
 }
 
-func mapProgress(p bambuPrint) *driver.Progress {
-	prog := &driver.Progress{Percent: p.McPercent}
-	if p.McLayerNum > 0 {
-		v := p.McLayerNum
+func mapProgress(p *bambuPrint) (*driver.Progress, []driver.StatusWarning) {
+	if p == nil || p.McPercent == nil {
+		return nil, []driver.StatusWarning{{Code: "progress_unavailable", Message: "progress unavailable"}}
+	}
+	prog := &driver.Progress{Percent: *p.McPercent}
+	if layer := currentLayer(p); layer != nil {
+		v := *layer
 		prog.CurrentLayer = &v
 	}
-	if p.TotalLayerNum > 0 {
-		v := p.TotalLayerNum
+	if p.TotalLayerNum != nil {
+		v := *p.TotalLayerNum
 		prog.TotalLayers = &v
 	}
-	return prog
+	return prog, nil
 }
 
-func mapHMSErrors(p bambuPrint) []driver.StatusError {
+func currentLayer(p *bambuPrint) *int {
+	if p.LayerNum != nil {
+		return p.LayerNum
+	}
+	return p.McLayerNum
+}
+
+func mapJob(p *bambuPrint) *driver.Job {
+	if p == nil {
+		return nil
+	}
+	if p.SubtaskName != nil && *p.SubtaskName != "" {
+		return &driver.Job{Name: *p.SubtaskName}
+	}
+	if p.GcodeFile != nil && *p.GcodeFile != "" {
+		return &driver.Job{Name: *p.GcodeFile}
+	}
+	return nil
+}
+
+func mapStatusErrors(p *bambuPrint) []driver.StatusError {
+	if p == nil {
+		return []driver.StatusError{}
+	}
+	errs := make([]driver.StatusError, 0, len(p.HMS)+1)
+	if p.McPrintErrorCode != nil {
+		code := strings.TrimSpace(string(*p.McPrintErrorCode))
+		if code != "" && code != "0" {
+			errs = append(errs, driver.StatusError{
+				Code:    "printer_error",
+				Message: "printer error: " + code,
+			})
+		}
+	}
+	return append(errs, mapHMSErrors(p)...)
+}
+
+func mapHMSErrors(p *bambuPrint) []driver.StatusError {
 	errs := make([]driver.StatusError, 0, len(p.HMS))
 	for _, h := range p.HMS {
 		if h.Attr != 0 || h.Code != 0 {
@@ -409,7 +510,7 @@ func (d *Driver) CaptureFingerprint(ctx context.Context, host, serial string) (s
 	}
 	conn, err := d.dialTLS(ctx, fmt.Sprintf("%s:8883", host), cfg)
 	if err != nil {
-		return "", apperr.Newf(4, "TLS connect failed: %s", err)
+		return "", apperr.Wrap(4, "TLS connect failed", err)
 	}
 	defer func() { _ = conn.Close() }()
 	state := conn.ConnectionState()
@@ -423,7 +524,7 @@ func (d *Driver) CaptureFingerprint(ctx context.Context, host, serial string) (s
 func (d *Driver) Discover(ctx context.Context) ([]driver.DiscoveredPrinter, error) {
 	entries, err := d.browse(ctx, bambuMDNSService)
 	if err != nil {
-		return nil, apperr.Newf(4, "mDNS browse failed: %s", err)
+		return nil, apperr.Wrap(4, "mDNS browse failed", err)
 	}
 	result := []driver.DiscoveredPrinter{}
 	for e := range entries {

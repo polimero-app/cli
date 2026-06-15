@@ -167,6 +167,8 @@ Map Bambu JSON fields (inside the `print` object of the report message) to porta
 
 `progress` is `null` when `mc_percent` is absent.
 
+Treat absent fields as unavailable, not as zero values. Implementations may also accept `print.mc_layer_num` as a compatibility fallback for `print.layer_num`, but `print.layer_num` takes precedence when both are present.
+
 ### Error Code Mapping
 
 When `mc_print_error_code` is present and its value is not `"0"`, include one entry in the `errors` array:
@@ -189,9 +191,10 @@ The driver receives the profile's `insecure` flag and the pinned TLS fingerprint
 Behavior:
 
 - If `insecure` is false: skip TLS chain verification; verify the presented leaf certificate's SHA-256 fingerprint matches the pinned value. A mismatch is an authentication failure (exit code `3`).
+- If `insecure` is false and the pinned fingerprint is empty or malformed, fail closed before connecting.
 - If `insecure` is true: skip all certificate verification.
 
-If secure transport cannot be established, return a sanitized connection or authentication error.
+If secure transport cannot be established, return a sanitized connection or authentication error. Do not expose raw MQTT, TLS, or JSON parser errors in command output.
 
 ## mDNS Discovery
 

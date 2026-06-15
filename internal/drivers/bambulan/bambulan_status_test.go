@@ -22,6 +22,11 @@ import (
 	"github.com/polimero-app/cli/internal/driver"
 )
 
+const (
+	testFingerprintA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testFingerprintB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
 // makeSelfSignedCert generates a throwaway self-signed cert for testing.
 func makeSelfSignedCert(t *testing.T) *x509.Certificate {
 	t.Helper()
@@ -71,7 +76,7 @@ func TestMapState(t *testing.T) {
 }
 
 func TestBuildTLSConfig_Insecure_NoVerifyConnection(t *testing.T) {
-	cfg, err := buildTLSConfig("SN001", "sha256:aabbcc", true)
+	cfg, err := buildTLSConfig("SN001", testFingerprintA, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -83,18 +88,15 @@ func TestBuildTLSConfig_Insecure_NoVerifyConnection(t *testing.T) {
 	}
 }
 
-func TestBuildTLSConfig_EmptyFingerprint_NoVerifyConnection(t *testing.T) {
-	cfg, err := buildTLSConfig("SN001", "", false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.VerifyConnection != nil {
-		t.Error("VerifyConnection should be nil when fingerprint is empty (capture mode)")
+func TestBuildTLSConfig_EmptyFingerprint_ReturnsError(t *testing.T) {
+	_, err := buildTLSConfig("SN001", "", false)
+	if err == nil {
+		t.Fatal("expected error for empty secure fingerprint")
 	}
 }
 
 func TestBuildTLSConfig_Mismatch_ReturnsFingerprintMismatchError(t *testing.T) {
-	cfg, err := buildTLSConfig("SN001", "sha256:expectedfingerprint", false)
+	cfg, err := buildTLSConfig("SN001", testFingerprintA, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,8 +112,8 @@ func TestBuildTLSConfig_Mismatch_ReturnsFingerprintMismatchError(t *testing.T) {
 	if !errors.As(verifyErr, &fpErr) {
 		t.Fatalf("expected *fingerprintMismatchError, got %T: %v", verifyErr, verifyErr)
 	}
-	if fpErr.want != "sha256:expectedfingerprint" {
-		t.Errorf("want = %q, expected sha256:expectedfingerprint", fpErr.want)
+	if fpErr.want != testFingerprintA {
+		t.Errorf("want = %q, expected %s", fpErr.want, testFingerprintA)
 	}
 }
 
@@ -244,6 +246,106 @@ func TestParseReport_HMSErrors(t *testing.T) {
 	}
 }
 
+func TestParseReport_FallsBackToGcodeFile(t *testing.T) {
+	data := []byte(`{"print":{
+        "gcode_state":"PRINTING",
+        "gcode_file":"fallback.3mf",
+        "mc_percent":5,
+        "nozzle_temper":200.0,
+        "bed_temper":55.0,
+        "chamber_temper":0,
+        "hms":[]
+    }}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Job == nil || result.Job.Name != "fallback.3mf" {
+		t.Fatalf("Job = %v, want fallback.3mf", result.Job)
+	}
+}
+
+func TestParseReport_PrinterErrorCode(t *testing.T) {
+	data := []byte(`{"print":{
+        "gcode_state":"FAILED",
+        "mc_percent":0,
+        "mc_print_error_code":"12345",
+        "hms":[]
+    }}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("len(Errors) = %d, want 1", len(result.Errors))
+	}
+	if result.Errors[0].Code != "printer_error" {
+		t.Errorf("Errors[0].Code = %q, want printer_error", result.Errors[0].Code)
+	}
+	if result.Errors[0].Message != "printer error: 12345" {
+		t.Errorf("Errors[0].Message = %q", result.Errors[0].Message)
+	}
+}
+
+func TestParseReport_MissingOptionalFieldsReturnNullsAndWarnings(t *testing.T) {
+	data := []byte(`{"print":{"gcode_state":"PRINTING","hms":[]}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Temperatures != nil {
+		t.Fatalf("Temperatures = %v, want nil", result.Temperatures)
+	}
+	if result.Progress != nil {
+		t.Fatalf("Progress = %v, want nil", result.Progress)
+	}
+	if len(result.Warnings) != 2 {
+		t.Fatalf("len(Warnings) = %d, want 2: %v", len(result.Warnings), result.Warnings)
+	}
+	wantCodes := map[string]bool{
+		"temperature_data_unavailable": false,
+		"progress_unavailable":         false,
+	}
+	for _, warning := range result.Warnings {
+		if _, ok := wantCodes[warning.Code]; ok {
+			wantCodes[warning.Code] = true
+		}
+	}
+	for code, seen := range wantCodes {
+		if !seen {
+			t.Errorf("missing warning code %q in %v", code, result.Warnings)
+		}
+	}
+}
+
+func TestParseReport_LayerNumPreferredOverLegacyMcLayerNum(t *testing.T) {
+	data := []byte(`{"print":{
+        "gcode_state":"PRINTING",
+        "mc_percent":50,
+        "layer_num":7,
+        "mc_layer_num":3,
+        "total_layer_num":12,
+        "nozzle_temper":200.0,
+        "bed_temper":55.0,
+        "chamber_temper":0,
+        "hms":[]
+    }}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Progress == nil || result.Progress.CurrentLayer == nil {
+		t.Fatalf("CurrentLayer missing in progress: %v", result.Progress)
+	}
+	if *result.Progress.CurrentLayer != 7 {
+		t.Errorf("CurrentLayer = %d, want 7", *result.Progress.CurrentLayer)
+	}
+}
+
 func TestParseReport_InvalidJSON(t *testing.T) {
 	_, err := parseReport([]byte(`not json`))
 	if err == nil {
@@ -268,10 +370,24 @@ func newFakeToken(err error) *fakeToken {
 	return &fakeToken{err: err, done: ch}
 }
 
-func (t *fakeToken) Wait() bool                       { return true }
-func (t *fakeToken) WaitTimeout(_ time.Duration) bool { return true }
-func (t *fakeToken) Done() <-chan struct{}             { return t.done }
-func (t *fakeToken) Error() error                     { return t.err }
+func newPendingFakeToken() *fakeToken {
+	return &fakeToken{done: make(chan struct{})}
+}
+
+func (t *fakeToken) Wait() bool {
+	<-t.done
+	return true
+}
+func (t *fakeToken) WaitTimeout(timeout time.Duration) bool {
+	select {
+	case <-t.done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+func (t *fakeToken) Done() <-chan struct{} { return t.done }
+func (t *fakeToken) Error() error          { return t.err }
 
 type fakeMessage struct {
 	topic   string
@@ -290,8 +406,10 @@ func (m *fakeMessage) Ack()              {}
 // If payload is non-nil, the Subscribe handler is called synchronously with it.
 // If connectErr is non-nil, Connect returns that error.
 type fakeClient struct {
-	connectErr error
-	payload    []byte
+	connectErr     error
+	payload        []byte
+	subscribeToken mqtt.Token
+	publishToken   mqtt.Token
 }
 
 func (f *fakeClient) Connect() mqtt.Token {
@@ -302,10 +420,16 @@ func (f *fakeClient) Subscribe(topic string, _ byte, cb mqtt.MessageHandler) mqt
 	if f.payload != nil {
 		cb(nil, &fakeMessage{topic: topic, payload: f.payload})
 	}
+	if f.subscribeToken != nil {
+		return f.subscribeToken
+	}
 	return newFakeToken(nil)
 }
 
 func (f *fakeClient) Publish(_ string, _ byte, _ bool, _ any) mqtt.Token {
+	if f.publishToken != nil {
+		return f.publishToken
+	}
 	return newFakeToken(nil)
 }
 
@@ -366,7 +490,7 @@ func TestStatus_AuthFailure_ExitsCode3(t *testing.T) {
 }
 
 func TestStatus_FingerprintMismatch_ExitsCode3(t *testing.T) {
-	fc := &fakeClient{connectErr: &fingerprintMismatchError{got: "sha256:aabbcc", want: "sha256:112233"}}
+	fc := &fakeClient{connectErr: &fingerprintMismatchError{got: testFingerprintA, want: testFingerprintB}}
 	drv := newFakeDriver(fc)
 	_, err := drv.Status(context.Background(), defaultProfileInput(), driver.SecretsBundle{AccessCode: "code"}, slog.Default())
 	if err == nil {
@@ -375,6 +499,20 @@ func TestStatus_FingerprintMismatch_ExitsCode3(t *testing.T) {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
 		t.Errorf("expected exit 3 for fingerprint mismatch, got %v", err)
+	}
+}
+
+func TestStatus_EmptySecureFingerprint_ExitsCode3(t *testing.T) {
+	p := defaultProfileInput()
+	p.Insecure = false
+	drv := newFakeDriver(&fakeClient{})
+	_, err := drv.Status(context.Background(), p, driver.SecretsBundle{AccessCode: "code"}, slog.Default())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Errorf("expected exit 3 for empty secure fingerprint, got %v", err)
 	}
 }
 
@@ -391,5 +529,37 @@ func TestStatus_Timeout_ExitsCode4(t *testing.T) {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
 		t.Errorf("expected exit 4 for timeout, got %v", err)
+	}
+}
+
+func TestStatus_SubscribeWaitHonorsContext(t *testing.T) {
+	fc := &fakeClient{subscribeToken: newPendingFakeToken()}
+	drv := newFakeDriver(fc)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := drv.Status(ctx, defaultProfileInput(), driver.SecretsBundle{AccessCode: "code"}, slog.Default())
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit 4 for subscribe timeout, got %v", err)
+	}
+}
+
+func TestStatus_PublishWaitHonorsContext(t *testing.T) {
+	fc := &fakeClient{publishToken: newPendingFakeToken()}
+	drv := newFakeDriver(fc)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := drv.Status(ctx, defaultProfileInput(), driver.SecretsBundle{AccessCode: "code"}, slog.Default())
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit 4 for publish timeout, got %v", err)
 	}
 }
