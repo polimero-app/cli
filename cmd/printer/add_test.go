@@ -65,6 +65,7 @@ func testRootForAdd(t *testing.T, dir string, deps printer.AddDeps) *cobra.Comma
 	t.Setenv("POLIMERO_CONFIG_DIR", dir)
 	root := &cobra.Command{Use: "polimero", SilenceErrors: true, SilenceUsage: true}
 	root.PersistentFlags().String("output", "human", "")
+	root.PersistentFlags().Bool("verbose", false, "")
 	sub := &cobra.Command{Use: "printer"}
 	sub.AddCommand(printer.AddCommandWithDeps(deps))
 	root.AddCommand(sub)
@@ -610,5 +611,111 @@ func TestAdd_NameNormalisedToLowercase(t *testing.T) {
 	cfg, _ := os.ReadFile(filepath.Join(dir, "polimero.yaml"))
 	if !strings.Contains(string(cfg), "upper:") {
 		t.Errorf("expected lowercase profile key in config:\n%s", cfg)
+	}
+}
+
+func TestAdd_Verbose_ShowsProgressSteps(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("POLIMERO_CONFIG_DIR", dir)
+
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "12345678"}
+	deps := printer.AddDeps{
+		KC:       kc,
+		Prompter: p,
+		GetDriver: func(name string) (driver.Driver, bool) {
+			return &stubDriver{fingerprint: testFingerprint}, name == "bambu-lan"
+		},
+	}
+
+	out, err := runAddCmd(t, dir, deps,
+		"garage-x1c",
+		"--driver", "bambu-lan",
+		"--host", "192.0.2.10",
+		"--serial", "01S09C450100XXX",
+		"--verbose",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantLines := []string{
+		"Connecting to 192.0.2.10:8883...",
+		"Connection verified.",
+		"Storing credentials in keychain...",
+		"Saving profile",
+	}
+	for _, want := range wantLines {
+		if !strings.Contains(out, want) {
+			t.Errorf("verbose output missing %q\nfull output: %s", want, out)
+		}
+	}
+}
+
+func TestAdd_Verbose_SuppressedInJSONMode(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("POLIMERO_CONFIG_DIR", dir)
+
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "12345678"}
+	deps := printer.AddDeps{
+		KC:       kc,
+		Prompter: p,
+		GetDriver: func(name string) (driver.Driver, bool) {
+			return &stubDriver{fingerprint: testFingerprint}, name == "bambu-lan"
+		},
+	}
+
+	out, err := runAddCmd(t, dir, deps,
+		"garage-x1c",
+		"--driver", "bambu-lan",
+		"--host", "192.0.2.10",
+		"--serial", "01S09C450100XXX",
+		"--verbose",
+		"--output", "json",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(out, "Connecting") {
+		t.Errorf("verbose lines must be suppressed in JSON mode, got: %s", out)
+	}
+	var env struct {
+		OK bool `json:"ok"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Errorf("output is not valid JSON: %v\noutput: %s", jsonErr, out)
+	}
+	if !env.OK {
+		t.Errorf("expected ok=true in JSON output")
+	}
+}
+
+func TestAdd_NoVerbose_NoProgressLines(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("POLIMERO_CONFIG_DIR", dir)
+
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "12345678"}
+	deps := printer.AddDeps{
+		KC:       kc,
+		Prompter: p,
+		GetDriver: func(name string) (driver.Driver, bool) {
+			return &stubDriver{fingerprint: testFingerprint}, name == "bambu-lan"
+		},
+	}
+
+	out, err := runAddCmd(t, dir, deps,
+		"garage-x1c",
+		"--driver", "bambu-lan",
+		"--host", "192.0.2.10",
+		"--serial", "01S09C450100XXX",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "Connecting") {
+		t.Errorf("expected no verbose lines without --verbose flag, got: %s", out)
 	}
 }

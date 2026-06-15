@@ -165,11 +165,16 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 	kcAcct := fmt.Sprintf("%s:%s:access-code", driverName, name)
 	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", driverName, name)
 
+	verboseFlag, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+	verbose := verboseFlag && format == output.FormatHuman
+	w := cmd.OutOrStdout()
+
 	var fingerprint string
 	opCtx, opCancel := context.WithTimeout(cmd.Context(), timeout)
 	defer opCancel()
 	if !insecure {
 		// 3. Connectivity check (TLS + MQTT CONNECT + CONNACK)
+		output.Verbose(w, verbose, fmt.Sprintf("Connecting to %s:8883...", host))
 		fingerprint, err = drv.ConnectCheck(opCtx, host, serial, accessCode, false, timeout)
 		if err != nil {
 			return err // already an *apperr.ExitError with code 3 or 4
@@ -177,8 +182,10 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 		if !driver.ValidTLSFingerprint(fingerprint) {
 			return apperr.New(4, "driver returned invalid TLS fingerprint")
 		}
+		output.Verbose(w, verbose, fmt.Sprintf("Connection verified. TLS fingerprint: %s", fingerprint))
 
 		// 4. Store access code
+		output.Verbose(w, verbose, "Storing credentials in keychain...")
 		if err := deps.KC.Set(opCtx, "polimero", kcAcct, accessCode); err != nil {
 			return apperr.Wrap(3, "cannot store access code in keychain", err)
 		}
@@ -192,10 +199,13 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 		}
 	} else {
 		// Insecure: store access code (no connectivity check, no fingerprint)
+		output.Verbose(w, verbose, "Storing access code in keychain...")
 		if err := deps.KC.Set(opCtx, "polimero", kcAcct, accessCode); err != nil {
 			return apperr.Wrap(3, "cannot store access code in keychain", err)
 		}
 	}
+
+	output.Verbose(w, verbose, fmt.Sprintf("Saving profile %q...", name))
 
 	// 6. Write profile; rollback keychain entries on failure
 	now := time.Now().UTC()
