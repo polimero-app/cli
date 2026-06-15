@@ -19,6 +19,7 @@ func NewRoot() *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.PersistentFlags().String("output", "human", "output format: human or json")
+	root.PersistentFlags().BoolP("verbose", "v", false, "show detailed progress output")
 	root.AddCommand(printer.Command())
 	return root
 }

@@ -53,3 +53,12 @@ func WriteEnvelope(w io.Writer, env Envelope) error {
 	enc.SetIndent("", "  ")
 	return enc.Encode(env)
 }
+
+// Verbose writes msg followed by a newline to w if verbose is true.
+// If verbose is false, it does nothing.
+func Verbose(w io.Writer, verbose bool, msg string) {
+	if !verbose {
+		return
+	}
+	_, _ = fmt.Fprintln(w, msg)
+}

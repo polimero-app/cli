@@ -114,3 +114,19 @@ func TestWriteEnvelope_WithDuration(t *testing.T) {
 		t.Errorf("meta.durationMs = %v, want 148", meta["durationMs"])
 	}
 }
+
+func TestVerbose_WritesWhenTrue(t *testing.T) {
+	var buf bytes.Buffer
+	output.Verbose(&buf, true, "connecting...")
+	if got := buf.String(); got != "connecting...\n" {
+		t.Errorf("Verbose(true) = %q, want %q", got, "connecting...\n")
+	}
+}
+
+func TestVerbose_SilentWhenFalse(t *testing.T) {
+	var buf bytes.Buffer
+	output.Verbose(&buf, false, "connecting...")
+	if buf.Len() != 0 {
+		t.Errorf("Verbose(false) wrote %q, want empty", buf.String())
+	}
+}
