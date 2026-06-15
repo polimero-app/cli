@@ -81,6 +81,7 @@ func statusDeps(t *testing.T, dir string, kc *keychain.Mock, drv driver.Driver) 
 func testRootForStatus(deps printer.StatusDeps) *cobra.Command {
 	root := &cobra.Command{Use: "polimero", SilenceErrors: true, SilenceUsage: true}
 	root.PersistentFlags().String("output", "human", "")
+	root.PersistentFlags().Bool("verbose", false, "")
 	sub := &cobra.Command{Use: "printer"}
 	sub.AddCommand(printer.StatusCommandWithDeps(deps))
 	root.AddCommand(sub)
@@ -480,5 +481,57 @@ func TestStatus_TimeoutFlag_Zero_ExitsCode2(t *testing.T) {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
 		t.Errorf("expected exit 2 for zero --timeout, got %v", err)
+	}
+}
+
+func TestStatus_Verbose_ShowsProgressSteps(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	out, err := runStatusCmd(t, deps, "myprinter", "--verbose")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Connecting to 192.0.2.10:8883...") {
+		t.Errorf("expected 'Connecting to 192.0.2.10:8883...' in output:\n%s", out)
+	}
+	if !strings.Contains(out, "Response received") {
+		t.Errorf("expected 'Response received' in output:\n%s", out)
+	}
+}
+
+func TestStatus_Verbose_SuppressedInJSONMode(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	out, err := runStatusCmd(t, deps, "myprinter", "--verbose", "--output", "json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "Connecting") {
+		t.Errorf("expected no 'Connecting' in JSON mode output:\n%s", out)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	if env["ok"] != true {
+		t.Errorf("ok = %v, want true", env["ok"])
+	}
+}
+
+func TestStatus_NoVerbose_NoProgressLines(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	out, err := runStatusCmd(t, deps, "myprinter")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "Connecting") {
+		t.Errorf("expected no 'Connecting' in non-verbose output:\n%s", out)
 	}
 }

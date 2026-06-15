@@ -75,7 +75,9 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag boo
 	}
 
 	name := strings.ToLower(nameArg)
-	result, durationMs, driverName, errCtx, err := doStatus(cmd, name, timeoutFlag, insecureFlag, deps)
+	verboseFlag, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+	verbose := verboseFlag && format == output.FormatHuman
+	result, durationMs, driverName, errCtx, err := doStatus(cmd, name, timeoutFlag, insecureFlag, verbose, deps)
 	if err != nil {
 		return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err, errCtx)
 	}
@@ -87,7 +89,7 @@ type statusErrorContext struct {
 	timeout string
 }
 
-func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, deps StatusDeps) (*driver.StatusResult, int64, string, statusErrorContext, error) {
+func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbose bool, deps StatusDeps) (*driver.StatusResult, int64, string, statusErrorContext, error) {
 	if err := validateProfileName(name); err != nil {
 		return nil, 0, "", statusErrorContext{}, err
 	}
@@ -170,12 +172,14 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 		TLSFingerprint: tlsFingerprint,
 	}
 
+	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Connecting to %s:8883...", p.Host))
 	start := time.Now()
 	result, err := drv.Status(ctx, pi, secrets, deps.Log)
 	durationMs := time.Since(start).Milliseconds()
 	if err != nil {
 		return nil, 0, "", errCtx, err
 	}
+	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Response received (%dms).", durationMs))
 	return result, durationMs, p.Driver, statusErrorContext{}, nil
 }
 
