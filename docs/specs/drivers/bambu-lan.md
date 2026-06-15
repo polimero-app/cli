@@ -218,6 +218,47 @@ The `Driver` field is always `"bambu-lan"`.
 
 Discovery does not perform TLS handshakes, MQTT connections, or secret reads.
 
+## SSDP Discovery
+
+Bambu printers announce themselves via SSDP (Simple Service Discovery Protocol) on the local network.
+
+**Device type (ST/NT):** `urn:bambulab-com:device:3dprinter:1`
+
+**Discovery method:** Send a UDP M-SEARCH to multicast address `239.255.255.250:1900` with `MX: 3`. The printer replies with an HTTP/1.1 200 response carrying custom headers.
+
+Custom Bambu headers in the response:
+
+| Header | `DiscoveredPrinter` field |
+|---|---|
+| `DevModel.bambu.com` | `Model` |
+| `DevName.bambu.com` | `Name` |
+| `USN` (parsed) | `Serial` — extracted from `uuid:SERIAL::urn:...` format |
+
+Host is extracted from the `LOCATION` header (`http://IP/`). If parsing fails, the UDP source IP is used. Port is always `8883` (MQTT).
+
+## UDP Broadcast Discovery
+
+Bambu printers periodically broadcast JSON status packets on UDP port 2021 to the local network.
+
+**Listen address:** `0.0.0.0:2021` (passive — no probe packet sent)
+
+JSON fields in the broadcast payload:
+
+| JSON field | `DiscoveredPrinter` field |
+|---|---|
+| `sn` | `Serial` |
+| `dev_name` | `Name` |
+| `dev_product_name` | `Model` |
+| `ip` | `Host` (fallback: UDP source IP) |
+
+Port is always `8883` (MQTT).
+
+**Note:** Printers broadcast every 20–30 seconds. With the default 5s scan window, UDP is unreliable as a standalone protocol; it supplements mDNS and SSDP.
+
+## Multi-Protocol Fan-Out and Deduplication
+
+`Discover()` runs mDNS, SSDP, and UDP concurrently. Results are deduplicated by serial number (key `serial:<SN>`). If serial is empty, the host IP is used as the deduplication key (`host:<IP>`). First arrival wins. If all three protocols fail to start, `Discover()` returns exit code 4. If only some protocols fail, results from the remaining protocols are returned.
+
 ## External Sources
 
 Allowed protocol research sources:
