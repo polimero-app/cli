@@ -37,6 +37,9 @@ Drivers declare capabilities before command execution when possible. Capabilitie
 Capabilities {
     Status           bool
     Discovery        bool
+    FileList         bool
+    FileDownload     bool
+    FileUpload       bool
     JobUpload        bool
     JobStart         bool
     JobPause         bool
@@ -44,6 +47,8 @@ Capabilities {
     TemperatureRead  bool
     TemperatureWrite bool
     MotionControl    bool
+    TLSRefresh       bool
+    CameraStream     bool
 }
 ```
 
@@ -129,6 +134,110 @@ Contract:
 - Do not connect to any printer during discovery.
 - Do not read or access any secrets.
 
+## File Operations
+
+Drivers that declare any file capability in their `Capabilities` must expose file roots. Drivers that declare `FileList: true`, `FileDownload: true`, or `FileUpload: true` must implement the corresponding operation.
+
+File operation input:
+
+- Validated profile input.
+- Pre-resolved secrets bundle.
+- Validated root name.
+- Normalized path within the root.
+- Logger provided by the command layer.
+- `context.Context` controlling the operation timeout.
+
+Portable root and entry types:
+
+```go
+type DeviceFileRoot struct {
+    Name          string
+    Description   string
+    Writable      bool
+    CapacityBytes *int64
+    FreeBytes     *int64
+    Metadata      map[string]any
+}
+
+type DeviceFileEntry struct {
+    Name       string
+    Root       string
+    Path       string
+    Type       string         // "directory", "file", or "unknown"
+    SizeBytes  *int64         // nil when unavailable or not applicable
+    ModifiedAt *time.Time     // nil when unavailable
+    Metadata   map[string]any // driver-specific fields for JSON output
+}
+
+type DeviceFileListing struct {
+    Root         string
+    Path         string
+    Entries      []DeviceFileEntry
+    Warnings     []StatusWarning
+    Capabilities Capabilities
+}
+
+type DeviceFileTransferResult struct {
+    Root             string
+    Source           string
+    Destination      string
+    BytesTransferred *int64
+    Warnings         []StatusWarning
+    Capabilities     Capabilities
+}
+```
+
+Contract:
+
+- `FileList` lists one directory or one file per call.
+- `FileDownload` downloads one regular file per call.
+- `FileUpload` uploads one regular file per call.
+- Upload operations store files only and must not start prints.
+- Return a non-nil empty `Entries` slice when the directory has no visible entries.
+- Do not delete, rename, move, create directories, or start prints.
+- Respect context cancellation and command timeouts.
+- Return `unsupported_capability` when the driver does not support the requested file operation.
+- Return a typed path error when the normalized root/path does not exist or is incompatible with the requested operation.
+- Sanitize transport and parser errors before they reach CLI output.
+- Drivers may log requested paths and transfer summaries but must not log file contents or secrets.
+
+## Camera Stream Operation
+
+Drivers that declare `CameraStream: true` in their `Capabilities` must implement:
+
+```go
+CameraStream(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger) (CameraStreamResult, error)
+```
+
+Where:
+
+```go
+type CameraStreamResult struct {
+    Format       CameraFormat  // CameraFormatMJPEG or CameraFormatH264
+    Stream       io.ReadCloser // raw bytes: MJPEG multipart or H.264 Annex-B
+    Capabilities Capabilities
+}
+
+type CameraFormat string
+
+const (
+    CameraFormatMJPEG CameraFormat = "mjpeg"
+    CameraFormatH264  CameraFormat = "h264"
+)
+```
+
+Contract:
+
+- The driver opens the TLS connection to the camera endpoint and returns an `io.ReadCloser` over the raw stream. The command layer owns the HTTP server; the driver does not know about HTTP.
+- `ctx` controls the camera connection lifetime; close the stream when context is canceled.
+- `Format` must be set before returning so the command layer can select the correct `Content-Type`.
+- The driver must use the same pinned TLS fingerprint as for the MQTT connection. No additional keychain entry is required.
+- `CameraFormatMJPEG`: raw `multipart/x-mixed-replace` MJPEG byte stream (A1/A1 mini families, port 6000).
+- `CameraFormatH264`: raw H.264 Annex-B byte stream (X1/P1/P2/H-series/X2D families, port 322).
+- Return `unsupported_capability` when the driver does not support camera streaming.
+- Sanitize transport, TLS, and camera protocol errors before returning them.
+- Do not log camera payload contents or secrets.
+
 ## Errors
 
 Drivers return typed errors that map to public error codes:
@@ -137,6 +246,11 @@ Drivers return typed errors that map to public error codes:
 - `secret_not_found`
 - `authentication_failed`
 - `connection_failed`
+- `device_path_not_found`
+- `device_path_not_directory`
+- `device_path_not_file`
+- `device_path_exists`
+- `device_storage_rejected`
 - `timeout`
 - `unsupported_capability`
 - `driver_internal_error`
@@ -163,6 +277,6 @@ Every driver must support:
 - Contract tests for context cancellation.
 - Contract tests for error mapping.
 - Contract tests for redaction.
+- Contract tests for file capability handling, path errors, empty directory results, transfer overwrite handling, and secret redaction when file operations are supported.
 
 Hardware tests must be opt-in and build-tagged.
-
