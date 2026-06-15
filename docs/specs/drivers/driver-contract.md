@@ -240,20 +240,24 @@ Contract:
 
 ## Errors
 
-Drivers return typed errors that map to public error codes:
+Drivers return typed errors using internal error codes. The command layer maps these to the public JSON `error.code` values emitted in `--output json` responses. These are two distinct namespaces; the mapping is:
 
-- `invalid_profile`
-- `secret_not_found`
-- `authentication_failed`
-- `connection_failed`
-- `device_path_not_found`
-- `device_path_not_directory`
-- `device_path_not_file`
-- `device_path_exists`
-- `device_storage_rejected`
-- `timeout`
-- `unsupported_capability`
-- `driver_internal_error`
+| Driver internal code | Public JSON `error.code` |
+|---|---|
+| `invalid_profile` | `invalid_profile` |
+| `secret_not_found` | `secret_not_found` |
+| `authentication_failed` | `authentication_failed` |
+| `connection_failed` | `connection_failed` |
+| `device_path_not_found` | `device_path_not_found` |
+| `device_path_not_directory` | `device_path_not_directory` |
+| `device_path_not_file` | `device_path_not_file` |
+| `device_path_exists` | `device_path_exists` |
+| `device_storage_rejected` | `device_storage_rejected` |
+| `timeout` | `timeout` |
+| `unsupported_capability` | `capability_unsupported` |
+| `driver_internal_error` | `internal_error` |
+
+The command layer is responsible for the translation. Driver implementations must use the internal codes only.
 
 Partial data is reported as warnings in the status result, not as an error. Errors must be sanitized before they reach CLI output.
 
