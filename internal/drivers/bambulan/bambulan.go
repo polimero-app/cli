@@ -237,14 +237,16 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 	}
 	defer client.Disconnect(250)
 
-	ch := make(chan []byte, 1)
+	ch := make(chan []byte, 8)
 	reportTopic := fmt.Sprintf("device/%s/report", p.Serial)
 	requestTopic := fmt.Sprintf("device/%s/request", p.Serial)
 
 	subToken := client.Subscribe(reportTopic, 0, func(_ mqtt.Client, msg mqtt.Message) {
+		payload := make([]byte, len(msg.Payload()))
+		copy(payload, msg.Payload())
 		select {
-		case ch <- msg.Payload():
-		default: // drop duplicate reports
+		case ch <- payload:
+		default:
 		}
 	})
 	if err := waitMQTTToken(ctx, subToken); err != nil {
@@ -263,15 +265,30 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 		return nil, apperr.Wrap(4, "status request failed", err)
 	}
 
-	select {
-	case data := <-ch:
-		return parseReport(data)
-	case <-ctx.Done():
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return nil, apperr.New(4, "status check cancelled")
+	for {
+		select {
+		case data := <-ch:
+			if isPushallReport(data) {
+				return parseReport(data)
+			}
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return nil, apperr.New(4, "status check cancelled")
+			}
+			return nil, apperr.New(4, "status check timed out")
 		}
-		return nil, apperr.New(4, "status check timed out")
 	}
+}
+
+// isPushallReport returns true when data contains a full pushall response.
+// Delta reports from P1/A1 autonomous pushes omit print.gcode_state and must
+// be skipped — accepting them can yield stale or partial status.
+func isPushallReport(data []byte) bool {
+	var rep bambuReport
+	if err := json.Unmarshal(data, &rep); err != nil {
+		return false
+	}
+	return rep.Print != nil && rep.Print.GcodeState != nil
 }
 
 func waitMQTTToken(ctx context.Context, token mqtt.Token) error {
