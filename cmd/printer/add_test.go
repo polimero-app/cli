@@ -641,7 +641,7 @@ func TestAdd_Verbose_ShowsProgressSteps(t *testing.T) {
 
 	wantLines := []string{
 		"Connecting to 192.0.2.10:8883...",
-		"Connection verified.",
+		"Connection verified. TLS fingerprint: sha256:",
 		"Storing credentials in keychain...",
 		"Saving profile",
 	}
@@ -717,5 +717,38 @@ func TestAdd_NoVerbose_NoProgressLines(t *testing.T) {
 	}
 	if strings.Contains(out, "Connecting") {
 		t.Errorf("expected no verbose lines without --verbose flag, got: %s", out)
+	}
+}
+
+func TestAdd_Verbose_InsecurePath_ShowsStoringAccessCode(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("POLIMERO_CONFIG_DIR", dir)
+
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "12345678"}
+	deps := printer.AddDeps{
+		KC:       kc,
+		Prompter: p,
+		GetDriver: func(name string) (driver.Driver, bool) {
+			return &stubDriver{fingerprint: testFingerprint}, name == "bambu-lan"
+		},
+	}
+
+	out, err := runAddCmd(t, dir, deps,
+		"garage-x1c",
+		"--driver", "bambu-lan",
+		"--host", "192.0.2.10",
+		"--serial", "01S09C450100XXX",
+		"--insecure",
+		"--verbose",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Storing access code in keychain...") {
+		t.Errorf("expected 'Storing access code in keychain...' in verbose insecure output, got:\n%s", out)
+	}
+	if strings.Contains(out, "Connecting") {
+		t.Errorf("expected no 'Connecting' on insecure path (no network call), got:\n%s", out)
 	}
 }

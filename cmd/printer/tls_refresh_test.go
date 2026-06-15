@@ -498,8 +498,8 @@ func TestTlsRefresh_Verbose_ShowsProgressSteps(t *testing.T) {
 	if !strings.Contains(out, "Connecting to 192.0.2.10:8883...") {
 		t.Errorf("expected 'Connecting to 192.0.2.10:8883...' in output:\n%s", out)
 	}
-	if !strings.Contains(out, "TLS certificate captured.") {
-		t.Errorf("expected 'TLS certificate captured.' in output:\n%s", out)
+	if !strings.Contains(out, "TLS certificate captured. New fingerprint: sha256:") {
+		t.Errorf("expected 'TLS certificate captured. New fingerprint: sha256:' in output:\n%s", out)
 	}
 	if !strings.Contains(out, "Updating TLS fingerprint in keychain...") {
 		t.Errorf("expected 'Updating TLS fingerprint in keychain...' in output:\n%s", out)

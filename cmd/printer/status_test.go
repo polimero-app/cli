@@ -496,8 +496,8 @@ func TestStatus_Verbose_ShowsProgressSteps(t *testing.T) {
 	if !strings.Contains(out, "Connecting to 192.0.2.10:8883...") {
 		t.Errorf("expected 'Connecting to 192.0.2.10:8883...' in output:\n%s", out)
 	}
-	if !strings.Contains(out, "Response received") {
-		t.Errorf("expected 'Response received' in output:\n%s", out)
+	if !strings.Contains(out, "Response received (") {
+		t.Errorf("expected 'Response received (' in output:\n%s", out)
 	}
 }
 
