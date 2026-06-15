@@ -6,7 +6,7 @@ Accepted
 
 ## Purpose
 
-Define the first Bambu LAN driver slice for read-only printer status.
+Define the Bambu LAN driver slice for printer status, discovery, TLS refresh, and device file management.
 
 ## Scope
 
@@ -23,14 +23,20 @@ Initial auth mode:
 Initial command support:
 
 - `printer status`
+- `files roots`
+- `files list`
+- `files download`
+- `files upload`
 
 Out of scope:
 
 - Bambu cloud auth.
 - Bambu cloud APIs.
 - Authorization bypass.
-- Job upload.
+- Job upload through printer-control APIs.
 - Job start.
+- Starting a print from an uploaded or selected file.
+- File delete, rename, move, and directory creation.
 - Pause, cancel, movement, heating, or other state-changing commands.
 
 ## Capability Policy
@@ -121,6 +127,101 @@ The `pushall` payload:
 | A1 | Delta only (changed fields only) in autonomous push messages |
 
 Always publish `pushall` on connect to obtain a complete status object regardless of family. Do not rely on autonomous push messages for the initial status read.
+
+## File Storage Transport
+
+Capability:
+
+- `FileList: true`
+- `FileDownload: true`
+- `FileUpload: true`
+
+Bambu LAN file operations use the printer's LAN-mode FTP service. Bambu's official Developer Mode documentation says enabling Developer Mode opens FTP, and Bambu's network ports documentation lists LAN mode FTP on port `990` with passive data ports `50000` through `50100`.
+
+### FTP Connection
+
+Connection parameters:
+
+| Parameter | Value |
+|---|---|
+| Host | profile `host` |
+| Control port | `990` |
+| Protocol | FTP over TLS, implicit TLS |
+| Passive data ports | `50000` through `50100` |
+| Username | `bblp` |
+| Password | LAN access code from secrets bundle |
+| Root | `sdcard` maps to FTP server root `/` |
+
+The driver must use encrypted control and data connections. It must not fall back to plaintext FTP.
+
+The driver verifies the FTP TLS leaf certificate using the same pinned fingerprint behavior as MQTT:
+
+- If `insecure` is false: skip TLS chain verification and verify the presented leaf certificate SHA-256 fingerprint matches the pinned fingerprint.
+- If `insecure` is false and the pinned fingerprint is empty or malformed, fail closed before login.
+- If `insecure` is true: skip certificate verification.
+
+The FTP username and password must never be logged. FTP command logs must redact authentication commands and must not include file contents.
+
+### Named Roots
+
+The Bambu LAN driver exposes one named root:
+
+| Root | Protocol path | Writable | Description |
+|---|---|---|---|
+| `sdcard` | `/` | `true` | SD card |
+
+If the printer reports no usable SD card or rejects access to the FTP root, file operations return a sanitized `device_path_not_found`, `device_storage_rejected`, or `unsupported_capability` error according to the observed condition.
+
+### Path Mapping
+
+Driver-neutral paths use `sdcard:/...`.
+
+Mapping rules:
+
+- `sdcard:/` maps to FTP path `/`.
+- `sdcard:/models/cube.3mf` maps to FTP path `/models/cube.3mf`.
+- The command layer rejects traversal before dispatch. The driver must still defensively reject `..`, NUL bytes, and control characters.
+- The driver must not expose local host filesystem paths.
+
+### Listing
+
+The driver should use `MLSD` for directory listings when available. If the printer does not support `MLSD`, the driver may fall back to `LIST` only when the parser is strict and returns partial metadata warnings for fields that cannot be determined.
+
+Listing behavior:
+
+- One FTP listing operation returns either one file entry or one directory's direct children.
+- `type` maps FTP directory facts to `directory`, regular files to `file`, and unknown entries to `unknown`.
+- `sizeBytes` is populated when the FTP server reports size.
+- `modifiedAt` is populated when the FTP server reports modification time.
+- Driver-specific facts may be returned under `metadata` in JSON output.
+
+### Download
+
+The driver downloads files using the FTP retrieve operation for one regular file per call.
+
+Rules:
+
+- Directory download is unsupported.
+- The driver must stream to the command layer and respect context cancellation.
+- Short reads or data-channel errors return sanitized network or driver errors.
+- File contents must not be logged.
+
+### Upload
+
+The driver uploads files using the FTP store operation for one regular file per call.
+
+Rules:
+
+- Directory upload is unsupported.
+- Upload must only store the file. It must not publish MQTT commands or start a print.
+- If overwrite is false, the driver or command layer must check destination existence before storing. If existence cannot be determined safely, fail closed with `device_path_exists` or `driver_internal_error`.
+- File contents must not be logged.
+
+### Official Bambu References
+
+- `https://wiki.bambulab.com/en/knowledge-sharing/enable-developer-mode`
+- `https://wiki.bambulab.com/en/general/printer-network-ports`
+- `https://wiki.bambulab.com/en/knowledge-sharing/access-code-connect`
 
 ## State Mapping
 
@@ -305,6 +406,15 @@ Required before implementation is considered complete:
 - Field mapping: `mc_print_error_code` "0" produces empty errors array.
 - Fixture parsing for representative X1/P1/A1 status payloads when legally and safely available.
 - Redaction tests for access code and sensitive payloads.
+- File roots: exposes `sdcard` as writable when FTP root is available.
+- File list: parses MLSD directory entries with name, type, size, and modified time.
+- File list: falls back to strict LIST parsing with warnings when MLSD is unavailable.
+- File download: retrieves one regular file and reports bytes transferred.
+- File upload: stores one regular file and does not publish MQTT commands.
+- File upload: rejects overwrite when overwrite is false and destination exists.
+- File operations: authenticate with `bblp` and LAN access code without logging credentials.
+- File operations: verify FTP TLS fingerprint unless profile or invocation is insecure.
+- File operations: reject traversal and malformed paths defensively in the driver.
 
 Real printer tests:
 

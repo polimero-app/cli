@@ -29,6 +29,8 @@ Initial command support:
 - `printer status`
 - `printer tls refresh`
 
+Later Bambu LAN file listing, download, and upload behavior is covered by ADR 0009 and the Bambu LAN driver spec. File upload stores files only and does not authorize print start.
+
 Implementation may use official documentation, user-owned device observation, and compatible public OSS references with attribution and license review.
 
 Transport certificate handling is specified in ADR 0007. There must be no silent insecure TLS fallback.
@@ -38,4 +40,3 @@ Transport certificate handling is specified in ADR 0007. There must be no silent
 - Bambu cloud behavior is intentionally out of scope.
 - Some printer or firmware versions may return unsupported-capability errors.
 - Protocol research must be reviewed for legal, license, and security compatibility.
-
