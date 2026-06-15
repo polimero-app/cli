@@ -46,7 +46,7 @@ func TlsRefreshCommandWithDeps(deps TlsRefreshDeps) *cobra.Command {
 		Short: "Re-pin or disable TLS certificate for a printer profile",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeTlsRefreshUsageError(cmd, "profile name is required")
 			}
 			if len(args) > 1 {
 				return writeTlsRefreshUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
@@ -151,7 +151,7 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 
 	if insecureFlag {
 		if delErr := deps.KC.Delete(ctx, "polimero", kcFpAcct); delErr != nil && !errors.Is(delErr, keychain.ErrNotFound) {
-			return "", 0, name, apperr.Wrap(1, "cannot delete TLS fingerprint from keychain", delErr)
+			return "", 0, name, apperr.Wrap(3, "cannot delete TLS fingerprint from keychain", delErr)
 		}
 		p.Insecure = true
 		p.Updated = time.Now().UTC()

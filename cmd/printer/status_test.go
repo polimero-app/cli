@@ -101,16 +101,14 @@ func runStatusCmd(t *testing.T, deps printer.StatusDeps, args ...string) (string
 
 // --- Tests ---
 
-func TestStatus_NoArgs_ShowsHelp(t *testing.T) {
+func TestStatus_NoArgs_ExitsCode2(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	deps := statusDeps(t, dir, kc, defaultStatusDriver())
-	out, err := runStatusCmd(t, deps)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if out == "" {
-		t.Error("expected help output")
+	_, err := runStatusCmd(t, deps)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2, got %v", err)
 	}
 }
 

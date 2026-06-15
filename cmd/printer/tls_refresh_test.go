@@ -89,16 +89,14 @@ func runTlsRefreshCmd(t *testing.T, deps printer.TlsRefreshDeps, args ...string)
 
 // --- Tests ---
 
-func TestTlsRefresh_NoArgs_ShowsHelp(t *testing.T) {
+func TestTlsRefresh_NoArgs_ExitsCode2(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	deps := tlsRefreshDeps(t, dir, kc, defaultRefreshDriver(), &tty.Mock{Terminal: false})
-	out, err := runTlsRefreshCmd(t, deps)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if out == "" {
-		t.Error("expected help output")
+	_, err := runTlsRefreshCmd(t, deps)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2, got %v", err)
 	}
 }
 
@@ -538,5 +536,28 @@ func TestTlsRefresh_NoVerbose_NoProgressLines(t *testing.T) {
 	}
 	if strings.Contains(out, "Connecting") {
 		t.Errorf("expected no 'Connecting' in non-verbose output:\n%s", out)
+	}
+}
+
+func TestTlsRefresh_Insecure_KeychainDeleteFailure_ExitsCode3(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	t.Setenv("POLIMERO_CONFIG_DIR", dir)
+	drv := defaultRefreshDriver()
+	deps := printer.TlsRefreshDeps{
+		KC: &failingDeleteKeychain{inner: kc},
+		GetDriver: func(name string) (driver.Driver, bool) {
+			if name == "bambu-lan" {
+				return drv, true
+			}
+			return nil, false
+		},
+		Prompter: &tty.Mock{Terminal: false},
+	}
+	_, err := runTlsRefreshCmd(t, deps, "myprinter", "--insecure", "--yes")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Errorf("expected exit 3 for keychain delete failure, got %v", err)
 	}
 }

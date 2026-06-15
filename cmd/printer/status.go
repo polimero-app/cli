@@ -45,7 +45,7 @@ func StatusCommandWithDeps(deps StatusDeps) *cobra.Command {
 		Short: "Show the current status of a printer",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeStatusUsageError(cmd, "profile name is required")
 			}
 			if len(args) > 1 {
 				return writeStatusUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))

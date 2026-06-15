@@ -752,3 +752,14 @@ func TestAdd_Verbose_InsecurePath_ShowsStoringAccessCode(t *testing.T) {
 		t.Errorf("expected no 'Connecting' on insecure path (no network call), got:\n%s", out)
 	}
 }
+
+func TestAdd_NoArgs_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p))
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for missing name, got %v", err)
+	}
+}

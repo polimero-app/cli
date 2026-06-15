@@ -420,3 +420,14 @@ func (p *trackingPrompter) ReadLine(_ string) (string, error) {
 	p.lines = p.lines[1:]
 	return line, nil
 }
+
+func TestRemove_NoArgs_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	_, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: p})
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for missing name, got %v", err)
+	}
+}

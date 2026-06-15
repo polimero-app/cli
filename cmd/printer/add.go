@@ -55,7 +55,7 @@ func AddCommandWithDeps(deps AddDeps) *cobra.Command {
 		Short: "Add a printer profile",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeAddUsageError(cmd, "profile name is required")
 			}
 			if len(args) > 1 {
 				return writeAddUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
