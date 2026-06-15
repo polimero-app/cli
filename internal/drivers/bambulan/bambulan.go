@@ -50,9 +50,11 @@ func (e *fingerprintMismatchError) Error() string {
 
 // Driver implements the bambu-lan protocol for Bambu Lab printers.
 type Driver struct {
-	newClient func(*mqtt.ClientOptions) mqttConn
-	dialTLS   func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)
-	browse    func(ctx context.Context, service string) (<-chan *mdnsEntry, error)
+	newClient  func(*mqtt.ClientOptions) mqttConn
+	dialTLS    func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)
+	browse     func(ctx context.Context, service string) (<-chan *mdnsEntry, error)
+	browseSSDP func(ctx context.Context) (<-chan *mdnsEntry, error)
+	browseUDP  func(ctx context.Context) (<-chan *mdnsEntry, error)
 }
 
 // New returns a bambu-lan Driver backed by a real paho MQTT client.
@@ -67,7 +69,9 @@ func New() *Driver {
 			}
 			return conn.(*tls.Conn), nil
 		},
-		browse: realBrowse,
+		browse:     realBrowse,
+		browseSSDP: realBrowseSSDP,
+		browseUDP:  realBrowseUDP,
 	}
 }
 
@@ -522,22 +526,88 @@ func (d *Driver) CaptureFingerprint(ctx context.Context, host, serial string) (s
 }
 
 func (d *Driver) Discover(ctx context.Context) ([]driver.DiscoveredPrinter, error) {
-	entries, err := d.browse(ctx, bambuMDNSService)
-	if err != nil {
-		return nil, apperr.Wrap(4, "mDNS browse failed", err)
+	type protoStart struct {
+		name  string
+		start func() (<-chan *mdnsEntry, error)
 	}
+	protos := []protoStart{
+		{"mDNS", func() (<-chan *mdnsEntry, error) { return d.browse(ctx, bambuMDNSService) }},
+		{"SSDP", func() (<-chan *mdnsEntry, error) { return d.browseSSDP(ctx) }},
+		{"UDP", func() (<-chan *mdnsEntry, error) { return d.browseUDP(ctx) }},
+	}
+
+	var channels []<-chan *mdnsEntry
+	var startErrs []string
+	for _, p := range protos {
+		ch, err := p.start()
+		if err != nil {
+			startErrs = append(startErrs, fmt.Sprintf("%s: %s", p.name, err))
+		} else {
+			channels = append(channels, ch)
+		}
+	}
+	if len(channels) == 0 {
+		return nil, apperr.Newf(4, "all discovery protocols failed to start: %s",
+			strings.Join(startErrs, "; "))
+	}
+
+	merged := fanIn(ctx, channels...)
+	seen := make(map[string]struct{})
 	result := []driver.DiscoveredPrinter{}
-	for e := range entries {
-		result = append(result, driver.DiscoveredPrinter{
+	for e := range merged {
+		p := driver.DiscoveredPrinter{
 			Host:   e.Host,
 			Port:   e.Port,
 			Driver: d.Name(),
 			Serial: txtValue(e.Text, "sn"),
 			Model:  txtValue(e.Text, "dev_model_name"),
 			Name:   txtValue(e.Text, "dev_name"),
-		})
+		}
+		key := dedupeKey(p)
+		if _, exists := seen[key]; !exists {
+			seen[key] = struct{}{}
+			result = append(result, p)
+		}
 	}
 	return result, nil
+}
+
+func dedupeKey(p driver.DiscoveredPrinter) string {
+	if p.Serial != "" {
+		return "serial:" + p.Serial
+	}
+	return "host:" + p.Host
+}
+
+func fanIn(ctx context.Context, channels ...<-chan *mdnsEntry) <-chan *mdnsEntry {
+	out := make(chan *mdnsEntry)
+	var wg sync.WaitGroup
+	for _, ch := range channels {
+		wg.Add(1)
+		go func(c <-chan *mdnsEntry) {
+			defer wg.Done()
+			for {
+				select {
+				case e, ok := <-c:
+					if !ok {
+						return
+					}
+					select {
+					case out <- e:
+					case <-ctx.Done():
+						return
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(ch)
+	}
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
 }
 
 // txtValue returns the value for a "key=value" TXT record, or "" if not found.
