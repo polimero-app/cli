@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/config"
@@ -191,17 +193,30 @@ func writeDiscoverSuccess(w io.Writer, format output.Format, found []discoverRes
 		return err
 	}
 	for _, r := range found {
-		configured := "—"
+		configured := "-"
 		if r.ConfiguredAs != "" {
-			configured = r.ConfiguredAs
+			configured = sanitizeHumanField(r.ConfiguredAs)
 		}
 		_, err = fmt.Fprintf(w, "  %-20s %-20s %-8s %-18s %s\n",
-			r.Name, r.Serial, r.Model, r.Host, configured)
+			sanitizeHumanField(r.Name),
+			sanitizeHumanField(r.Serial),
+			sanitizeHumanField(r.Model),
+			sanitizeHumanField(r.Host),
+			configured)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func sanitizeHumanField(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, s)
 }
 
 func writeDiscoverError(out, errOut io.Writer, format output.Format, err error) error {
@@ -216,14 +231,24 @@ func writeDiscoverError(out, errOut io.Writer, format output.Format, err error) 
 			Data: nil,
 			Error: &output.ErrDetail{
 				Code:    discoverErrorCode(err),
-				Message: err.Error(),
+				Message: discoverErrorMessage(err),
 			},
 			Meta: output.Meta{Command: "printer discover"},
 		})
 	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(errOut, "Error: %s\n", discoverErrorMessage(err))
 	}
 	return apperr.New(code, "")
+}
+
+func discoverErrorMessage(err error) string {
+	if discoverErrorCode(err) == "connection_failed" {
+		if strings.Contains(err.Error(), "mDNS browse failed") {
+			return "mDNS browse failed"
+		}
+		return "printer discovery failed"
+	}
+	return err.Error()
 }
 
 func discoverErrorCode(err error) string {

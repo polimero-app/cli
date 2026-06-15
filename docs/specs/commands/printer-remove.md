@@ -36,6 +36,8 @@ The command removes both keychain entries using the driver name and profile name
 
 If either entry is missing from the keychain, the command still removes the profile and returns a separate warning per missing entry. If the profile was created with `--insecure`, the TLS fingerprint entry will not be present; this is not a warning condition.
 
+Keychain deletion uses a bounded internal timeout and must not expose raw secret-store backend errors.
+
 ## Confirmation
 
 When running interactively and `--yes` is not provided, prompt:
@@ -123,6 +125,7 @@ JSON success example with warnings (access code missing):
 
 - Never print or log secret values.
 - Remove the secret before or during profile removal.
+- Use bounded keychain operations.
 - If config write fails after secret deletion, return a clear warning that manual recovery may be needed.
 - Use atomic config writes where practical.
 

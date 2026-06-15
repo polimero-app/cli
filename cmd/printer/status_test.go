@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,7 +150,7 @@ func TestStatus_MissingAccessCode_ExitsCode3(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	seedProfile(t, dir, kc, "myprinter", false)
-	_ = kc.Delete("polimero", "bambu-lan:myprinter:access-code")
+	_ = kc.Delete(context.Background(), "polimero", "bambu-lan:myprinter:access-code")
 	deps := statusDeps(t, dir, kc, defaultStatusDriver())
 	_, err := runStatusCmd(t, deps, "myprinter")
 	var exitErr *apperr.ExitError
@@ -162,12 +163,25 @@ func TestStatus_MissingTLSFingerprint_ExitsCode3(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	seedProfile(t, dir, kc, "myprinter", false) // secure profile
-	_ = kc.Delete("polimero", "bambu-lan:myprinter:tls-fingerprint")
+	_ = kc.Delete(context.Background(), "polimero", "bambu-lan:myprinter:tls-fingerprint")
 	deps := statusDeps(t, dir, kc, defaultStatusDriver())
 	_, err := runStatusCmd(t, deps, "myprinter")
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
 		t.Errorf("expected exit 3, got %v", err)
+	}
+}
+
+func TestStatus_InvalidTLSFingerprint_ExitsCode3(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false) // secure profile
+	_ = kc.Set(context.Background(), "polimero", "bambu-lan:myprinter:tls-fingerprint", "")
+	deps := statusDeps(t, dir, kc, defaultStatusDriver())
+	_, err := runStatusCmd(t, deps, "myprinter")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Errorf("expected exit 3 for invalid TLS fingerprint, got %v", err)
 	}
 }
 
@@ -185,8 +199,8 @@ func TestStatus_InsecureProfile_SkipsFingerprint(t *testing.T) {
 func TestStatus_InsecureFlag_SkipsFingerprint(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
-	seedProfile(t, dir, kc, "myprinter", false)                      // secure profile in config
-	_ = kc.Delete("polimero", "bambu-lan:myprinter:tls-fingerprint") // but fingerprint missing
+	seedProfile(t, dir, kc, "myprinter", false)                                            // secure profile in config
+	_ = kc.Delete(context.Background(), "polimero", "bambu-lan:myprinter:tls-fingerprint") // but fingerprint missing
 	deps := statusDeps(t, dir, kc, defaultStatusDriver())
 	_, err := runStatusCmd(t, deps, "myprinter", "--insecure")
 	if err != nil {
@@ -404,6 +418,33 @@ func TestStatus_JSON_ErrorEnvelope(t *testing.T) {
 	}
 	if meta["durationMs"] != nil {
 		t.Errorf("meta.durationMs should be absent in error envelope, got %v", meta["durationMs"])
+	}
+}
+
+func TestStatus_JSON_NetworkErrorIsSanitized(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	drv := &stubStatusDriver{
+		caps: driver.Capabilities{Status: true},
+		err:  apperr.New(4, "connection failed: dial tcp 192.0.2.10:8883: secret-token"),
+	}
+	deps := statusDeps(t, dir, kc, drv)
+	out, err := runStatusCmd(t, deps, "myprinter", "--output", "json")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit 4, got %v", err)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	errData := env["error"].(map[string]any)
+	if errData["message"] != "connection failed" {
+		t.Fatalf("error.message = %v, want connection failed", errData["message"])
+	}
+	if strings.Contains(out, "secret-token") || strings.Contains(out, "192.0.2.10:8883") {
+		t.Fatalf("raw transport detail leaked in output:\n%s", out)
 	}
 }
 

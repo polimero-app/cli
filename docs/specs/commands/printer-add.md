@@ -78,11 +78,13 @@ Enter Bambu LAN access code for <name>:
 `--access-code-file` requirements:
 
 - Must refer to a regular file.
+- Must not be a symbolic link on operating systems that support no-follow file opens.
 - Must be readable by the current user.
 - Must not exceed 4 KiB.
 - On operating systems that expose POSIX-like file modes, group and other permissions must not grant read, write, or execute access.
 - One trailing `\n` or `\r\n` is trimmed.
 - Other leading or trailing whitespace is preserved.
+- Empty access-code input after trailing newline trimming is rejected.
 - The path may be shown in diagnostics, but file contents must never be logged or printed.
 
 Keychain entries written by this command:
@@ -90,7 +92,7 @@ Keychain entries written by this command:
 - Access code: service `polimero`, account `bambu-lan:<name>:access-code`.
 - TLS fingerprint: service `polimero`, account `bambu-lan:<name>:tls-fingerprint`. Not written when `--insecure` is used.
 
-If keychain storage is unavailable, the command fails closed.
+If keychain storage is unavailable, the command fails closed. Keychain writes and rollback deletes must use bounded contexts and must not expose raw secret-store backend errors.
 
 ## Connection Requirements
 
@@ -232,6 +234,7 @@ JSON error example:
 - Invalid timeout.
 - Duplicate profile.
 - Missing access code in non-interactive mode.
+- Empty access code.
 - Access-code file is missing, not regular, too large, or too broadly permissioned.
 - TLS or network connection failed (without `--insecure`).
 - MQTT authentication rejected (bad access code).
@@ -246,6 +249,7 @@ JSON error example:
 - Never store the access code or TLS fingerprint in YAML config.
 - Avoid command-line secret flags.
 - Fail closed when the keychain is unavailable.
+- Sanitize authentication, transport, and secret-store errors.
 - Use TOFU TLS per ADR 0007 unless `--insecure` is explicitly passed.
 - Warn in human output when `--insecure` is used.
 - Use atomic config writes where practical.

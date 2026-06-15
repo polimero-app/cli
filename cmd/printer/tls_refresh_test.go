@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func (s *stubRefreshDriver) Discover(_ context.Context) ([]driver.DiscoveredPrin
 
 func defaultRefreshDriver() *stubRefreshDriver {
 	return &stubRefreshDriver{
-		fp:   "sha256:deadbeef",
+		fp:   alternateFingerprint,
 		caps: driver.Capabilities{TLSRefresh: true},
 	}
 }
@@ -171,17 +172,17 @@ func TestTlsRefresh_HappyPath_SecureProfile(t *testing.T) {
 	if !bytes.Contains([]byte(out), []byte("TLS certificate re-pinned: myprinter")) {
 		t.Errorf("expected success message in output:\n%s", out)
 	}
-	if !bytes.Contains([]byte(out), []byte("sha256:deadbeef")) {
+	if !bytes.Contains([]byte(out), []byte(alternateFingerprint)) {
 		t.Errorf("expected fingerprint in output:\n%s", out)
 	}
 
 	// Fingerprint must be stored in keychain
-	fp, kcErr := kc.Get("polimero", "bambu-lan:myprinter:tls-fingerprint")
+	fp, kcErr := kc.Get(context.Background(), "polimero", "bambu-lan:myprinter:tls-fingerprint")
 	if kcErr != nil {
 		t.Fatalf("fingerprint not in keychain: %v", kcErr)
 	}
-	if fp != "sha256:deadbeef" {
-		t.Errorf("fingerprint = %q, want sha256:deadbeef", fp)
+	if fp != alternateFingerprint {
+		t.Errorf("fingerprint = %q, want %s", fp, alternateFingerprint)
 	}
 
 	// Profile must reflect insecure=false
@@ -201,7 +202,7 @@ func TestTlsRefresh_UpdatesTimestamp(t *testing.T) {
 	seedProfile(t, dir, kc, "myprinter", false)
 
 	before := time.Now().Add(-time.Second)
-	deps := tlsRefreshDeps(t, dir, kc, &stubRefreshDriver{fp: "sha256:new", caps: driver.Capabilities{TLSRefresh: true}}, &tty.Mock{Terminal: false})
+	deps := tlsRefreshDeps(t, dir, kc, &stubRefreshDriver{fp: alternateFingerprint, caps: driver.Capabilities{TLSRefresh: true}}, &tty.Mock{Terminal: false})
 	_, err := runTlsRefreshCmd(t, deps, "myprinter", "--yes")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -246,12 +247,12 @@ func TestTlsRefresh_InsecureToSecure(t *testing.T) {
 	}
 
 	// Fingerprint must be in keychain
-	fp, kcErr := kc.Get("polimero", "bambu-lan:myprinter:tls-fingerprint")
+	fp, kcErr := kc.Get(context.Background(), "polimero", "bambu-lan:myprinter:tls-fingerprint")
 	if kcErr != nil {
 		t.Fatalf("fingerprint not in keychain: %v", kcErr)
 	}
-	if fp != "sha256:deadbeef" {
-		t.Errorf("fingerprint = %q, want sha256:deadbeef", fp)
+	if fp != alternateFingerprint {
+		t.Errorf("fingerprint = %q, want %s", fp, alternateFingerprint)
 	}
 }
 
@@ -273,7 +274,7 @@ func TestTlsRefresh_SecureToInsecure(t *testing.T) {
 	}
 
 	// Fingerprint must be deleted from keychain
-	_, kcErr := kc.Get("polimero", "bambu-lan:myprinter:tls-fingerprint")
+	_, kcErr := kc.Get(context.Background(), "polimero", "bambu-lan:myprinter:tls-fingerprint")
 	if !errors.Is(kcErr, keychain.ErrNotFound) {
 		t.Errorf("expected fingerprint to be deleted from keychain, got: %v", kcErr)
 	}
@@ -301,7 +302,7 @@ func TestTlsRefresh_DoesNotTouchAccessCode(t *testing.T) {
 	}
 
 	// Access code must still be in keychain
-	ac, kcErr := kc.Get("polimero", "bambu-lan:myprinter:access-code")
+	ac, kcErr := kc.Get(context.Background(), "polimero", "bambu-lan:myprinter:access-code")
 	if kcErr != nil {
 		t.Fatalf("access code not in keychain after tls refresh: %v", kcErr)
 	}
@@ -324,6 +325,23 @@ func TestTlsRefresh_ConnectionError_ExitsCode4(t *testing.T) {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
 		t.Errorf("expected exit 4, got %v", err)
+	}
+}
+
+func TestTlsRefresh_InvalidFingerprint_ExitsCode4(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	drv := &stubRefreshDriver{
+		caps: driver.Capabilities{TLSRefresh: true},
+		fp:   "",
+	}
+	deps := tlsRefreshDeps(t, dir, kc, drv, &tty.Mock{Terminal: false})
+
+	_, err := runTlsRefreshCmd(t, deps, "myprinter", "--yes")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit 4 for invalid fingerprint, got %v", err)
 	}
 }
 
@@ -364,6 +382,12 @@ func TestTlsRefresh_JSON_ErrorEnvelope(t *testing.T) {
 	}
 	if errMap["code"] != "connection_failed" {
 		t.Errorf("error.code = %v, want connection_failed", errMap["code"])
+	}
+	if errMap["message"] != "TLS connect failed" {
+		t.Errorf("error.message = %v, want TLS connect failed", errMap["message"])
+	}
+	if strings.Contains(out, "connection refused") {
+		t.Fatalf("raw transport detail leaked in output:\n%s", out)
 	}
 	details, ok := errMap["details"].(map[string]any)
 	if !ok {
@@ -406,8 +430,8 @@ func TestTlsRefresh_JSON_SuccessEnvelope(t *testing.T) {
 	if data["profile"] != "myprinter" {
 		t.Errorf("data.profile = %v, want myprinter", data["profile"])
 	}
-	if data["fingerprint"] != "sha256:deadbeef" {
-		t.Errorf("data.fingerprint = %v, want sha256:deadbeef", data["fingerprint"])
+	if data["fingerprint"] != alternateFingerprint {
+		t.Errorf("data.fingerprint = %v, want %s", data["fingerprint"], alternateFingerprint)
 	}
 	if data["insecure"] != false {
 		t.Errorf("data.insecure = %v, want false", data["insecure"])

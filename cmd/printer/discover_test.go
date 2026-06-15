@@ -113,6 +113,28 @@ func TestDiscover_ReturnsList(t *testing.T) {
 	}
 }
 
+func TestDiscover_HumanOutputSanitizesControlCharacters(t *testing.T) {
+	dir := t.TempDir()
+	drv := &stubDiscoverDriver{
+		name: "bambu-lan",
+		caps: driver.Capabilities{Discovery: true},
+		found: []driver.DiscoveredPrinter{
+			{Host: "192.0.2.10", Port: 8883, Serial: "SN\x1b[31m", Model: "X1C", Name: "Bad\x1b]0;title\x07Name", Driver: "bambu-lan"},
+		},
+	}
+	deps := discoverDeps(t, dir, drv)
+	out, err := runDiscoverCmd(t, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bytes.Contains([]byte(out), []byte("\x1b")) || bytes.Contains([]byte(out), []byte("\x07")) {
+		t.Fatalf("human output contains terminal control characters:\n%q", out)
+	}
+	if !bytes.Contains([]byte(out), []byte("?")) {
+		t.Fatalf("expected sanitized placeholder in output:\n%s", out)
+	}
+}
+
 func TestDiscover_EmptyResult_ExitsZero(t *testing.T) {
 	dir := t.TempDir()
 	drv := &stubDiscoverDriver{name: "bambu-lan", caps: driver.Capabilities{Discovery: true}, found: []driver.DiscoveredPrinter{}}
@@ -230,8 +252,8 @@ func TestDiscover_ZeroTimeout_ExitsCode2(t *testing.T) {
 func TestDiscover_DriverError_ExitsCode4(t *testing.T) {
 	dir := t.TempDir()
 	drv := &stubDiscoverDriver{
-		name: "bambu-lan",
-		caps: driver.Capabilities{Discovery: true},
+		name:    "bambu-lan",
+		caps:    driver.Capabilities{Discovery: true},
 		discErr: apperr.New(4, "mDNS socket unavailable"),
 	}
 	deps := discoverDeps(t, dir, drv)

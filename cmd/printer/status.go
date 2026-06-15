@@ -120,27 +120,32 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 		return nil, 0, "", statusErrorContext{profile: name, timeout: timeoutStr}, apperr.Newf(2, "--timeout must be greater than zero")
 	}
 	errCtx := statusErrorContext{profile: name, timeout: timeout.String()}
+	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	defer cancel()
 
 	insecure := p.Insecure || insecureFlag
 
 	kcAcct := fmt.Sprintf("%s:%s:access-code", p.Driver, name)
-	accessCode, err := deps.KC.Get("polimero", kcAcct)
+	accessCode, err := deps.KC.Get(ctx, "polimero", kcAcct)
 	if err != nil {
 		if errors.Is(err, keychain.ErrNotFound) {
 			return nil, 0, "", errCtx, apperr.Newf(3, "access code not found in keychain for %q", name)
 		}
-		return nil, 0, "", errCtx, apperr.Newf(3, "cannot read access code from keychain: %s", err)
+		return nil, 0, "", errCtx, apperr.Wrap(3, "cannot read access code from keychain", err)
 	}
 
 	var tlsFingerprint string
 	if !insecure {
 		kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
-		tlsFingerprint, err = deps.KC.Get("polimero", kcFpAcct)
+		tlsFingerprint, err = deps.KC.Get(ctx, "polimero", kcFpAcct)
 		if err != nil {
 			if errors.Is(err, keychain.ErrNotFound) {
 				return nil, 0, "", errCtx, apperr.Newf(3, "TLS fingerprint not found in keychain for %q", name)
 			}
-			return nil, 0, "", errCtx, apperr.Newf(3, "cannot read TLS fingerprint from keychain: %s", err)
+			return nil, 0, "", errCtx, apperr.Wrap(3, "cannot read TLS fingerprint from keychain", err)
+		}
+		if !driver.ValidTLSFingerprint(tlsFingerprint) {
+			return nil, 0, "", errCtx, apperr.Newf(3, "invalid TLS fingerprint in keychain for %q", name)
 		}
 	}
 
@@ -164,9 +169,6 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, d
 		AccessCode:     accessCode,
 		TLSFingerprint: tlsFingerprint,
 	}
-
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-	defer cancel()
 
 	start := time.Now()
 	result, err := drv.Status(ctx, pi, secrets, deps.Log)
@@ -256,8 +258,8 @@ func writeStatusError(out, errOut io.Writer, format output.Format, err error, er
 	if errors.As(err, &exitErr) {
 		code = exitErr.Code
 	}
+	errDetail := statusErrorDetail(err, errCtx)
 	if format == output.FormatJSON {
-		errDetail := statusErrorDetail(err, errCtx)
 		_ = output.WriteEnvelope(out, output.Envelope{
 			OK:    false,
 			Data:  nil,
@@ -265,13 +267,13 @@ func writeStatusError(out, errOut io.Writer, format output.Format, err error, er
 			Meta:  output.Meta{Command: "printer status"},
 		})
 	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(errOut, "Error: %s\n", errDetail.Message)
 	}
 	return apperr.New(code, "")
 }
 
 func statusErrorDetail(err error, errCtx statusErrorContext) output.ErrDetail {
-	detail := output.ErrDetail{Code: statusErrorCode(err), Message: err.Error()}
+	detail := output.ErrDetail{Code: statusErrorCode(err), Message: statusErrorMessage(err)}
 	if isStatusTimeout(err) {
 		detail.Code = "timeout"
 		detail.Message = "printer status request timed out"
@@ -286,6 +288,41 @@ func statusErrorDetail(err error, errCtx statusErrorContext) output.ErrDetail {
 		}
 	}
 	return detail
+}
+
+func statusErrorMessage(err error) string {
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch statusErrorCode(err) {
+	case "auth_error":
+		switch {
+		case strings.Contains(msg, "MQTT authentication rejected"):
+			return "MQTT authentication rejected"
+		case strings.Contains(msg, "TLS fingerprint mismatch"):
+			return "TLS fingerprint mismatch"
+		case strings.Contains(lower, "keychain"):
+			return msg
+		default:
+			return "authentication or secret error"
+		}
+	case "network_error":
+		switch {
+		case strings.Contains(lower, "cancelled"):
+			return "printer status request cancelled"
+		case strings.Contains(msg, "invalid status report"):
+			return "invalid status report"
+		case strings.Contains(msg, "status subscription failed"):
+			return "status subscription failed"
+		case strings.Contains(msg, "status request failed"):
+			return "status request failed"
+		case strings.Contains(msg, "connection failed"):
+			return "connection failed"
+		default:
+			return "printer status request failed"
+		}
+	default:
+		return msg
+	}
 }
 
 func statusErrorCode(err error) string {

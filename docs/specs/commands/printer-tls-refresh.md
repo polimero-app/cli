@@ -46,6 +46,8 @@ With `--insecure`: removes the existing `bambu-lan:<name>:tls-fingerprint` keych
 
 If the keychain is unavailable, the command fails with exit code `3`.
 
+Keychain fingerprint writes and deletes use the same bounded timeout as the TLS refresh connection and must not expose raw secret-store backend errors.
+
 ## Confirmation
 
 When running interactively and `--yes` is not provided, prompt:
@@ -62,6 +64,7 @@ In non-interactive mode, `--yes` is required. Without it, the command fails with
 
 - The command connects to the printer solely to obtain the current TLS certificate.
 - The TLS SNI field is set to the `serial` value from the stored profile. This is required for Bambu printers, whose certificate CN equals the printer serial number.
+- The captured fingerprint must be formatted as `sha256:<64 lowercase hex characters>` before it is stored.
 - No state-changing commands are sent to the printer.
 - The command does not use the stored access code for the TLS handshake; only a TLS connection is needed to capture the leaf certificate fingerprint.
 - Default timeout is `10s`.
@@ -153,6 +156,7 @@ JSON error example:
 - Non-interactive execution without `--yes`.
 - Connection failed.
 - Timeout.
+- Invalid captured fingerprint.
 - Secret-store unavailable.
 - Fingerprint write fails.
 - Fingerprint removal fails when switching to insecure mode.
@@ -163,7 +167,8 @@ JSON error example:
 - Do not read or log the access code.
 - Do not send state-changing commands to the printer.
 - Use a bounded network timeout.
-- Sanitize TLS and connection errors before output.
+- Use bounded keychain operations.
+- Sanitize TLS, connection, and secret-store errors before output.
 
 ## Test Scenarios
 

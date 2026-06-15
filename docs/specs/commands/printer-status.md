@@ -43,9 +43,13 @@ The command loads keychain entries using the driver name and profile name from t
 - Access code: `<driver>:<name>:access-code`
 - TLS fingerprint: `<driver>:<name>:tls-fingerprint` (skipped when `--insecure` or `profile.insecure: true`)
 
+Keychain reads use the same bounded command timeout as the status request.
+
 If the access code is missing or keychain access fails, the command fails with exit code `3`.
 
 If the TLS fingerprint is missing for a secure profile, the command fails with exit code `3`.
+
+If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowercase hex characters>`, the command fails with exit code `3`.
 
 ## Behavior
 
@@ -181,6 +185,7 @@ JSON timeout example:
 - Config schema version is not `1`.
 - Access code not found in keychain.
 - TLS fingerprint not found in keychain (secure profile).
+- TLS fingerprint invalid in keychain (secure profile).
 - TLS fingerprint mismatch (TOFU violation).
 - Authentication failed.
 - Connection failed.
@@ -195,6 +200,7 @@ JSON timeout example:
 - Do not perform discovery or scanning.
 - Do not send state-changing commands.
 - Sanitize authentication and transport errors.
+- Sanitize secret-store backend errors.
 
 ## Test Scenarios
 

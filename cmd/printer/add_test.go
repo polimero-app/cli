@@ -53,7 +53,7 @@ func defaultAddDeps(kc *keychain.Mock, p *tty.Mock) printer.AddDeps {
 		Prompter: p,
 		GetDriver: func(name string) (driver.Driver, bool) {
 			if name == "bambu-lan" {
-				return &stubDriver{fingerprint: "sha256:aabbcc"}, true
+				return &stubDriver{fingerprint: testFingerprint}, true
 			}
 			return nil, false
 		},
@@ -96,12 +96,12 @@ func TestAdd_Human_SecurePath(t *testing.T) {
 	if !strings.Contains(out, "Printer profile added: garage-x1c") {
 		t.Errorf("expected success message, got:\n%s", out)
 	}
-	if !strings.Contains(out, "sha256:aabbcc") {
+	if !strings.Contains(out, testFingerprint) {
 		t.Errorf("expected fingerprint in output, got:\n%s", out)
 	}
 
 	// Access code stored in keychain
-	ac, err := kc.Get("polimero", "bambu-lan:garage-x1c:access-code")
+	ac, err := kc.Get(context.Background(), "polimero", "bambu-lan:garage-x1c:access-code")
 	if err != nil {
 		t.Fatalf("access code not in keychain: %v", err)
 	}
@@ -110,9 +110,9 @@ func TestAdd_Human_SecurePath(t *testing.T) {
 	}
 
 	// Fingerprint stored in keychain
-	fp, _ := kc.Get("polimero", "bambu-lan:garage-x1c:tls-fingerprint")
-	if fp != "sha256:aabbcc" {
-		t.Errorf("fingerprint = %q, want sha256:aabbcc", fp)
+	fp, _ := kc.Get(context.Background(), "polimero", "bambu-lan:garage-x1c:tls-fingerprint")
+	if fp != testFingerprint {
+		t.Errorf("fingerprint = %q, want %s", fp, testFingerprint)
 	}
 
 	// Profile written to config
@@ -139,7 +139,7 @@ func TestAdd_Human_InsecurePath(t *testing.T) {
 	}
 
 	// TLS fingerprint must NOT be stored
-	if _, err := kc.Get("polimero", "bambu-lan:myprinter:tls-fingerprint"); err == nil {
+	if _, err := kc.Get(context.Background(), "polimero", "bambu-lan:myprinter:tls-fingerprint"); err == nil {
 		t.Error("TLS fingerprint should not be stored for insecure profile")
 	}
 }
@@ -158,7 +158,7 @@ func TestAdd_AccessCodeFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	ac, _ := kc.Get("polimero", "bambu-lan:myprinter:access-code")
+	ac, _ := kc.Get(context.Background(), "polimero", "bambu-lan:myprinter:access-code")
 	if ac != "filecode" { // trailing \n stripped
 		t.Errorf("access code = %q, want filecode", ac)
 	}
@@ -186,8 +186,8 @@ func TestAdd_JSON_Success(t *testing.T) {
 	if prof["name"] != "myprinter" {
 		t.Errorf("profile.name = %v, want myprinter", prof["name"])
 	}
-	if prof["tlsFingerprint"] != "sha256:aabbcc" {
-		t.Errorf("profile.tlsFingerprint = %v, want sha256:aabbcc", prof["tlsFingerprint"])
+	if prof["tlsFingerprint"] != testFingerprint {
+		t.Errorf("profile.tlsFingerprint = %v, want %s", prof["tlsFingerprint"], testFingerprint)
 	}
 }
 
@@ -418,6 +418,21 @@ func TestAdd_NonInteractive_NoFile(t *testing.T) {
 	}
 }
 
+func TestAdd_EmptyAccessCodeRejected(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: ""}
+	_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", "SN001", "--insecure")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2 for empty access code, got %v", err)
+	}
+	if _, err := kc.Get(context.Background(), "polimero", "bambu-lan:myprinter:access-code"); err == nil {
+		t.Error("empty access code should not be stored")
+	}
+}
+
 func TestAdd_ConnectivityFailure_ExitsCode4(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
@@ -436,8 +451,38 @@ func TestAdd_ConnectivityFailure_ExitsCode4(t *testing.T) {
 		t.Errorf("expected exit 4, got %v", err)
 	}
 	// Keychain must be untouched
-	if _, err := kc.Get("polimero", "bambu-lan:myprinter:access-code"); err == nil {
+	if _, err := kc.Get(context.Background(), "polimero", "bambu-lan:myprinter:access-code"); err == nil {
 		t.Error("keychain should not have been written on connectivity failure")
+	}
+}
+
+func TestAdd_JSON_NetworkErrorIsSanitized(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "code"}
+	deps := printer.AddDeps{
+		KC:       kc,
+		Prompter: p,
+		GetDriver: func(name string) (driver.Driver, bool) {
+			return &stubDriver{err: apperr.New(4, "connection failed: dial tcp 192.0.2.10:8883: secret-token")}, true
+		},
+	}
+	out, err := runAddCmd(t, dir, deps,
+		"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", "SN001", "--output", "json")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit 4, got %v", err)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	errData := env["error"].(map[string]any)
+	if errData["message"] != "connection failed" {
+		t.Fatalf("error.message = %v, want connection failed", errData["message"])
+	}
+	if strings.Contains(out, "secret-token") || strings.Contains(out, "192.0.2.10:8883") {
+		t.Fatalf("raw transport detail leaked in output:\n%s", out)
 	}
 }
 
@@ -516,7 +561,7 @@ func TestAdd_RollbackOnFingerprintFail(t *testing.T) {
 		KC:       kc,
 		Prompter: p,
 		GetDriver: func(name string) (driver.Driver, bool) {
-			return &stubDriver{fingerprint: "sha256:aabbcc"}, true
+			return &stubDriver{fingerprint: testFingerprint}, true
 		},
 	}
 	_, err := runAddCmd(t, dir, deps,
@@ -525,7 +570,7 @@ func TestAdd_RollbackOnFingerprintFail(t *testing.T) {
 		t.Fatal("expected error from keychain failure")
 	}
 	// access code must be rolled back
-	if _, err := kc.inner.Get("polimero", "bambu-lan:myprinter:access-code"); err == nil {
+	if _, err := kc.inner.Get(context.Background(), "polimero", "bambu-lan:myprinter:access-code"); err == nil {
 		t.Error("access code should have been rolled back")
 	}
 }
@@ -536,14 +581,18 @@ type failOnSecondSetMock struct {
 	setCalls int
 }
 
-func (m *failOnSecondSetMock) Get(svc, acct string) (string, error) { return m.inner.Get(svc, acct) }
-func (m *failOnSecondSetMock) Delete(svc, acct string) error        { return m.inner.Delete(svc, acct) }
-func (m *failOnSecondSetMock) Set(svc, acct, secret string) error {
+func (m *failOnSecondSetMock) Get(ctx context.Context, svc, acct string) (string, error) {
+	return m.inner.Get(ctx, svc, acct)
+}
+func (m *failOnSecondSetMock) Delete(ctx context.Context, svc, acct string) error {
+	return m.inner.Delete(ctx, svc, acct)
+}
+func (m *failOnSecondSetMock) Set(ctx context.Context, svc, acct, secret string) error {
 	m.setCalls++
 	if m.setCalls >= 2 {
 		return fmt.Errorf("keychain unavailable")
 	}
-	return m.inner.Set(svc, acct, secret)
+	return m.inner.Set(ctx, svc, acct, secret)
 }
 
 func TestAdd_NameNormalisedToLowercase(t *testing.T) {

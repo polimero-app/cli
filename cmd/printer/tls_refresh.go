@@ -143,10 +143,12 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 	}
 
 	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
+	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	defer cancel()
 
 	if insecureFlag {
-		if delErr := deps.KC.Delete("polimero", kcFpAcct); delErr != nil && !errors.Is(delErr, keychain.ErrNotFound) {
-			return "", 0, name, apperr.Newf(1, "cannot delete TLS fingerprint from keychain: %s", delErr)
+		if delErr := deps.KC.Delete(ctx, "polimero", kcFpAcct); delErr != nil && !errors.Is(delErr, keychain.ErrNotFound) {
+			return "", 0, name, apperr.Wrap(1, "cannot delete TLS fingerprint from keychain", delErr)
 		}
 		p.Insecure = true
 		p.Updated = time.Now().UTC()
@@ -159,18 +161,18 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 		return "", 0, "", nil
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-	defer cancel()
-
 	start := time.Now()
 	fp, err := drv.CaptureFingerprint(ctx, p.Host, p.Serial)
 	durationMs := time.Since(start).Milliseconds()
 	if err != nil {
 		return "", 0, name, err
 	}
+	if !driver.ValidTLSFingerprint(fp) {
+		return "", 0, name, apperr.New(4, "driver returned invalid TLS fingerprint")
+	}
 
-	if setErr := deps.KC.Set("polimero", kcFpAcct, fp); setErr != nil {
-		return "", 0, name, apperr.Newf(3, "cannot store TLS fingerprint in keychain: %s", setErr)
+	if setErr := deps.KC.Set(ctx, "polimero", kcFpAcct, fp); setErr != nil {
+		return "", 0, name, apperr.Wrap(3, "cannot store TLS fingerprint in keychain", setErr)
 	}
 
 	p.Insecure = false
@@ -224,7 +226,7 @@ func writeTlsRefreshError(out, errOut io.Writer, format output.Format, err error
 	if format == output.FormatJSON {
 		errDetail := output.ErrDetail{
 			Code:    tlsRefreshErrorCode(err),
-			Message: err.Error(),
+			Message: tlsRefreshErrorMessage(err),
 		}
 		if profileName != "" {
 			errDetail.Details = map[string]any{"profile": profileName}
@@ -236,9 +238,27 @@ func writeTlsRefreshError(out, errOut io.Writer, format output.Format, err error
 			Meta:  output.Meta{Command: "printer tls refresh"},
 		})
 	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(errOut, "Error: %s\n", tlsRefreshErrorMessage(err))
 	}
 	return apperr.New(code, "")
+}
+
+func tlsRefreshErrorMessage(err error) string {
+	msg := err.Error()
+	switch tlsRefreshErrorCode(err) {
+	case "secret_error":
+		return "keychain operation failed"
+	case "connection_failed":
+		if strings.Contains(msg, "TLS connect failed") {
+			return "TLS connect failed"
+		}
+		if strings.Contains(msg, "driver returned invalid TLS fingerprint") {
+			return msg
+		}
+		return "TLS refresh failed"
+	default:
+		return msg
+	}
 }
 
 func tlsRefreshErrorCode(err error) string {

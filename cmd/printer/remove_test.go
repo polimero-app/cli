@@ -2,6 +2,7 @@ package printer_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,9 +60,9 @@ func seedProfile(t *testing.T, dir string, kc *keychain.Mock, name string, insec
 	if err := config.Save(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
-	_ = kc.Set("polimero", "bambu-lan:"+name+":access-code", "testcode")
+	_ = kc.Set(context.Background(), "polimero", "bambu-lan:"+name+":access-code", "testcode")
 	if !insecure {
-		_ = kc.Set("polimero", "bambu-lan:"+name+":tls-fingerprint", "sha256:aabbcc")
+		_ = kc.Set(context.Background(), "polimero", "bambu-lan:"+name+":tls-fingerprint", testFingerprint)
 	}
 }
 
@@ -85,10 +86,10 @@ func TestRemove_HappyPath_SecureProfile(t *testing.T) {
 		t.Error("profile still present after remove")
 	}
 	// Keychain entries must be gone
-	if _, err := kc.Get("polimero", "bambu-lan:garage-x1c:access-code"); err == nil {
+	if _, err := kc.Get(context.Background(), "polimero", "bambu-lan:garage-x1c:access-code"); err == nil {
 		t.Error("access code still in keychain")
 	}
-	if _, err := kc.Get("polimero", "bambu-lan:garage-x1c:tls-fingerprint"); err == nil {
+	if _, err := kc.Get(context.Background(), "polimero", "bambu-lan:garage-x1c:tls-fingerprint"); err == nil {
 		t.Error("TLS fingerprint still in keychain")
 	}
 }
@@ -227,7 +228,7 @@ func TestRemove_MissingAccessCode_Warning(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	seedProfile(t, dir, kc, "myprinter", false)
-	_ = kc.Delete("polimero", "bambu-lan:myprinter:access-code") // simulate missing entry
+	_ = kc.Delete(context.Background(), "polimero", "bambu-lan:myprinter:access-code") // simulate missing entry
 
 	_, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: &tty.Mock{Terminal: false}},
 		"myprinter", "--yes")
@@ -240,7 +241,7 @@ func TestRemove_JSON_Warnings(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	seedProfile(t, dir, kc, "myprinter", false)
-	_ = kc.Delete("polimero", "bambu-lan:myprinter:access-code")
+	_ = kc.Delete(context.Background(), "polimero", "bambu-lan:myprinter:access-code")
 
 	out, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: &tty.Mock{Terminal: false}},
 		"myprinter", "--yes", "--output", "json")
@@ -319,6 +320,34 @@ func TestRemove_JSON_EmptyWarningsArray(t *testing.T) {
 	}
 }
 
+func TestRemove_JSON_KeychainErrorIsSanitized(t *testing.T) {
+	dir := t.TempDir()
+	inner := keychain.NewMock()
+	seedProfile(t, dir, inner, "myprinter", false)
+	kc := &failingDeleteKeychain{inner: inner}
+
+	out, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: &tty.Mock{Terminal: false}},
+		"myprinter", "--yes", "--output", "json")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Fatalf("expected exit 3, got %v", err)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	errDetail := env["error"].(map[string]any)
+	if errDetail["code"] != "secret_error" {
+		t.Fatalf("error.code = %v, want secret_error", errDetail["code"])
+	}
+	if errDetail["message"] != "keychain operation failed" {
+		t.Fatalf("error.message = %v, want keychain operation failed", errDetail["message"])
+	}
+	if bytes.Contains([]byte(out), []byte("secret-token")) {
+		t.Fatalf("raw keychain detail leaked in output:\n%s", out)
+	}
+}
+
 func TestRemove_ConfigFilePath(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
@@ -341,17 +370,33 @@ type trackingKeychain struct {
 	deleteCalls int
 }
 
-func (k *trackingKeychain) Get(service, account string) (string, error) {
-	return k.inner.Get(service, account)
+func (k *trackingKeychain) Get(ctx context.Context, service, account string) (string, error) {
+	return k.inner.Get(ctx, service, account)
 }
 
-func (k *trackingKeychain) Set(service, account, secret string) error {
-	return k.inner.Set(service, account, secret)
+func (k *trackingKeychain) Set(ctx context.Context, service, account, secret string) error {
+	return k.inner.Set(ctx, service, account, secret)
 }
 
-func (k *trackingKeychain) Delete(service, account string) error {
+func (k *trackingKeychain) Delete(ctx context.Context, service, account string) error {
 	k.deleteCalls++
-	return k.inner.Delete(service, account)
+	return k.inner.Delete(ctx, service, account)
+}
+
+type failingDeleteKeychain struct {
+	inner *keychain.Mock
+}
+
+func (k *failingDeleteKeychain) Get(ctx context.Context, service, account string) (string, error) {
+	return k.inner.Get(ctx, service, account)
+}
+
+func (k *failingDeleteKeychain) Set(ctx context.Context, service, account, secret string) error {
+	return k.inner.Set(ctx, service, account, secret)
+}
+
+func (k *failingDeleteKeychain) Delete(context.Context, string, string) error {
+	return fmt.Errorf("dbus failure secret-token")
 }
 
 type trackingPrompter struct {

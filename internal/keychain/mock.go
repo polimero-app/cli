@@ -1,6 +1,9 @@
 package keychain
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // Mock is an in-memory Keychain implementation for use in tests.
 type Mock struct {
@@ -17,7 +20,10 @@ func NewMock() *Mock {
 
 func storeKey(service, account string) string { return service + "\x00" + account }
 
-func (m *Mock) Get(service, account string) (string, error) {
+func (m *Mock) Get(ctx context.Context, service, account string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	v, ok := m.data[storeKey(service, account)]
@@ -27,14 +33,20 @@ func (m *Mock) Get(service, account string) (string, error) {
 	return v, nil
 }
 
-func (m *Mock) Set(service, account, secret string) error {
+func (m *Mock) Set(ctx context.Context, service, account, secret string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data[storeKey(service, account)] = secret
 	return nil
 }
 
-func (m *Mock) Delete(service, account string) error {
+func (m *Mock) Delete(ctx context.Context, service, account string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k := storeKey(service, account)

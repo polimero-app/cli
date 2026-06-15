@@ -113,17 +113,19 @@ func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format
 	var warnings []removeWarning
 	accessCodeRemoved := false
 	tlsFingerprintRemoved := false
+	kcCtx, kcCancel := secretStoreContext(cmd.Context())
+	defer kcCancel()
 
 	// Delete access code (missing = warning, not fatal)
 	kcAcct := fmt.Sprintf("%s:%s:access-code", p.Driver, name)
-	if err := deps.KC.Delete("polimero", kcAcct); err != nil {
+	if err := deps.KC.Delete(kcCtx, "polimero", kcAcct); err != nil {
 		if errors.Is(err, keychain.ErrNotFound) {
 			warnings = append(warnings, removeWarning{
 				Code:    "access_code_not_found",
 				Message: "profile was removed, but no stored access code was found",
 			})
 		} else {
-			return apperr.Newf(1, "cannot delete access code from keychain: %s", err)
+			return apperr.Wrap(3, "cannot delete access code from keychain", err)
 		}
 	} else {
 		accessCodeRemoved = true
@@ -131,7 +133,7 @@ func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format
 
 	// Delete TLS fingerprint (missing on insecure profile = expected, no warning)
 	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
-	if err := deps.KC.Delete("polimero", kcFpAcct); err != nil {
+	if err := deps.KC.Delete(kcCtx, "polimero", kcFpAcct); err != nil {
 		if errors.Is(err, keychain.ErrNotFound) {
 			if !p.Insecure {
 				warnings = append(warnings, removeWarning{
@@ -140,7 +142,7 @@ func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format
 				})
 			}
 		} else {
-			return apperr.Newf(1, "cannot delete TLS fingerprint from keychain: %s", err)
+			return apperr.Wrap(3, "cannot delete TLS fingerprint from keychain", err)
 		}
 	} else {
 		tlsFingerprintRemoved = true
@@ -190,11 +192,33 @@ func writeRemoveError(out, errOut io.Writer, format output.Format, err error) er
 		_ = output.WriteEnvelope(out, output.Envelope{
 			OK:    false,
 			Data:  nil,
-			Error: &output.ErrDetail{Code: "error", Message: err.Error()},
+			Error: &output.ErrDetail{Code: removeErrorCode(err), Message: removeErrorMessage(err)},
 			Meta:  output.Meta{Command: "printer remove"},
 		})
 	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(errOut, "Error: %s\n", removeErrorMessage(err))
 	}
 	return apperr.New(code, "")
+}
+
+func removeErrorCode(err error) string {
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) {
+		return "error"
+	}
+	switch exitErr.Code {
+	case 2:
+		return "config_error"
+	case 3:
+		return "secret_error"
+	default:
+		return "error"
+	}
+}
+
+func removeErrorMessage(err error) string {
+	if removeErrorCode(err) == "secret_error" {
+		return "keychain operation failed"
+	}
+	return err.Error()
 }

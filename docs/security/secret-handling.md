@@ -38,6 +38,7 @@ File input:
 Requirements:
 
 - Regular file.
+- Symbolic links are rejected where the operating system supports no-follow opens.
 - Maximum size 4 KiB.
 - Current user can read it.
 - Owner-only permissions where POSIX-like modes are available.
@@ -73,15 +74,17 @@ The TLS fingerprint is stored as `sha256:<lowercase-hex-string>`.
 
 Profiles created with `--insecure` do not store a TLS fingerprint entry.
 
+Secret-store operations must accept `context.Context`. Commands with explicit timeouts must use those timeouts for secret-store reads or writes on the critical path; commands without a user-facing timeout must still use a bounded internal timeout for secret cleanup.
+
 ## TLS Fingerprint
 
 The TLS fingerprint is the SHA-256 digest of the DER-encoded leaf certificate, formatted as:
 
 ```text
-sha256:<lowercase-hex-string>
+sha256:<64 lowercase hex characters>
 ```
 
-The fingerprint is stored in the OS keychain and loaded on each network connection. If the presented certificate does not match the pinned fingerprint, the command fails with exit code `3`.
+The fingerprint is stored in the OS keychain and loaded on each network connection. If the stored fingerprint is empty, malformed, or does not match the presented certificate, the command fails with exit code `3`.
 
 ## Rotation
 
@@ -108,3 +111,4 @@ Sanitized errors may include:
 
 Sanitized errors must not include credential values or sensitive protocol payloads.
 
+Authentication, transport, protocol parse, and secret-store backend errors must be rendered as sanitized categories. Raw backend causes may be preserved for internal error wrapping but must not appear in human output, JSON output, logs, tests, or fixtures.

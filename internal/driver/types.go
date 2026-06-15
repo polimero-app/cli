@@ -2,6 +2,25 @@ package driver
 
 import "time"
 
+const tlsFingerprintPrefix = "sha256:"
+
+// ValidTLSFingerprint reports whether fingerprint matches the pinned TLS
+// fingerprint format used by Polimero: "sha256:" plus 64 lowercase hex chars.
+func ValidTLSFingerprint(fingerprint string) bool {
+	if len(fingerprint) != len(tlsFingerprintPrefix)+64 {
+		return false
+	}
+	if fingerprint[:len(tlsFingerprintPrefix)] != tlsFingerprintPrefix {
+		return false
+	}
+	for _, c := range fingerprint[len(tlsFingerprintPrefix):] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // Capabilities describes which optional operations a driver supports.
 type Capabilities struct {
 	Status           bool `json:"status"`

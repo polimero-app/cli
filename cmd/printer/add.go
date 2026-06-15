@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -159,34 +158,42 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 	} else {
 		return apperr.New(2, "non-interactive mode requires --access-code-file")
 	}
+	if accessCode == "" {
+		return apperr.New(2, "access code must not be empty")
+	}
 
 	kcAcct := fmt.Sprintf("%s:%s:access-code", driverName, name)
 	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", driverName, name)
 
 	var fingerprint string
+	opCtx, opCancel := context.WithTimeout(cmd.Context(), timeout)
+	defer opCancel()
 	if !insecure {
 		// 3. Connectivity check (TLS + MQTT CONNECT + CONNACK)
-		ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-		defer cancel()
-		fingerprint, err = drv.ConnectCheck(ctx, host, serial, accessCode, false, timeout)
+		fingerprint, err = drv.ConnectCheck(opCtx, host, serial, accessCode, false, timeout)
 		if err != nil {
 			return err // already an *apperr.ExitError with code 3 or 4
 		}
+		if !driver.ValidTLSFingerprint(fingerprint) {
+			return apperr.New(4, "driver returned invalid TLS fingerprint")
+		}
 
 		// 4. Store access code
-		if err := deps.KC.Set("polimero", kcAcct, accessCode); err != nil {
-			return apperr.Newf(3, "cannot store access code in keychain: %s", err)
+		if err := deps.KC.Set(opCtx, "polimero", kcAcct, accessCode); err != nil {
+			return apperr.Wrap(3, "cannot store access code in keychain", err)
 		}
 
 		// 5. Store TLS fingerprint; rollback access code on failure
-		if err := deps.KC.Set("polimero", kcFpAcct, fingerprint); err != nil {
-			_ = deps.KC.Delete("polimero", kcAcct)
-			return apperr.Newf(3, "cannot store TLS fingerprint in keychain: %s", err)
+		if err := deps.KC.Set(opCtx, "polimero", kcFpAcct, fingerprint); err != nil {
+			cleanupCtx, cleanupCancel := secretStoreContext(cmd.Context())
+			_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
+			cleanupCancel()
+			return apperr.Wrap(3, "cannot store TLS fingerprint in keychain", err)
 		}
 	} else {
 		// Insecure: store access code (no connectivity check, no fingerprint)
-		if err := deps.KC.Set("polimero", kcAcct, accessCode); err != nil {
-			return apperr.Newf(3, "cannot store access code in keychain: %s", err)
+		if err := deps.KC.Set(opCtx, "polimero", kcAcct, accessCode); err != nil {
+			return apperr.Wrap(3, "cannot store access code in keychain", err)
 		}
 	}
 
@@ -202,17 +209,21 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 		Updated:  now,
 	}
 	if err := cfg.AddProfile(name, p); err != nil {
-		_ = deps.KC.Delete("polimero", kcAcct)
+		cleanupCtx, cleanupCancel := secretStoreContext(cmd.Context())
+		_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
 		if !insecure {
-			_ = deps.KC.Delete("polimero", kcFpAcct)
+			_ = deps.KC.Delete(cleanupCtx, "polimero", kcFpAcct)
 		}
+		cleanupCancel()
 		return apperr.Newf(1, "cannot add profile: %s", err)
 	}
 	if err := config.Save(dir, cfg); err != nil {
-		_ = deps.KC.Delete("polimero", kcAcct)
+		cleanupCtx, cleanupCancel := secretStoreContext(cmd.Context())
+		_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
 		if !insecure {
-			_ = deps.KC.Delete("polimero", kcFpAcct)
+			_ = deps.KC.Delete(cleanupCtx, "polimero", kcFpAcct)
 		}
+		cleanupCancel()
 		return apperr.Newf(1, "cannot save config: %s", err)
 	}
 
@@ -272,13 +283,29 @@ func writeAddError(out, errOut io.Writer, format output.Format, err error) error
 		_ = output.WriteEnvelope(out, output.Envelope{
 			OK:    false,
 			Data:  nil,
-			Error: &output.ErrDetail{Code: addErrorCode(err), Message: err.Error()},
+			Error: &output.ErrDetail{Code: addErrorCode(err), Message: addErrorMessage(err)},
 			Meta:  output.Meta{Command: "printer add"},
 		})
 	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(errOut, "Error: %s\n", addErrorMessage(err))
 	}
 	return apperr.New(code, "")
+}
+
+func addErrorMessage(err error) string {
+	switch addErrorCode(err) {
+	case "auth_error":
+		return "MQTT authentication rejected"
+	case "network_error":
+		if strings.Contains(err.Error(), "connection cancelled") {
+			return "connection cancelled"
+		}
+		return "connection failed"
+	case "keychain_error":
+		return "keychain operation failed"
+	default:
+		return err.Error()
+	}
 }
 
 func addErrorCode(err error) string {
@@ -372,7 +399,13 @@ func validateSerial(serial string) error {
 }
 
 func readAccessCodeFile(path string) (string, error) {
-	info, err := os.Stat(path)
+	f, err := openAccessCodeFile(path)
+	if err != nil {
+		return "", apperr.Newf(2, "--access-code-file: %s", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
 	if err != nil {
 		return "", apperr.Newf(2, "--access-code-file: %s", err)
 	}
@@ -385,9 +418,12 @@ func readAccessCodeFile(path string) (string, error) {
 	if info.Mode().Perm()&0077 != 0 {
 		return "", apperr.Newf(2, "--access-code-file %q has insecure permissions: group or other access detected", path)
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(io.LimitReader(f, 4097))
 	if err != nil {
 		return "", apperr.Newf(2, "--access-code-file: %s", err)
+	}
+	if len(data) > 4096 {
+		return "", apperr.Newf(2, "--access-code-file %q exceeds 4 KiB limit", path)
 	}
 	return trimTrailingNewline(string(data)), nil
 }

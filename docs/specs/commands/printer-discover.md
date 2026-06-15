@@ -135,6 +135,8 @@ JSON error:
 
 - Do not connect to discovered printers.
 - Do not capture or log TLS data, access codes, or any secrets.
+- Human-readable output must sanitize control characters from unauthenticated mDNS fields before writing to a terminal.
+- Discovery transport errors must be sanitized before human or JSON output.
 - Sanitize all network and mDNS errors before display.
 
 ## Test Scenarios
