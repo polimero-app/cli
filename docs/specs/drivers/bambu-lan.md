@@ -23,7 +23,7 @@ Initial auth mode:
 Initial command support:
 
 - `printer discover`
-- `printer status`
+- `status`
 - `printer tls refresh`
 
 Out of scope:

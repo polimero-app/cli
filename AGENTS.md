@@ -6,7 +6,7 @@ Instructions for agents working in this repository.
 
 Polimero is a greenfield Go CLI for interacting with 3D printers through brand-specific drivers behind a stable command surface.
 
-Current phase: initial printer-management and network command slices are implemented (`printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer status`, `printer tls refresh`). Keep using accepted ADRs and specs to authorize new behavior before implementation.
+Current phase: initial printer-management and network command slices are implemented (`printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`). Keep using accepted ADRs and specs to authorize new behavior before implementation.
 
 Primary references:
 
@@ -36,7 +36,7 @@ Primary references:
 - Config format: versioned YAML loaded with `gopkg.in/yaml.v3` under `os.UserConfigDir`.
 - Secret storage: OS keychain first.
 - First driver: Bambu LAN.
-- First read command: `polimero printer status <name>`.
+- First read command: `polimero status <name>`.
 
 ## Security Requirements
 

@@ -15,13 +15,13 @@ The implementation stack is Go with Cobra for CLI structure and `gopkg.in/yaml.v
 - Supported operating systems: Linux, macOS, and Windows.
 - Development model: ADR and command spec required before implementation.
 - First driver: Bambu LAN.
-- First read command: `polimero printer status <name>`.
+- First read command: `polimero status <name>`.
 - First profile commands: `printer add`, `printer list`, and `printer remove`.
-- Implemented command set: `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer status`, `printer tls refresh`.
+- Implemented command set: `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`.
 - Config format: versioned YAML at `polimero/polimero.yaml` under `os.UserConfigDir`; profiles stored as a map keyed by name.
 - Secret storage: OS keychain first; fail closed if unavailable.
 - Keychain naming scheme: service `polimero`; accounts `<driver>:<name>:access-code` and `<driver>:<name>:tls-fingerprint`.
-- TLS policy: Trust On First Use (TOFU) per ADR 0007; `--insecure` flag available on `printer add`, `printer status`, and `printer tls refresh`; fingerprint stored in OS keychain.
+- TLS policy: Trust On First Use (TOFU) per ADR 0007; `--insecure` flag available on `printer add`, `status`, and `printer tls refresh`; fingerprint stored in OS keychain.
 - Output: human-readable default plus stable JSON envelope through `--output json`; `--output` is a global persistent flag on the root command.
 - `durationMs` in JSON meta: network commands only.
 - Discovery: explicit opt-in only; implemented as `printer discover`.
@@ -147,8 +147,8 @@ Initial command specs:
 - `docs/specs/commands/printer-discover.md`
 - `docs/specs/commands/printer-list.md`
 - `docs/specs/commands/printer-remove.md`
-- `docs/specs/commands/printer-status.md`
 - `docs/specs/commands/printer-tls-refresh.md`
+- `docs/specs/commands/status.md`
 
 Initial driver and security docs:
 

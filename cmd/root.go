@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/polimero-app/cli/cmd/printer"
+	"github.com/polimero-app/cli/cmd/status"
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/spf13/cobra"
 )
@@ -21,6 +22,7 @@ func NewRoot() *cobra.Command {
 	root.PersistentFlags().String("output", "human", "output format: human or json")
 	root.PersistentFlags().BoolP("verbose", "v", false, "show detailed progress output")
 	root.AddCommand(printer.Command())
+	root.AddCommand(status.Command())
 	return root
 }
 

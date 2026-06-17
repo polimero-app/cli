@@ -1,17 +1,19 @@
-# Command Spec: `printer status`
+# Command Spec: `status`
 
 ## Status
 
-Superseded by [status.md](status.md) per [ADR 0010](../../adr/0010-promote-status-to-top-level.md).
+Accepted
 
 ## Purpose
 
 Query current status from a configured printer through the driver-neutral status contract.
 
+This is a top-level action command that consumes printer profiles managed by `printer`, following ADR 0008 and ADR 0010.
+
 ## Syntax
 
 ```text
-polimero printer status <name> [--timeout <duration>] [--insecure] [--output <format>]
+polimero status <name> [--timeout <duration>] [--insecure] [--output <format>]
 ```
 
 ## Arguments
@@ -142,7 +144,7 @@ JSON success example:
   },
   "error": null,
   "meta": {
-    "command": "printer status",
+    "command": "status",
     "durationMs": 148
   }
 }
@@ -156,14 +158,14 @@ JSON timeout example:
   "data": null,
   "error": {
     "code": "timeout",
-    "message": "printer status request timed out",
+    "message": "status request timed out",
     "details": {
       "profile": "garage-x1c",
       "timeout": "10s"
     }
   },
   "meta": {
-    "command": "printer status"
+    "command": "status"
   }
 }
 ```

@@ -1,4 +1,4 @@
-package printer
+package status
 
 import (
 	"context"
@@ -15,26 +15,28 @@ import (
 	"github.com/polimero-app/cli/internal/drivers"
 	"github.com/polimero-app/cli/internal/keychain"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/profile"
 	"github.com/spf13/cobra"
 )
 
-// StatusDeps holds injectable dependencies for the printer status command.
-type StatusDeps struct {
+// Deps holds injectable dependencies for the status command.
+type Deps struct {
 	KC        keychain.Keychain
 	GetDriver func(string) (driver.Driver, bool)
 	Log       *slog.Logger
 }
 
-func statusCommand() *cobra.Command {
-	return StatusCommandWithDeps(StatusDeps{
+// Command returns the top-level "status" cobra command.
+func Command() *cobra.Command {
+	return CommandWithDeps(Deps{
 		KC:        keychain.NewReal(),
 		GetDriver: drivers.Get,
 		Log:       slog.Default(),
 	})
 }
 
-// StatusCommandWithDeps constructs the "status" cobra command with injected dependencies.
-func StatusCommandWithDeps(deps StatusDeps) *cobra.Command {
+// CommandWithDeps constructs the "status" cobra command with injected dependencies.
+func CommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
 		timeout  string
 		insecure bool
@@ -45,10 +47,10 @@ func StatusCommandWithDeps(deps StatusDeps) *cobra.Command {
 		Short: "Show the current status of a printer",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return writeStatusUsageError(cmd, "profile name is required")
+				return writeUsageError(cmd, "profile name is required")
 			}
 			if len(args) > 1 {
-				return writeStatusUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
+				return writeUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
 			return runStatus(cmd, args[0], flags.timeout, flags.insecure, deps)
 		},
@@ -58,16 +60,16 @@ func StatusCommandWithDeps(deps StatusDeps) *cobra.Command {
 	return cmd
 }
 
-func writeStatusUsageError(cmd *cobra.Command, message string) error {
+func writeUsageError(cmd *cobra.Command, message string) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
 		return apperr.New(2, fmtErr.Error())
 	}
-	return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), statusErrorContext{})
+	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), errorContext{})
 }
 
-func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps StatusDeps) error {
+func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -79,32 +81,32 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag boo
 	verbose := verboseFlag && format == output.FormatHuman
 	result, durationMs, driverName, errCtx, err := doStatus(cmd, name, timeoutFlag, insecureFlag, verbose, deps)
 	if err != nil {
-		return writeStatusError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err, errCtx)
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err, errCtx)
 	}
-	return writeStatusSuccess(cmd.OutOrStdout(), format, name, driverName, result, durationMs)
+	return writeSuccess(cmd.OutOrStdout(), format, name, driverName, result, durationMs)
 }
 
-type statusErrorContext struct {
+type errorContext struct {
 	profile string
 	timeout string
 }
 
-func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbose bool, deps StatusDeps) (*driver.StatusResult, int64, string, statusErrorContext, error) {
-	if err := validateProfileName(name); err != nil {
-		return nil, 0, "", statusErrorContext{}, err
+func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbose bool, deps Deps) (*driver.StatusResult, int64, string, errorContext, error) {
+	if err := profile.ValidateName(name); err != nil {
+		return nil, 0, "", errorContext{}, err
 	}
 
 	dir, err := config.ConfigDir()
 	if err != nil {
-		return nil, 0, "", statusErrorContext{}, apperr.Newf(1, "cannot resolve config directory: %s", err)
+		return nil, 0, "", errorContext{}, apperr.Newf(1, "cannot resolve config directory: %s", err)
 	}
 	cfg, err := config.Open(dir)
 	if err != nil {
-		return nil, 0, "", statusErrorContext{}, apperr.Newf(2, "cannot load config: %s", err)
+		return nil, 0, "", errorContext{}, apperr.Newf(2, "cannot load config: %s", err)
 	}
 	p, ok := cfg.GetProfile(name)
 	if !ok {
-		return nil, 0, "", statusErrorContext{}, apperr.Newf(2, "printer profile %q not found", name)
+		return nil, 0, "", errorContext{}, apperr.Newf(2, "printer profile %q not found", name)
 	}
 
 	timeoutStr := p.Timeout
@@ -116,12 +118,12 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbos
 	}
 	timeout, err := time.ParseDuration(timeoutStr)
 	if err != nil {
-		return nil, 0, "", statusErrorContext{profile: name, timeout: timeoutStr}, apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
+		return nil, 0, "", errorContext{profile: name, timeout: timeoutStr}, apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
 	}
 	if timeout <= 0 {
-		return nil, 0, "", statusErrorContext{profile: name, timeout: timeoutStr}, apperr.Newf(2, "--timeout must be greater than zero")
+		return nil, 0, "", errorContext{profile: name, timeout: timeoutStr}, apperr.Newf(2, "--timeout must be greater than zero")
 	}
-	errCtx := statusErrorContext{profile: name, timeout: timeout.String()}
+	errCtx := errorContext{profile: name, timeout: timeout.String()}
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 	defer cancel()
 
@@ -180,10 +182,10 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbos
 		return nil, 0, "", errCtx, err
 	}
 	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Response received (%dms).", durationMs))
-	return result, durationMs, p.Driver, statusErrorContext{}, nil
+	return result, durationMs, p.Driver, errorContext{}, nil
 }
 
-func writeStatusSuccess(w io.Writer, format output.Format, name, driverName string, result *driver.StatusResult, durationMs int64) error {
+func writeSuccess(w io.Writer, format output.Format, name, driverName string, result *driver.StatusResult, durationMs int64) error {
 	if result == nil {
 		return fmt.Errorf("driver returned nil status result")
 	}
@@ -203,7 +205,7 @@ func writeStatusSuccess(w io.Writer, format output.Format, name, driverName stri
 			OK:    true,
 			Data:  data,
 			Error: nil,
-			Meta:  output.Meta{Command: "printer status", DurationMs: &dm},
+			Meta:  output.Meta{Command: "status", DurationMs: &dm},
 		})
 	}
 	lines := []string{
@@ -259,19 +261,19 @@ func writeStatusSuccess(w io.Writer, format output.Format, name, driverName stri
 	return nil
 }
 
-func writeStatusError(out, errOut io.Writer, format output.Format, err error, errCtx statusErrorContext) error {
+func writeError(out, errOut io.Writer, format output.Format, err error, errCtx errorContext) error {
 	var exitErr *apperr.ExitError
 	code := 1
 	if errors.As(err, &exitErr) {
 		code = exitErr.Code
 	}
-	errDetail := statusErrorDetail(err, errCtx)
+	errDetail := buildErrorDetail(err, errCtx)
 	if format == output.FormatJSON {
 		_ = output.WriteEnvelope(out, output.Envelope{
 			OK:    false,
 			Data:  nil,
 			Error: &errDetail,
-			Meta:  output.Meta{Command: "printer status"},
+			Meta:  output.Meta{Command: "status"},
 		})
 	} else {
 		_, _ = fmt.Fprintf(errOut, "Error: %s\n", errDetail.Message)
@@ -279,11 +281,11 @@ func writeStatusError(out, errOut io.Writer, format output.Format, err error, er
 	return apperr.New(code, "")
 }
 
-func statusErrorDetail(err error, errCtx statusErrorContext) output.ErrDetail {
-	detail := output.ErrDetail{Code: statusErrorCode(err), Message: statusErrorMessage(err)}
-	if isStatusTimeout(err) {
+func buildErrorDetail(err error, errCtx errorContext) output.ErrDetail {
+	detail := output.ErrDetail{Code: errorCode(err), Message: errorMessage(err)}
+	if isTimeout(err) {
 		detail.Code = "timeout"
-		detail.Message = "printer status request timed out"
+		detail.Message = "status request timed out"
 		if errCtx.profile != "" || errCtx.timeout != "" {
 			detail.Details = map[string]any{}
 			if errCtx.profile != "" {
@@ -297,10 +299,10 @@ func statusErrorDetail(err error, errCtx statusErrorContext) output.ErrDetail {
 	return detail
 }
 
-func statusErrorMessage(err error) string {
+func errorMessage(err error) string {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
-	switch statusErrorCode(err) {
+	switch errorCode(err) {
 	case "authentication_failed":
 		switch {
 		case strings.Contains(msg, "MQTT authentication rejected"):
@@ -315,7 +317,7 @@ func statusErrorMessage(err error) string {
 	case "connection_failed":
 		switch {
 		case strings.Contains(lower, "cancelled"):
-			return "printer status request cancelled"
+			return "status request cancelled"
 		case strings.Contains(msg, "invalid status report"):
 			return "invalid status report"
 		case strings.Contains(msg, "status subscription failed"):
@@ -325,14 +327,14 @@ func statusErrorMessage(err error) string {
 		case strings.Contains(msg, "connection failed"):
 			return "connection failed"
 		default:
-			return "printer status request failed"
+			return "status request failed"
 		}
 	default:
 		return msg
 	}
 }
 
-func statusErrorCode(err error) string {
+func errorCode(err error) string {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) {
 		return "error"
@@ -355,7 +357,7 @@ func statusErrorCode(err error) string {
 	}
 }
 
-func isStatusTimeout(err error) bool {
+func isTimeout(err error) bool {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
 		return false

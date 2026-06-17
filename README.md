@@ -8,7 +8,7 @@ The project is intentionally ADR and spec driven. Initial commands are implement
 
 This repository contains the ADR/spec foundation plus the first implemented printer-management and read-command slices.
 
-Implemented commands currently include `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer status`, and `printer tls refresh`.
+Implemented commands currently include `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, and top-level `status`.
 
 ## Key Decisions
 
@@ -17,7 +17,7 @@ Implemented commands currently include `printer add`, `printer list`, `printer r
 - CLI stack: Cobra
 - License: AGPL-3.0-only
 - First driver: Bambu LAN
-- First read command: `polimero printer status <name>`
+- First read command: `polimero status <name>`
 - Secret storage: OS keychain first
 - Config storage: versioned YAML under `os.UserConfigDir`
 

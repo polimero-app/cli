@@ -14,10 +14,10 @@ One option is to extend `printer` with further subcommands (`printer camera stre
 
 Action commands that operate on a named printer profile are placed at the top level of the CLI, not under `printer`.
 
-- `printer` owns: `add`, `remove`, `list`, `status`, `discover`, `tls refresh`, `drivers`.
-- Top-level action groups own operations against a running printer: `camera`, and future groups such as `jobs` and `files`.
+- `printer` owns: `add`, `remove`, `list`, `discover`, `tls refresh`, `drivers`.
+- Top-level action groups own operations against a running printer: `status`, `camera`, and future groups such as `jobs` and `files`.
 
-Each top-level action command takes a `<name>` positional argument that resolves a printer profile using the same config and secret loading path as `printer status`. The driver contract and secrets bundle are unchanged.
+Each top-level action command takes a `<name>` positional argument that resolves a printer profile using the same config and secret loading path as `status`. The driver contract and secrets bundle are unchanged.
 
 The first top-level action group is `camera`, with the initial subcommand `camera stream`.
 

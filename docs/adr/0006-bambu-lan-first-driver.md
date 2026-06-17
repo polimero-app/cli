@@ -26,7 +26,7 @@ Initial scope:
 Initial command support:
 
 - `printer add` (mandatory TLS connection, TOFU fingerprint)
-- `printer status`
+- `status`
 - `printer tls refresh`
 
 Later Bambu LAN file listing, download, and upload behavior is covered by ADR 0009 and the Bambu LAN driver spec. File upload stores files only and does not authorize print start.

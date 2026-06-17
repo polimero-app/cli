@@ -18,6 +18,9 @@ func TestNewRoot_HasExpectedCommands(t *testing.T) {
 	if !names["printer"] {
 		t.Error("expected 'printer' subcommand")
 	}
+	if !names["status"] {
+		t.Error("expected 'status' subcommand")
+	}
 }
 
 func TestNewRoot_HasGlobalFlags(t *testing.T) {
@@ -42,12 +45,12 @@ func TestNewRoot_UnknownCommand_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestNewRoot_PrinterStatus_MissingProfile_ReturnsExitCode2(t *testing.T) {
+func TestNewRoot_Status_MissingProfile_ReturnsExitCode2(t *testing.T) {
 	root := cmd.NewRoot()
 	buf := &bytes.Buffer{}
 	root.SetOut(buf)
 	root.SetErr(buf)
-	root.SetArgs([]string{"printer", "status"})
+	root.SetArgs([]string{"status"})
 	err := root.Execute()
 	if err == nil {
 		t.Fatal("expected error for missing profile name")
