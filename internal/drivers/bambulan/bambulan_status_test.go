@@ -346,6 +346,325 @@ func TestParseReport_LayerNumPreferredOverLegacyMcLayerNum(t *testing.T) {
 	}
 }
 
+func TestParseReport_ExtendedFields_Fans(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"nozzle_target_temper":220.0,
+		"bed_temper":60.0,"bed_target_temper":60.0,
+		"chamber_temper":35.0,
+		"subtask_name":"test.3mf",
+		"mc_percent":50,"layer_num":10,"total_layer_num":100,
+		"hms":[],
+		"cooling_fan_speed":"15",
+		"heatbreak_fan_speed":"10",
+		"big_fan1_speed":"7",
+		"big_fan2_speed":"4"
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Fans == nil {
+		t.Fatal("expected fans to be set")
+	}
+	if result.Fans["partCooling"] != 100 {
+		t.Errorf("partCooling = %d, want 100", result.Fans["partCooling"])
+	}
+	if result.Fans["heatbreak"] != 66 {
+		t.Errorf("heatbreak = %d, want 66", result.Fans["heatbreak"])
+	}
+	if result.Fans["auxiliary"] != 46 {
+		t.Errorf("auxiliary = %d, want 46", result.Fans["auxiliary"])
+	}
+	if result.Fans["chamber"] != 26 {
+		t.Errorf("chamber = %d, want 26", result.Fans["chamber"])
+	}
+}
+
+func TestParseReport_ExtendedFields_TimeAndSpeed(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"nozzle_target_temper":220.0,
+		"bed_temper":60.0,"bed_target_temper":60.0,
+		"mc_percent":50,"layer_num":10,"total_layer_num":100,
+		"hms":[],
+		"mc_remaining_time":90,
+		"spd_lvl":2
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TimeEstimates == nil {
+		t.Fatal("expected time estimates")
+	}
+	if result.TimeEstimates.RemainingSeconds == nil || *result.TimeEstimates.RemainingSeconds != 5400 {
+		t.Errorf("RemainingSeconds = %v, want 5400", result.TimeEstimates.RemainingSeconds)
+	}
+	if result.SpeedLevel == nil || *result.SpeedLevel != "standard" {
+		t.Errorf("SpeedLevel = %v, want standard", result.SpeedLevel)
+	}
+}
+
+func TestParseReport_ExtendedFields_WifiAndLights(t *testing.T) {
+	data := []byte(`{
+		"print":{
+			"gcode_state":"IDLE",
+			"nozzle_temper":24.0,"nozzle_target_temper":0,
+			"bed_temper":23.0,"bed_target_temper":0,
+			"mc_percent":0,
+			"hms":[],
+			"wifi_signal":"-45"
+		},
+		"lights_report":[{"node":"chamber_light","mode":"on"}]
+	}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Wifi == nil {
+		t.Fatal("expected wifi data")
+	}
+	if result.Wifi.SignalDbm != -45 {
+		t.Errorf("SignalDbm = %d, want -45", result.Wifi.SignalDbm)
+	}
+	if result.Lights == nil {
+		t.Fatal("expected lights data")
+	}
+	if result.Lights["chamber_light"] != "on" {
+		t.Errorf("chamber_light = %q, want on", result.Lights["chamber_light"])
+	}
+}
+
+func TestParseReport_ExtendedFields_Stage(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"nozzle_target_temper":220.0,
+		"bed_temper":60.0,"bed_target_temper":60.0,
+		"mc_percent":50,"layer_num":10,"total_layer_num":100,
+		"hms":[],
+		"stg_cur":2
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Stage == nil || *result.Stage != "heatbed_preheating" {
+		t.Errorf("Stage = %v, want heatbed_preheating", result.Stage)
+	}
+}
+
+func TestParseReport_ExtendedFields_Timelapse(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"nozzle_target_temper":220.0,
+		"bed_temper":60.0,"bed_target_temper":60.0,
+		"mc_percent":50,"layer_num":10,"total_layer_num":100,
+		"hms":[],
+		"ipcam_record_timelapse":"enable"
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Timelapse == nil {
+		t.Fatal("expected timelapse data")
+	}
+	if !result.Timelapse.Recording {
+		t.Error("expected timelapse recording to be true")
+	}
+}
+
+func TestParseReport_ExtendedFields_GcodePosition(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"nozzle_target_temper":220.0,
+		"bed_temper":60.0,"bed_target_temper":60.0,
+		"mc_percent":50,"layer_num":10,"total_layer_num":100,
+		"hms":[],
+		"cur_line_num":"48201",
+		"total_line_num":"112400"
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.GcodePosition == nil {
+		t.Fatal("expected gcode position data")
+	}
+	if result.GcodePosition.CurrentLine != 48201 {
+		t.Errorf("CurrentLine = %d, want 48201", result.GcodePosition.CurrentLine)
+	}
+	if result.GcodePosition.TotalLines != 112400 {
+		t.Errorf("TotalLines = %d, want 112400", result.GcodePosition.TotalLines)
+	}
+}
+
+func TestParseReport_ExtendedFields_AMS(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"nozzle_target_temper":220.0,
+		"bed_temper":60.0,"bed_target_temper":60.0,
+		"mc_percent":50,"layer_num":10,"total_layer_num":100,
+		"hms":[],
+		"ams":{
+			"ams":[{
+				"id":"0",
+				"humidity":"25",
+				"temp":"28.5",
+				"tray":[
+					{"id":"0","tray_type":"PLA","tray_color":"FF0000","remain":85,"nozzle_temp_min":190,"nozzle_temp_max":230},
+					{"id":"1","tray_type":"PETG","tray_color":"000000","remain":40,"nozzle_temp_min":220,"nozzle_temp_max":260},
+					{"id":"2","tray_type":"","tray_color":"","remain":null,"nozzle_temp_min":null,"nozzle_temp_max":null},
+					{"id":"3"}
+				]
+			}],
+			"ams_exist_bits":"1",
+			"tray_now":"0"
+		}
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Extensions == nil {
+		t.Fatal("expected extensions")
+	}
+	ext, ok := result.Extensions["bambu-lan"]
+	if !ok {
+		t.Fatal("expected bambu-lan extension")
+	}
+	bambu, ok := ext.(*driver.BambuExtension)
+	if !ok {
+		t.Fatalf("bambu-lan extension type = %T, want *driver.BambuExtension", ext)
+	}
+	if bambu.AMS == nil {
+		t.Fatal("expected AMS data")
+	}
+	if len(bambu.AMS.Units) != 1 {
+		t.Fatalf("AMS units = %d, want 1", len(bambu.AMS.Units))
+	}
+	unit := bambu.AMS.Units[0]
+	if unit.ID != 0 {
+		t.Errorf("unit.ID = %d, want 0", unit.ID)
+	}
+	if unit.Humidity == nil || *unit.Humidity != 25 {
+		t.Errorf("unit.Humidity = %v, want 25", unit.Humidity)
+	}
+	if unit.Temperature == nil || *unit.Temperature != 28.5 {
+		t.Errorf("unit.Temperature = %v, want 28.5", unit.Temperature)
+	}
+	if len(unit.Trays) != 4 {
+		t.Fatalf("trays = %d, want 4", len(unit.Trays))
+	}
+	tray0 := unit.Trays[0]
+	if tray0.FilamentType == nil || *tray0.FilamentType != "PLA" {
+		t.Errorf("tray0.FilamentType = %v, want PLA", tray0.FilamentType)
+	}
+	if tray0.Color == nil || *tray0.Color != "FF0000" {
+		t.Errorf("tray0.Color = %v, want FF0000", tray0.Color)
+	}
+	if tray0.RemainingPercent == nil || *tray0.RemainingPercent != 85 {
+		t.Errorf("tray0.RemainingPercent = %v, want 85", tray0.RemainingPercent)
+	}
+	if tray0.NozzleTempMin == nil || *tray0.NozzleTempMin != 190 {
+		t.Errorf("tray0.NozzleTempMin = %v, want 190", tray0.NozzleTempMin)
+	}
+	// Tray 3 should have nil filament type (empty)
+	tray3 := unit.Trays[3]
+	if tray3.FilamentType != nil {
+		t.Errorf("tray3.FilamentType = %v, want nil", tray3.FilamentType)
+	}
+}
+
+func TestParseReport_ExtendedFields_PrintMeta(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"nozzle_target_temper":220.0,
+		"bed_temper":60.0,"bed_target_temper":60.0,
+		"mc_percent":50,"layer_num":10,"total_layer_num":100,
+		"hms":[],
+		"gcode_file":"bracket.gcode",
+		"subtask_name":"bracket.3mf",
+		"file_size":14893261,
+		"nozzle_diameter":"0.4",
+		"bed_type":"4"
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.PrintMeta == nil {
+		t.Fatal("expected print meta")
+	}
+	if result.PrintMeta.FileName != "bracket.gcode" {
+		t.Errorf("FileName = %q, want bracket.gcode", result.PrintMeta.FileName)
+	}
+	if result.PrintMeta.FileSize == nil || *result.PrintMeta.FileSize != 14893261 {
+		t.Errorf("FileSize = %v, want 14893261", result.PrintMeta.FileSize)
+	}
+	if result.PrintMeta.NozzleDiameter == nil || *result.PrintMeta.NozzleDiameter != 0.4 {
+		t.Errorf("NozzleDiameter = %v, want 0.4", result.PrintMeta.NozzleDiameter)
+	}
+	if result.PrintMeta.BedType == nil || *result.PrintMeta.BedType != "textured_pei" {
+		t.Errorf("BedType = %v, want textured_pei", result.PrintMeta.BedType)
+	}
+}
+
+func TestParseReport_ExtendedFields_NoExtendedData(t *testing.T) {
+	// A minimal report should produce nil extended fields (not empty structs).
+	data := []byte(`{"print":{
+		"gcode_state":"IDLE",
+		"nozzle_temper":24.0,"nozzle_target_temper":0,
+		"bed_temper":23.0,"bed_target_temper":0,
+		"mc_percent":0,
+		"hms":[]
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Fans != nil {
+		t.Errorf("expected nil Fans, got %v", result.Fans)
+	}
+	if result.TimeEstimates != nil {
+		t.Errorf("expected nil TimeEstimates, got %v", result.TimeEstimates)
+	}
+	if result.SpeedLevel != nil {
+		t.Errorf("expected nil SpeedLevel, got %v", result.SpeedLevel)
+	}
+	if result.Wifi != nil {
+		t.Errorf("expected nil Wifi, got %v", result.Wifi)
+	}
+	if result.Lights != nil {
+		t.Errorf("expected nil Lights, got %v", result.Lights)
+	}
+	if result.PrintMeta != nil {
+		t.Errorf("expected nil PrintMeta, got %v", result.PrintMeta)
+	}
+	if result.Stage != nil {
+		t.Errorf("expected nil Stage, got %v", result.Stage)
+	}
+	if result.Timelapse != nil {
+		t.Errorf("expected nil Timelapse, got %v", result.Timelapse)
+	}
+	if result.GcodePosition != nil {
+		t.Errorf("expected nil GcodePosition, got %v", result.GcodePosition)
+	}
+	if result.Extensions != nil {
+		t.Errorf("expected nil Extensions, got %v", result.Extensions)
+	}
+}
+
 func TestParseReport_InvalidJSON(t *testing.T) {
 	_, err := parseReport([]byte(`not json`))
 	if err == nil {

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -369,7 +370,13 @@ func mapState(gcodeState string) string {
 
 // bambuReport is the top-level shape of a Bambu LAN pushall report.
 type bambuReport struct {
-	Print *bambuPrint `json:"print"`
+	Print        *bambuPrint        `json:"print"`
+	LightsReport []bambuLightReport `json:"lights_report"`
+}
+
+type bambuLightReport struct {
+	Node string `json:"node"`
+	Mode string `json:"mode"`
 }
 
 type bambuPrint struct {
@@ -387,6 +394,67 @@ type bambuPrint struct {
 	TotalLayerNum      *int            `json:"total_layer_num"`
 	McPrintErrorCode   *rawValueString `json:"mc_print_error_code"`
 	HMS                []bambuHMS      `json:"hms"`
+
+	// Extended fields for --detailed status.
+	BigFan1Speed    *rawValueString `json:"big_fan1_speed"`
+	BigFan2Speed    *rawValueString `json:"big_fan2_speed"`
+	CoolingFanSpeed *rawValueString `json:"cooling_fan_speed"`
+	HeatbreakFanSpeed *rawValueString `json:"heatbreak_fan_speed"`
+
+	McRemainingTime *int    `json:"mc_remaining_time"`
+	PrintedTime     *int    `json:"mc_print_line_number"` // not used; see below
+	SpdLvl          *int    `json:"spd_lvl"`
+	SpdMag          *int    `json:"spd_mag"`
+	WifiSignal      *rawValueString `json:"wifi_signal"`
+	GcodeFilePreparePercent *int `json:"gcode_file_prepare_percent"`
+
+	Stg    *int `json:"stg"`
+	StgCur *int `json:"stg_cur"`
+
+	NozzleDiameter    *rawValueString `json:"nozzle_diameter"`
+	TotalLayerCount   *int            `json:"total_layer_num_bak"` // not used; total_layer_num preferred
+	FileSize          *int            `json:"file_size"`           // not present in all FW; treat as optional
+
+	TimelapseStat *string `json:"ipcam_record_timelapse"`
+
+	// Time fields.
+	PrintRealTime *int `json:"mc_print_real_time"` // not always present
+	PrepareTime   *int `json:"mc_prepare_time"`    // not always present
+
+	// AMS data (nested inside print in the pushall response).
+	AMS *bambuAMS `json:"ams"`
+
+	// Z position.
+	ZOffset *float64 `json:"z_offset"` // not the current Z; see below
+
+	// G-code line tracking.
+	CurLineNum   *rawValueString `json:"cur_line_num"`
+	TotalLineNum *rawValueString `json:"total_line_num"`
+
+	// BedType (plate type identifier).
+	BedType *rawValueString `json:"bed_type"`
+}
+
+type bambuAMS struct {
+	AMS          []bambuAMSUnit `json:"ams"`
+	AMSExistBits *rawValueString `json:"ams_exist_bits"`
+	TrayNow      *rawValueString `json:"tray_now"`
+}
+
+type bambuAMSUnit struct {
+	ID        rawValueString `json:"id"`
+	Humidity  rawValueString `json:"humidity"`
+	Temp      rawValueString `json:"temp"`
+	Tray      []bambuAMSTray `json:"tray"`
+}
+
+type bambuAMSTray struct {
+	ID             rawValueString `json:"id"`
+	TrayType       *string        `json:"tray_type"`
+	TrayColor      *string        `json:"tray_color"`
+	Remain         *int           `json:"remain"`
+	NozzleTempMin  *int           `json:"nozzle_temp_min"`
+	NozzleTempMax  *int           `json:"nozzle_temp_max"`
 }
 
 type bambuHMS struct {
@@ -443,6 +511,19 @@ func parseReport(data []byte) (*driver.StatusResult, error) {
 		Capabilities: driver.Capabilities{Status: true},
 	}
 	result.Job = mapJob(p)
+
+	// Extended fields.
+	result.Fans = mapFans(p)
+	result.TimeEstimates = mapTimeEstimates(p)
+	result.SpeedLevel = mapSpeedLevel(p)
+	result.Wifi = mapWifi(p)
+	result.Lights = mapLights(rep.LightsReport)
+	result.PrintMeta = mapPrintMeta(p)
+	result.Stage = mapStage(p)
+	result.Timelapse = mapTimelapse(p)
+	result.GcodePosition = mapGcodePosition(p)
+	result.Extensions = mapExtensions(p)
+
 	return result, nil
 }
 
@@ -541,6 +622,312 @@ func mapHMSErrors(p *bambuPrint) []driver.StatusError {
 		}
 	}
 	return errs
+}
+
+// rawToInt parses a rawValueString as an integer, returning nil if empty or unparseable.
+func rawToInt(v *rawValueString) *int {
+	if v == nil {
+		return nil
+	}
+	s := strings.TrimSpace(string(*v))
+	if s == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return nil
+	}
+	return &n
+}
+
+// rawToFloat parses a rawValueString as a float64, returning nil if empty or unparseable.
+func rawToFloat(v *rawValueString) *float64 {
+	if v == nil {
+		return nil
+	}
+	s := strings.TrimSpace(string(*v))
+	if s == "" {
+		return nil
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return nil
+	}
+	return &f
+}
+
+// fanSpeedPercent converts a Bambu fan speed value (string "0"-"15" or "0"-"100")
+// to a percentage 0-100. Bambu uses a 0-15 scale for some fan fields.
+func fanSpeedPercent(v *rawValueString) *int {
+	raw := rawToInt(v)
+	if raw == nil {
+		return nil
+	}
+	n := *raw
+	if n < 0 {
+		n = 0
+	}
+	// Bambu reports fan speed as a string "0"-"15" mapped to percentage,
+	// or sometimes directly as percentage 0-100.
+	if n <= 15 {
+		pct := n * 100 / 15
+		return &pct
+	}
+	if n > 100 {
+		n = 100
+	}
+	return &n
+}
+
+func mapFans(p *bambuPrint) driver.Fans {
+	if p == nil {
+		return nil
+	}
+	fans := driver.Fans{}
+	if v := fanSpeedPercent(p.CoolingFanSpeed); v != nil {
+		fans["partCooling"] = *v
+	}
+	if v := fanSpeedPercent(p.HeatbreakFanSpeed); v != nil {
+		fans["heatbreak"] = *v
+	}
+	if v := fanSpeedPercent(p.BigFan1Speed); v != nil {
+		fans["auxiliary"] = *v
+	}
+	if v := fanSpeedPercent(p.BigFan2Speed); v != nil {
+		fans["chamber"] = *v
+	}
+	if len(fans) == 0 {
+		return nil
+	}
+	return fans
+}
+
+func mapTimeEstimates(p *bambuPrint) *driver.TimeEstimates {
+	if p == nil || p.McRemainingTime == nil {
+		return nil
+	}
+	te := &driver.TimeEstimates{}
+	remaining := *p.McRemainingTime * 60 // minutes → seconds
+	te.RemainingSeconds = &remaining
+	return te
+}
+
+var bambuSpeedLevels = map[int]string{
+	1: "silent",
+	2: "standard",
+	3: "sport",
+	4: "ludicrous",
+}
+
+func mapSpeedLevel(p *bambuPrint) *string {
+	if p == nil || p.SpdLvl == nil {
+		return nil
+	}
+	name, ok := bambuSpeedLevels[*p.SpdLvl]
+	if !ok {
+		s := strconv.Itoa(*p.SpdLvl)
+		return &s
+	}
+	return &name
+}
+
+func mapWifi(p *bambuPrint) *driver.Wifi {
+	if p == nil || p.WifiSignal == nil {
+		return nil
+	}
+	val := rawToInt(p.WifiSignal)
+	if val == nil {
+		return nil
+	}
+	return &driver.Wifi{SignalDbm: *val}
+}
+
+func mapLights(reports []bambuLightReport) driver.Lights {
+	if len(reports) == 0 {
+		return nil
+	}
+	lights := driver.Lights{}
+	for _, r := range reports {
+		if r.Node != "" && r.Mode != "" {
+			lights[r.Node] = r.Mode
+		}
+	}
+	if len(lights) == 0 {
+		return nil
+	}
+	return lights
+}
+
+func mapPrintMeta(p *bambuPrint) *driver.PrintMeta {
+	if p == nil {
+		return nil
+	}
+	var fileName string
+	if p.GcodeFile != nil && *p.GcodeFile != "" {
+		fileName = *p.GcodeFile
+	} else if p.SubtaskName != nil && *p.SubtaskName != "" {
+		fileName = *p.SubtaskName
+	}
+	if fileName == "" {
+		return nil
+	}
+	meta := &driver.PrintMeta{FileName: fileName}
+	if p.FileSize != nil && *p.FileSize > 0 {
+		v := *p.FileSize
+		meta.FileSize = &v
+	}
+	if nd := rawToFloat(p.NozzleDiameter); nd != nil && *nd > 0 {
+		meta.NozzleDiameter = nd
+	}
+	if p.BedType != nil {
+		bt := mapBedType(p.BedType)
+		if bt != "" {
+			meta.BedType = &bt
+		}
+	}
+	return meta
+}
+
+func mapBedType(v *rawValueString) string {
+	if v == nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(*v))
+	switch s {
+	case "1":
+		return "cool_plate"
+	case "2":
+		return "engineering_plate"
+	case "3":
+		return "high_temp_plate"
+	case "4":
+		return "textured_pei"
+	default:
+		if s == "" || s == "0" {
+			return ""
+		}
+		return s
+	}
+}
+
+var bambuStages = map[int]string{
+	0:  "printing",
+	1:  "auto_bed_leveling",
+	2:  "heatbed_preheating",
+	3:  "sweeping_xy_mech_mode",
+	4:  "changing_filament",
+	5:  "m400_pause",
+	6:  "filament_runout_pause",
+	7:  "heating_hotend",
+	8:  "calibrating_extrusion",
+	9:  "scanning_bed_surface",
+	10: "inspecting_first_layer",
+	11: "identifying_build_plate_type",
+	14: "cleaning_nozzle_tip",
+	15: "checking_extruder_temperature",
+	16: "paused_user_input",
+	17: "paused_front_cover_falling",
+	18: "calibrating_micro_lidar",
+	19: "calibrating_extrusion_flow",
+	20: "paused_nozzle_temperature_malfunction",
+	21: "paused_heat_bed_temperature_malfunction",
+}
+
+func mapStage(p *bambuPrint) *string {
+	if p == nil || p.StgCur == nil {
+		return nil
+	}
+	name, ok := bambuStages[*p.StgCur]
+	if !ok {
+		s := strconv.Itoa(*p.StgCur)
+		return &s
+	}
+	return &name
+}
+
+func mapTimelapse(p *bambuPrint) *driver.Timelapse {
+	if p == nil || p.TimelapseStat == nil {
+		return nil
+	}
+	recording := *p.TimelapseStat == "enable"
+	return &driver.Timelapse{Recording: recording}
+}
+
+func mapGcodePosition(p *bambuPrint) *driver.GcodePosition {
+	if p == nil {
+		return nil
+	}
+	curLine := rawToInt(p.CurLineNum)
+	totalLine := rawToInt(p.TotalLineNum)
+	if curLine == nil || totalLine == nil {
+		return nil
+	}
+	return &driver.GcodePosition{
+		ZMm:         0, // Z height not reliably available in pushall
+		CurrentLine: *curLine,
+		TotalLines:  *totalLine,
+	}
+}
+
+func mapExtensions(p *bambuPrint) map[string]any {
+	if p == nil || p.AMS == nil {
+		return nil
+	}
+	amsData := mapAMS(p.AMS)
+	if amsData == nil {
+		return nil
+	}
+	return map[string]any{
+		"bambu-lan": &driver.BambuExtension{AMS: amsData},
+	}
+}
+
+func mapAMS(ams *bambuAMS) *driver.AMSData {
+	if ams == nil || len(ams.AMS) == 0 {
+		return nil
+	}
+	units := make([]driver.AMSUnit, 0, len(ams.AMS))
+	for _, u := range ams.AMS {
+		id, _ := strconv.Atoi(string(u.ID))
+		unit := driver.AMSUnit{
+			ID:    id,
+			Trays: make([]driver.AMSTray, 0, len(u.Tray)),
+		}
+		if h, err := strconv.Atoi(string(u.Humidity)); err == nil && h >= 0 {
+			unit.Humidity = &h
+		}
+		if t, err := strconv.ParseFloat(string(u.Temp), 64); err == nil && t > 0 {
+			unit.Temperature = &t
+		}
+		for _, tray := range u.Tray {
+			slot, _ := strconv.Atoi(string(tray.ID))
+			dt := driver.AMSTray{Slot: slot}
+			if tray.TrayType != nil && *tray.TrayType != "" {
+				dt.FilamentType = tray.TrayType
+			}
+			if tray.TrayColor != nil && *tray.TrayColor != "" {
+				dt.Color = tray.TrayColor
+			}
+			if tray.Remain != nil {
+				v := *tray.Remain
+				dt.RemainingPercent = &v
+			}
+			if tray.NozzleTempMin != nil {
+				v := *tray.NozzleTempMin
+				dt.NozzleTempMin = &v
+			}
+			if tray.NozzleTempMax != nil {
+				v := *tray.NozzleTempMax
+				dt.NozzleTempMax = &v
+			}
+			unit.Trays = append(unit.Trays, dt)
+		}
+		units = append(units, unit)
+	}
+	if len(units) == 0 {
+		return nil
+	}
+	return &driver.AMSData{Units: units}
 }
 
 func (d *Driver) CaptureFingerprint(ctx context.Context, p driver.ProfileInput) (string, error) {

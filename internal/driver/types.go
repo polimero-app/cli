@@ -98,6 +98,75 @@ type DiscoveredPrinter struct {
 	Driver string // driver name that discovered this printer (e.g. "bambu-lan")
 }
 
+// Fans holds named fan speed readings as integer percentages (0-100).
+type Fans map[string]int
+
+// TimeEstimates holds timing information for the current print job.
+type TimeEstimates struct {
+	ElapsedSeconds   int  `json:"elapsedSeconds"`
+	RemainingSeconds *int `json:"remainingSeconds,omitempty"`
+	TotalSeconds     *int `json:"totalSeconds,omitempty"`
+}
+
+// Wifi holds network signal information.
+type Wifi struct {
+	SignalDbm int `json:"signalDbm"`
+}
+
+// Lights holds lighting states keyed by light name.
+// Values are "on", "off", or a brightness level string.
+type Lights map[string]string
+
+// PrintMeta holds metadata about the current print file.
+type PrintMeta struct {
+	FileName       string   `json:"fileName"`
+	FileSize       *int     `json:"fileSize,omitempty"`
+	NozzleDiameter *float64 `json:"nozzleDiameter,omitempty"`
+	BedType        *string  `json:"bedType,omitempty"`
+}
+
+// Timelapse holds timelapse recording status.
+type Timelapse struct {
+	Recording bool  `json:"recording"`
+	Progress  *int  `json:"progress,omitempty"`
+	Ready     *bool `json:"ready,omitempty"`
+}
+
+// GcodePosition holds g-code execution position.
+type GcodePosition struct {
+	ZMm        float64 `json:"zMm"`
+	CurrentLine int     `json:"currentLine"`
+	TotalLines  int     `json:"totalLines"`
+}
+
+// AMSTray holds data for a single AMS tray slot.
+type AMSTray struct {
+	Slot            int      `json:"slot"`
+	FilamentType    *string  `json:"filamentType,omitempty"`
+	Color           *string  `json:"color,omitempty"`
+	RemainingPercent *int    `json:"remainingPercent,omitempty"`
+	NozzleTempMin   *int     `json:"nozzleTempMin,omitempty"`
+	NozzleTempMax   *int     `json:"nozzleTempMax,omitempty"`
+}
+
+// AMSUnit holds data for a single AMS unit.
+type AMSUnit struct {
+	ID          int       `json:"id"`
+	Humidity    *int      `json:"humidity,omitempty"`
+	Temperature *float64  `json:"temperature,omitempty"`
+	Trays       []AMSTray `json:"trays"`
+}
+
+// AMSData holds the full AMS status.
+type AMSData struct {
+	Units []AMSUnit `json:"units"`
+}
+
+// BambuExtension holds Bambu-specific extension data.
+type BambuExtension struct {
+	AMS *AMSData `json:"ams,omitempty"`
+}
+
 // StatusResult is the portable representation of printer state returned by Driver.Status.
 // Errors and Warnings are always non-nil slices (serialize as [] not null).
 type StatusResult struct {
@@ -108,4 +177,16 @@ type StatusResult struct {
 	Errors       []StatusError   `json:"errors"`
 	Warnings     []StatusWarning `json:"warnings"`
 	Capabilities Capabilities    `json:"capabilities"`
+
+	// Extended fields (populated when detailed status is requested).
+	Fans          Fans           `json:"fans,omitempty"`
+	TimeEstimates *TimeEstimates `json:"timeEstimates,omitempty"`
+	SpeedLevel    *string        `json:"speedLevel,omitempty"`
+	Wifi          *Wifi          `json:"wifi,omitempty"`
+	Lights        Lights         `json:"lights,omitempty"`
+	PrintMeta     *PrintMeta     `json:"printMeta,omitempty"`
+	Stage         *string        `json:"stage,omitempty"`
+	Timelapse     *Timelapse     `json:"timelapse,omitempty"`
+	GcodePosition *GcodePosition `json:"gcodePosition,omitempty"`
+	Extensions    map[string]any `json:"extensions,omitempty"`
 }
