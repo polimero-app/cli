@@ -40,6 +40,7 @@ func CommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
 		timeout  string
 		insecure bool
+		detailed bool
 	}
 
 	cmd := &cobra.Command{
@@ -47,16 +48,17 @@ func CommandWithDeps(deps Deps) *cobra.Command {
 		Short: "Show the current status of a printer",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return writeUsageError(cmd, "profile name is required")
+				return cmd.Help()
 			}
 			if len(args) > 1 {
 				return writeUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
-			return runStatus(cmd, args[0], flags.timeout, flags.insecure, deps)
+			return runStatus(cmd, args[0], flags.timeout, flags.insecure, flags.detailed, deps)
 		},
 	}
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
+	cmd.Flags().BoolVar(&flags.detailed, "detailed", false, "include extended telemetry (fans, time, speed, AMS, etc.)")
 	return cmd
 }
 
@@ -69,7 +71,7 @@ func writeUsageError(cmd *cobra.Command, message string) error {
 	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), errorContext{})
 }
 
-func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) error {
+func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, detailed bool, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -83,7 +85,7 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag boo
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err, errCtx)
 	}
-	return writeSuccess(cmd.OutOrStdout(), format, name, driverName, result, durationMs)
+	return writeSuccess(cmd.OutOrStdout(), format, name, driverName, result, durationMs, detailed)
 }
 
 type errorContext struct {
@@ -185,35 +187,90 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbos
 	return result, durationMs, p.Driver, errorContext{}, nil
 }
 
-func writeSuccess(w io.Writer, format output.Format, name, driverName string, result *driver.StatusResult, durationMs int64) error {
+func writeSuccess(w io.Writer, format output.Format, name, driverName string, result *driver.StatusResult, durationMs int64, detailed bool) error {
 	if result == nil {
 		return fmt.Errorf("driver returned nil status result")
 	}
 	if format == output.FormatJSON {
-		dm := durationMs
-		type statusData struct {
-			Profile string `json:"profile"`
-			Driver  string `json:"driver"`
-			*driver.StatusResult
-		}
-		data := statusData{
-			Profile:      name,
-			Driver:       driverName,
-			StatusResult: result,
-		}
-		return output.WriteEnvelope(w, output.Envelope{
-			OK:    true,
-			Data:  data,
-			Error: nil,
-			Meta:  output.Meta{Command: "status", DurationMs: &dm},
-		})
+		return writeJSONSuccess(w, name, driverName, result, durationMs, detailed)
 	}
+	return writeHumanSuccess(w, name, result, detailed)
+}
+
+func writeJSONSuccess(w io.Writer, name, driverName string, result *driver.StatusResult, durationMs int64, detailed bool) error {
+	dm := durationMs
+	type statusData struct {
+		Profile       string              `json:"profile"`
+		Driver        string              `json:"driver"`
+		State         string              `json:"state"`
+		Temperatures  *driver.Temperatures `json:"temperatures"`
+		Job           *driver.Job          `json:"job"`
+		Progress      *driver.Progress     `json:"progress"`
+		Errors        []driver.StatusError   `json:"errors"`
+		Warnings      []driver.StatusWarning `json:"warnings"`
+		Capabilities  driver.Capabilities    `json:"capabilities"`
+		Fans          driver.Fans            `json:"fans,omitempty"`
+		TimeEstimates *driver.TimeEstimates  `json:"timeEstimates,omitempty"`
+		SpeedLevel    *string                `json:"speedLevel,omitempty"`
+		Wifi          *driver.Wifi           `json:"wifi,omitempty"`
+		Lights        driver.Lights          `json:"lights,omitempty"`
+		PrintMeta     *driver.PrintMeta      `json:"printMeta,omitempty"`
+		Stage         *string                `json:"stage,omitempty"`
+		Timelapse     *driver.Timelapse      `json:"timelapse,omitempty"`
+		GcodePosition *driver.GcodePosition  `json:"gcodePosition,omitempty"`
+		Extensions    map[string]any         `json:"extensions,omitempty"`
+	}
+	data := statusData{
+		Profile:      name,
+		Driver:       driverName,
+		State:        result.State,
+		Temperatures: result.Temperatures,
+		Job:          result.Job,
+		Progress:     result.Progress,
+		Errors:       result.Errors,
+		Warnings:     result.Warnings,
+		Capabilities: result.Capabilities,
+	}
+	if detailed {
+		data.Fans = result.Fans
+		data.TimeEstimates = result.TimeEstimates
+		data.SpeedLevel = result.SpeedLevel
+		data.Wifi = result.Wifi
+		data.Lights = result.Lights
+		data.PrintMeta = result.PrintMeta
+		data.Stage = result.Stage
+		data.Timelapse = result.Timelapse
+		data.GcodePosition = result.GcodePosition
+		data.Extensions = result.Extensions
+	}
+	return output.WriteEnvelope(w, output.Envelope{
+		OK:    true,
+		Data:  data,
+		Error: nil,
+		Meta:  output.Meta{Command: "status", DurationMs: &dm},
+	})
+}
+
+func writeHumanSuccess(w io.Writer, name string, result *driver.StatusResult, detailed bool) error {
 	lines := []string{
 		fmt.Sprintf("Printer: %s", name),
 		fmt.Sprintf("State: %s", result.State),
 	}
+	if detailed && result.Stage != nil {
+		lines = append(lines, fmt.Sprintf("Stage: %s", *result.Stage))
+	}
 	if result.Progress != nil {
-		lines = append(lines, fmt.Sprintf("Progress: %d%%", result.Progress.Percent))
+		pLine := fmt.Sprintf("Progress: %d%%", result.Progress.Percent)
+		if detailed && result.Progress.CurrentLayer != nil && result.Progress.TotalLayers != nil {
+			pLine = fmt.Sprintf("Progress: %d%% (layer %d / %d)", result.Progress.Percent, *result.Progress.CurrentLayer, *result.Progress.TotalLayers)
+		}
+		lines = append(lines, pLine)
+	}
+	if detailed && result.SpeedLevel != nil {
+		lines = append(lines, fmt.Sprintf("Speed: %s", *result.SpeedLevel))
+	}
+	if detailed && result.TimeEstimates != nil {
+		lines = append(lines, formatTimeEstimates(result.TimeEstimates))
 	}
 	if result.Temperatures != nil {
 		if n := result.Temperatures.Nozzle; n != nil {
@@ -234,8 +291,66 @@ func writeSuccess(w io.Writer, format output.Format, name, driverName string, re
 			lines = append(lines, fmt.Sprintf("Chamber: %.1f C", c.CurrentCelsius))
 		}
 	}
+	if detailed && result.Fans != nil {
+		lines = append(lines, "Fans:")
+		for _, fanName := range sortedKeys(result.Fans) {
+			lines = append(lines, fmt.Sprintf("  %s: %d%%", fanDisplayName(fanName), result.Fans[fanName]))
+		}
+	}
+	if detailed && result.Wifi != nil {
+		lines = append(lines, fmt.Sprintf("Wi-Fi: %d dBm", result.Wifi.SignalDbm))
+	}
+	if detailed && result.Lights != nil {
+		lines = append(lines, "Lights:")
+		for _, lightName := range sortedLightKeys(result.Lights) {
+			lines = append(lines, fmt.Sprintf("  %s: %s", lightName, result.Lights[lightName]))
+		}
+	}
 	if result.Job != nil {
-		lines = append(lines, fmt.Sprintf("Job: %s", result.Job.Name))
+		jobLine := fmt.Sprintf("Job: %s", result.Job.Name)
+		if detailed && result.PrintMeta != nil {
+			var parts []string
+			if result.PrintMeta.FileSize != nil {
+				parts = append(parts, formatFileSize(*result.PrintMeta.FileSize))
+			}
+			if result.PrintMeta.NozzleDiameter != nil {
+				parts = append(parts, fmt.Sprintf("%.1fmm nozzle", *result.PrintMeta.NozzleDiameter))
+			}
+			if result.PrintMeta.BedType != nil {
+				parts = append(parts, *result.PrintMeta.BedType)
+			}
+			if len(parts) > 0 {
+				jobLine += " (" + strings.Join(parts, ", ") + ")"
+			}
+		}
+		lines = append(lines, jobLine)
+	}
+	if detailed && result.GcodePosition != nil {
+		gp := result.GcodePosition
+		if gp.ZMm > 0 {
+			lines = append(lines, fmt.Sprintf("G-code: Z %.2f mm, line %d / %d", gp.ZMm, gp.CurrentLine, gp.TotalLines))
+		} else {
+			lines = append(lines, fmt.Sprintf("G-code: line %d / %d", gp.CurrentLine, gp.TotalLines))
+		}
+	}
+	if detailed && result.Timelapse != nil {
+		tl := result.Timelapse
+		if tl.Recording {
+			if tl.Progress != nil {
+				lines = append(lines, fmt.Sprintf("Timelapse: recording (%d%%)", *tl.Progress))
+			} else {
+				lines = append(lines, "Timelapse: recording")
+			}
+		} else {
+			lines = append(lines, "Timelapse: off")
+		}
+	}
+	if detailed && result.Extensions != nil {
+		if ext, ok := result.Extensions["bambu-lan"]; ok {
+			if bambu, ok := ext.(*driver.BambuExtension); ok && bambu.AMS != nil {
+				lines = append(lines, formatAMS(bambu.AMS))
+			}
+		}
 	}
 	if len(result.Errors) > 0 {
 		lines = append(lines, "Errors:")
@@ -259,6 +374,115 @@ func writeSuccess(w io.Writer, format output.Format, name, driverName string, re
 		}
 	}
 	return nil
+}
+
+func formatTimeEstimates(te *driver.TimeEstimates) string {
+	var parts []string
+	if te.ElapsedSeconds > 0 {
+		parts = append(parts, formatDuration(te.ElapsedSeconds)+" elapsed")
+	}
+	if te.RemainingSeconds != nil && *te.RemainingSeconds > 0 {
+		parts = append(parts, formatDuration(*te.RemainingSeconds)+" remaining")
+	}
+	if len(parts) == 0 {
+		return "Time: unknown"
+	}
+	return "Time: " + strings.Join(parts, ", ")
+}
+
+func formatDuration(seconds int) string {
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	h := seconds / 3600
+	m := (seconds % 3600) / 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+func fanDisplayName(key string) string {
+	switch key {
+	case "partCooling":
+		return "Part cooling"
+	case "heatbreak":
+		return "Heatbreak"
+	case "auxiliary":
+		return "Auxiliary"
+	case "chamber":
+		return "Chamber"
+	default:
+		return key
+	}
+}
+
+func sortedKeys(m driver.Fans) []string {
+	order := []string{"partCooling", "heatbreak", "auxiliary", "chamber"}
+	var result []string
+	for _, k := range order {
+		if _, ok := m[k]; ok {
+			result = append(result, k)
+		}
+	}
+	return result
+}
+
+func sortedLightKeys(m driver.Lights) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func formatFileSize(bytes int) string {
+	switch {
+	case bytes >= 1024*1024*1024:
+		return fmt.Sprintf("%.1f GB", float64(bytes)/(1024*1024*1024))
+	case bytes >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	case bytes >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
+func formatAMS(ams *driver.AMSData) string {
+	var lines []string
+	lines = append(lines, "AMS:")
+	for _, unit := range ams.Units {
+		unitLine := fmt.Sprintf("  Unit %d", unit.ID)
+		var unitParts []string
+		if unit.Humidity != nil {
+			unitParts = append(unitParts, fmt.Sprintf("humidity: %d%%", *unit.Humidity))
+		}
+		if unit.Temperature != nil {
+			unitParts = append(unitParts, fmt.Sprintf("temp: %.1f C", *unit.Temperature))
+		}
+		if len(unitParts) > 0 {
+			unitLine += " (" + strings.Join(unitParts, ", ") + ")"
+		}
+		unitLine += ":"
+		lines = append(lines, unitLine)
+		for _, tray := range unit.Trays {
+			trayLine := fmt.Sprintf("    Slot %d: ", tray.Slot)
+			if tray.FilamentType != nil {
+				trayLine += *tray.FilamentType
+				if tray.Color != nil {
+					trayLine += " " + *tray.Color
+				}
+				if tray.RemainingPercent != nil {
+					trayLine += fmt.Sprintf(" (%d%%)", *tray.RemainingPercent)
+				}
+			} else {
+				trayLine += "(empty)"
+			}
+			lines = append(lines, trayLine)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func writeError(out, errOut io.Writer, format output.Format, err error, errCtx errorContext) error {

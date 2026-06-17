@@ -130,14 +130,16 @@ func runCmd(t *testing.T, deps status.Deps, args ...string) (string, error) {
 
 // --- Tests ---
 
-func TestStatus_NoArgs_ExitsCode2(t *testing.T) {
+func TestStatus_NoArgs_ShowsHelp(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	deps := makeDeps(t, dir, kc, defaultDriver())
-	_, err := runCmd(t, deps)
-	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
-		t.Errorf("expected exit 2, got %v", err)
+	out, err := runCmd(t, deps)
+	if err != nil {
+		t.Errorf("expected no error (help), got %v", err)
+	}
+	if !strings.Contains(out, "status <name>") {
+		t.Errorf("expected usage line in help output:\n%s", out)
 	}
 }
 
@@ -560,5 +562,217 @@ func TestStatus_NoVerbose_NoProgressLines(t *testing.T) {
 	}
 	if strings.Contains(out, "Connecting") {
 		t.Errorf("expected no 'Connecting' in non-verbose output:\n%s", out)
+	}
+}
+
+func detailedDriver() *stubDriver {
+	nozzleTarget := 220.0
+	bedTarget := 60.0
+	layer := 84
+	total := 200
+	remaining := 6000
+	totalTime := 10320
+	speed := "standard"
+	stage := "printing"
+	nozzleDiam := 0.4
+	bedType := "textured_pei"
+	fileSize := 14893261
+	progress := 35
+	ready := false
+	humidity := 25
+	temp := 28.0
+	filType := "PLA"
+	color := "FF0000"
+	remain := 85
+	nMin := 190
+	nMax := 230
+
+	return &stubDriver{
+		caps: driver.Capabilities{Status: true},
+		result: &driver.StatusResult{
+			State: "printing",
+			Temperatures: &driver.Temperatures{
+				Nozzle:  &driver.Temperature{CurrentCelsius: 215.0, TargetCelsius: &nozzleTarget},
+				Bed:     &driver.Temperature{CurrentCelsius: 60.0, TargetCelsius: &bedTarget},
+				Chamber: &driver.Temperature{CurrentCelsius: 38.0},
+			},
+			Job:      &driver.Job{Name: "bracket.3mf"},
+			Progress: &driver.Progress{Percent: 42, CurrentLayer: &layer, TotalLayers: &total},
+			Errors:   []driver.StatusError{},
+			Warnings: []driver.StatusWarning{},
+			Capabilities: driver.Capabilities{Status: true},
+			Fans: driver.Fans{
+				"partCooling": 100,
+				"heatbreak":   70,
+				"auxiliary":    50,
+				"chamber":     30,
+			},
+			TimeEstimates: &driver.TimeEstimates{
+				ElapsedSeconds:   4320,
+				RemainingSeconds: &remaining,
+				TotalSeconds:     &totalTime,
+			},
+			SpeedLevel: &speed,
+			Wifi:       &driver.Wifi{SignalDbm: -45},
+			Lights:     driver.Lights{"chamber_light": "on"},
+			PrintMeta: &driver.PrintMeta{
+				FileName:       "bracket.3mf",
+				FileSize:       &fileSize,
+				NozzleDiameter: &nozzleDiam,
+				BedType:        &bedType,
+			},
+			Stage: &stage,
+			Timelapse: &driver.Timelapse{
+				Recording: true,
+				Progress:  &progress,
+				Ready:     &ready,
+			},
+			GcodePosition: &driver.GcodePosition{
+				ZMm:         12.4,
+				CurrentLine: 48201,
+				TotalLines:  112400,
+			},
+			Extensions: map[string]any{
+				"bambu-lan": &driver.BambuExtension{
+					AMS: &driver.AMSData{
+						Units: []driver.AMSUnit{
+							{
+								ID:          0,
+								Humidity:    &humidity,
+								Temperature: &temp,
+								Trays: []driver.AMSTray{
+									{Slot: 0, FilamentType: &filType, Color: &color, RemainingPercent: &remain, NozzleTempMin: &nMin, NozzleTempMax: &nMax},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestStatus_Detailed_HumanOutput(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := makeDeps(t, dir, kc, detailedDriver())
+	out, err := runCmd(t, deps, "myprinter", "--detailed")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{
+		"Stage: printing",
+		"Progress: 42% (layer 84 / 200)",
+		"Speed: standard",
+		"Time:",
+		"elapsed",
+		"remaining",
+		"Fans:",
+		"Part cooling: 100%",
+		"Heatbreak: 70%",
+		"Wi-Fi: -45 dBm",
+		"Lights:",
+		"chamber_light: on",
+		"Job: bracket.3mf (14.2 MB, 0.4mm nozzle, textured_pei)",
+		"G-code: Z 12.40 mm, line 48201 / 112400",
+		"Timelapse: recording (35%)",
+		"AMS:",
+		"Unit 0",
+		"humidity: 25%",
+		"Slot 0: PLA FF0000 (85%)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output:\n%s", want, out)
+		}
+	}
+}
+
+func TestStatus_Detailed_JSONOutput(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := makeDeps(t, dir, kc, detailedDriver())
+	out, err := runCmd(t, deps, "myprinter", "--detailed", "--output", "json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	data := env["data"].(map[string]any)
+	if data["speedLevel"] != "standard" {
+		t.Errorf("speedLevel = %v, want standard", data["speedLevel"])
+	}
+	if data["stage"] != "printing" {
+		t.Errorf("stage = %v, want printing", data["stage"])
+	}
+	if data["fans"] == nil {
+		t.Error("expected fans in detailed JSON output")
+	}
+	if data["timeEstimates"] == nil {
+		t.Error("expected timeEstimates in detailed JSON output")
+	}
+	if data["wifi"] == nil {
+		t.Error("expected wifi in detailed JSON output")
+	}
+	if data["lights"] == nil {
+		t.Error("expected lights in detailed JSON output")
+	}
+	if data["printMeta"] == nil {
+		t.Error("expected printMeta in detailed JSON output")
+	}
+	if data["timelapse"] == nil {
+		t.Error("expected timelapse in detailed JSON output")
+	}
+	if data["gcodePosition"] == nil {
+		t.Error("expected gcodePosition in detailed JSON output")
+	}
+	if data["extensions"] == nil {
+		t.Error("expected extensions in detailed JSON output")
+	}
+}
+
+func TestStatus_NoDetailed_OmitsExtendedFields(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := makeDeps(t, dir, kc, detailedDriver())
+	out, err := runCmd(t, deps, "myprinter", "--output", "json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	data := env["data"].(map[string]any)
+	for _, field := range []string{"fans", "timeEstimates", "speedLevel", "wifi", "lights", "printMeta", "stage", "timelapse", "gcodePosition", "extensions"} {
+		if data[field] != nil {
+			t.Errorf("expected %q to be absent without --detailed, got %v", field, data[field])
+		}
+	}
+}
+
+func TestStatus_NoDetailed_HumanOmitsExtendedSections(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	deps := makeDeps(t, dir, kc, detailedDriver())
+	out, err := runCmd(t, deps, "myprinter")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, absent := range []string{"Fans:", "Speed:", "Time:", "Wi-Fi:", "Lights:", "G-code:", "Timelapse:", "AMS:", "Stage:"} {
+		if strings.Contains(out, absent) {
+			t.Errorf("expected %q to be absent without --detailed, got output:\n%s", absent, out)
+		}
+	}
+	// But summary fields should still be present.
+	for _, present := range []string{"Printer: myprinter", "State: printing", "Progress: 42%"} {
+		if !strings.Contains(out, present) {
+			t.Errorf("expected %q in output:\n%s", present, out)
+		}
 	}
 }
