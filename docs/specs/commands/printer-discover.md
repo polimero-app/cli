@@ -6,7 +6,7 @@ Accepted
 
 ## Purpose
 
-Scan the local network using mDNS/DNS-SD to find printers supported by installed drivers. Reports each discovered printer with its host, serial, model, and friendly name, and indicates which existing profile (if any) already corresponds to each printer.
+Scan the local network using driver-supported local discovery protocols to find printers supported by installed drivers. For Bambu LAN this includes mDNS/DNS-SD, SSDP, and passive UDP broadcast. Reports each discovered printer with its host, serial, model, and friendly name, and indicates which existing profile (if any) already corresponds to each printer.
 
 ## Syntax
 
@@ -17,12 +17,13 @@ polimero printer discover [--driver <driver>] [--timeout <duration>] [--output <
 ## Flags
 
 - `--driver <driver>`: optional. Restrict discovery to a single driver. If omitted, all registered drivers that declare `Discovery: true` are queried. Returns exit code `5` when the named driver does not support discovery.
-- `--timeout <duration>`: optional. How long to listen for mDNS responses. Default: `5s`. Must parse as a Go duration and be greater than zero.
+- `--timeout <duration>`: optional. How long to wait for discovery results across the enabled protocols. Default: `5s`. Must parse as a Go duration and be greater than zero.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Behavior
 
-- Opens an mDNS listener on the local network and browses for supported printer service types until the timeout elapses.
+- Runs each selected driver's supported local-network discovery methods until the timeout elapses. For Bambu LAN this is mDNS/DNS-SD browsing, SSDP discovery, and passive UDP broadcast listening.
+- May return results from the remaining discovery methods when one protocol fails; returns exit code `4` only when discovery cannot be started for the selected driver(s).
 - Cross-references each discovered printer's serial against existing profiles. If a profile's `serial` field matches, the corresponding profile name is included in the output.
 - Returns exit code `0` even when zero printers are found.
 - If `--driver` is given and the driver does not support discovery, fails with exit code `5`.
@@ -119,7 +120,7 @@ JSON error:
 - `0`: scan complete (including zero results).
 - `1`: general failure.
 - `2`: usage or config error (invalid timeout, unknown driver, config load failure).
-- `4`: network error (mDNS socket cannot be opened).
+- `4`: network error (discovery listeners or probes cannot be started).
 - `5`: named driver does not support discovery.
 
 ## Error Cases
@@ -129,19 +130,20 @@ JSON error:
 - Invalid `--timeout` format.
 - Zero or negative `--timeout`.
 - Config directory or file unreadable.
-- mDNS socket cannot be opened.
+- Discovery listeners or probes cannot be started.
 
 ## Security Requirements
 
 - Do not connect to discovered printers.
 - Do not capture or log TLS data, access codes, or any secrets.
-- Human-readable output must sanitize control characters from unauthenticated mDNS fields before writing to a terminal.
+- Human-readable output must sanitize control characters from unauthenticated discovery fields before writing to a terminal.
 - Discovery transport errors must be sanitized before human or JSON output.
-- Sanitize all network and mDNS errors before display.
+- Sanitize all network and discovery errors before display.
 
 ## Test Scenarios
 
 - Returns list with serial, model, name, host for each discovered printer.
+- Aggregates results from all supported discovery protocols for the selected driver.
 - Sets `configuredAs` to profile name when serial matches an existing profile.
 - Sets `configuredAs` to null/`—` when serial has no matching profile.
 - Returns empty list (exit 0) when no printers found.
@@ -157,4 +159,4 @@ JSON error:
 - Connecting to discovered printers.
 - Automatically adding discovered printers as profiles.
 - WAN or cloud-based discovery.
-- Discovery protocols other than mDNS/DNS-SD.
+- Discovery protocols beyond the driver-documented local-network methods.

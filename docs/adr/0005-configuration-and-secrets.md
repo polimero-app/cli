@@ -18,7 +18,7 @@ Non-secret configuration:
 
 - Stored as versioned YAML at `polimero/polimero.yaml` under `os.UserConfigDir`.
 - For example: `~/.config/polimero/polimero.yaml` on Linux.
-- Managed through Viper.
+- Parsed and written directly with `gopkg.in/yaml.v3` through Polimero's config package.
 - Must not contain access codes, tokens, passwords, or other secrets.
 
 Config file structure:
@@ -67,4 +67,3 @@ Secret input:
 - CI must use mocks or test-mode secret injection.
 - Shell history and process-list leakage from secret flags is avoided.
 - Each profile has up to two keychain entries; rollback must clean up both on partial failure.
-

@@ -11,7 +11,7 @@ Re-pin the TLS certificate fingerprint for a configured printer profile without 
 ## Syntax
 
 ```text
-polimero printer tls refresh <name> [--timeout <duration>] [--insecure] [--yes]
+polimero printer tls refresh <name> [--timeout <duration>] [--insecure] [--yes] [--output <format>]
 ```
 
 ## Arguments
@@ -23,6 +23,7 @@ polimero printer tls refresh <name> [--timeout <duration>] [--insecure] [--yes]
 - `--timeout <duration>`: optional. Overrides the profile/default timeout for this connection.
 - `--insecure`: skip TLS verification for this connection. Updates the profile to `insecure: true` and removes the stored fingerprint from the keychain.
 - `--yes`: bypass interactive confirmation.
+- `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
 

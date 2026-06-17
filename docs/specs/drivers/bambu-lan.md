@@ -6,7 +6,7 @@ Accepted
 
 ## Purpose
 
-Define the Bambu LAN driver slice for printer status, discovery, TLS refresh, and device file management.
+Define the Bambu LAN driver slice for printer discovery, TLS refresh, and status. Accepted future file-management behavior is also specified below for later implementation.
 
 ## Scope
 
@@ -22,11 +22,9 @@ Initial auth mode:
 
 Initial command support:
 
+- `printer discover`
 - `printer status`
-- `files roots`
-- `files list`
-- `files download`
-- `files upload`
+- `printer tls refresh`
 
 Out of scope:
 
@@ -130,7 +128,9 @@ Always publish `pushall` on connect to obtain a complete status object regardles
 
 ## File Storage Transport
 
-Capability:
+Implementation status: accepted for future work; not part of the initial implemented command set.
+
+Planned capabilities when file operations are implemented:
 
 - `FileList: true`
 - `FileDownload: true`

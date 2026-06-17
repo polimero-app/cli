@@ -6,7 +6,7 @@ Instructions for agents working in this repository.
 
 Polimero is a greenfield Go CLI for interacting with 3D printers through brand-specific drivers behind a stable command surface.
 
-Current phase: ADR/spec-first project foundation. Do not add printer-control implementation until the relevant ADRs and specs are accepted.
+Current phase: initial printer-management and network command slices are implemented (`printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer status`, `printer tls refresh`). Keep using accepted ADRs and specs to authorize new behavior before implementation.
 
 Primary references:
 
@@ -31,12 +31,12 @@ Primary references:
 
 - Language: Go.
 - Module path: `github.com/polimero-app/cli`.
-- CLI stack: Cobra and Viper.
+- CLI stack: Cobra.
 - License: AGPL-3.0-only.
-- Config format: versioned YAML under `os.UserConfigDir`.
+- Config format: versioned YAML loaded with `gopkg.in/yaml.v3` under `os.UserConfigDir`.
 - Secret storage: OS keychain first.
 - First driver: Bambu LAN.
-- First read command: `polimero printer status --printer <name>`.
+- First read command: `polimero printer status <name>`.
 
 ## Security Requirements
 
@@ -100,7 +100,7 @@ Stable exit codes:
 - Drivers expose capabilities.
 - Unsupported behavior returns an unsupported-capability error.
 - All blocking driver operations accept `context.Context`.
-- Drivers must not read Viper config directly.
+- Drivers must not read config files directly.
 - Drivers must not persist secrets.
 - Drivers must not return raw protocol payloads in errors.
 - Hardware integration tests must be opt-in and build-tagged.
@@ -111,7 +111,7 @@ Initial Bambu scope:
 
 - X1, P1, and A1 families.
 - LAN access code only.
-- Read-only status first.
+- Implemented commands: discovery, TLS refresh, and read-only status.
 - Capability-gated behavior.
 
 Out of scope unless a later accepted ADR/spec says otherwise:
@@ -138,7 +138,7 @@ Before implementation changes are considered complete:
 - Keep real-printer tests behind explicit integration tags.
 - Run race tests for code touching network or concurrency.
 
-The repository may temporarily have no Go packages during the documentation phase. The Makefile handles that state by skipping Go package checks.
+Some changes may be documentation-only. The Makefile also handles repository states with no Go packages by skipping Go package checks.
 
 ## Editing Guidance
 

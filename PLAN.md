@@ -2,28 +2,29 @@
 
 ## Summary
 
-Polimero is a greenfield command line interface for interacting with 3D printers through brand-specific drivers behind a common command surface. The project will be built incrementally, one command at a time, with ADR and spec driven development before code.
+Polimero is a greenfield command line interface for interacting with 3D printers through brand-specific drivers behind a common command surface. The project continues to grow incrementally, one command at a time, with ADR and spec driven development authorizing new behavior before code lands.
 
-The implementation stack is Go with Cobra for CLI structure and Viper for non-secret configuration. Security is the highest-priority quality attribute. The first real printer integration is Bambu LAN for X1, P1, and A1 families, using LAN access code authentication only.
+The implementation stack is Go with Cobra for CLI structure and `gopkg.in/yaml.v3` for non-secret configuration. Security is the highest-priority quality attribute. The first real printer integration is Bambu LAN for X1, P1, and A1 families, using LAN access code authentication only.
 
 ## Project Decisions
 
 - CLI binary name: `polimero`.
 - Go module path: `github.com/polimero-app/cli`.
 - License: `AGPL-3.0-only`.
-- Stack: Go, Cobra, Viper.
+- Stack: Go, Cobra, yaml.v3.
 - Supported operating systems: Linux, macOS, and Windows.
 - Development model: ADR and command spec required before implementation.
 - First driver: Bambu LAN.
 - First read command: `polimero printer status <name>`.
 - First profile commands: `printer add`, `printer list`, and `printer remove`.
+- Implemented command set: `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer status`, `printer tls refresh`.
 - Config format: versioned YAML at `polimero/polimero.yaml` under `os.UserConfigDir`; profiles stored as a map keyed by name.
 - Secret storage: OS keychain first; fail closed if unavailable.
 - Keychain naming scheme: service `polimero`; accounts `<driver>:<name>:access-code` and `<driver>:<name>:tls-fingerprint`.
-- TLS policy: Trust On First Use (TOFU) per ADR 0007; `--insecure` flag available on `printer add` and `printer status`; fingerprint stored in OS keychain.
+- TLS policy: Trust On First Use (TOFU) per ADR 0007; `--insecure` flag available on `printer add`, `printer status`, and `printer tls refresh`; fingerprint stored in OS keychain.
 - Output: human-readable default plus stable JSON envelope through `--output json`; `--output` is a global persistent flag on the root command.
 - `durationMs` in JSON meta: network commands only.
-- Discovery: explicit opt-in only, not part of the first command slice.
+- Discovery: explicit opt-in only; implemented as `printer discover`.
 
 ## Planned Future Drivers
 
@@ -58,7 +59,7 @@ The initial repository should contain:
 - `docs/specs/drivers/`
 - `docs/security/`
 
-No printer-control implementation should be added before the relevant ADRs and command specs are accepted.
+No new printer-control implementation should be added before the relevant ADRs and command specs are accepted.
 
 ## ADR Workflow
 
@@ -143,6 +144,7 @@ Initial command specs:
 
 - `docs/specs/commands/printer-add.md`
 - `docs/specs/commands/printer-drivers.md`
+- `docs/specs/commands/printer-discover.md`
 - `docs/specs/commands/printer-list.md`
 - `docs/specs/commands/printer-remove.md`
 - `docs/specs/commands/printer-status.md`
