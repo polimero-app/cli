@@ -158,3 +158,24 @@ func TestSave_RemovePreservesOthers(t *testing.T) {
 		t.Error("dropped profile still present after save")
 	}
 }
+
+func TestSave_ReadOnlyDir_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := config.Open(dir)
+	_ = cfg.AddProfile("test", config.Profile{
+		Driver:  "bambu-lan",
+		Host:    "192.168.1.1",
+		Serial:  "SN001",
+		Timeout: "10s",
+	})
+
+	if err := os.Chmod(dir, 0555); err != nil {
+		t.Skipf("cannot make dir read-only: %v", err)
+	}
+	defer func() { _ = os.Chmod(dir, 0755) }()
+
+	err := config.Save(dir, cfg)
+	if err == nil {
+		t.Error("expected error saving to read-only directory")
+	}
+}

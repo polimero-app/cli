@@ -44,3 +44,48 @@ func TestNew_EmptyMessage(t *testing.T) {
 		t.Error("Error() should not be empty even with empty Msg")
 	}
 }
+
+func TestWrap_PreservesCause(t *testing.T) {
+	cause := errors.New("underlying failure")
+	err := apperr.Wrap(3, "cannot access keychain", cause)
+	if err.Code != 3 {
+		t.Errorf("Code = %d, want 3", err.Code)
+	}
+	if err.Error() != "cannot access keychain" {
+		t.Errorf("Error() = %q, want %q", err.Error(), "cannot access keychain")
+	}
+	if !errors.Is(err, cause) {
+		t.Error("expected errors.Is(err, cause) to be true")
+	}
+}
+
+func TestWrap_Unwrap(t *testing.T) {
+	cause := errors.New("root cause")
+	err := apperr.Wrap(4, "network failure", cause)
+	unwrapped := errors.Unwrap(err)
+	if unwrapped != cause {
+		t.Errorf("Unwrap() = %v, want %v", unwrapped, cause)
+	}
+}
+
+func TestWrap_NilCause(t *testing.T) {
+	err := apperr.Wrap(1, "no cause", nil)
+	if err.Code != 1 {
+		t.Errorf("Code = %d, want 1", err.Code)
+	}
+	if errors.Unwrap(err) != nil {
+		t.Error("expected Unwrap() to return nil for nil cause")
+	}
+}
+
+func TestErrorsAs_ThroughWrap(t *testing.T) {
+	cause := apperr.New(2, "inner error")
+	outer := apperr.Wrap(4, "outer error", cause)
+	var exitErr *apperr.ExitError
+	if !errors.As(outer, &exitErr) {
+		t.Fatal("expected errors.As to match outer *ExitError")
+	}
+	if exitErr.Code != 4 {
+		t.Errorf("Code = %d, want 4 (outer)", exitErr.Code)
+	}
+}
