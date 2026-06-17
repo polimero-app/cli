@@ -53,6 +53,10 @@ func (r *Real) Delete(ctx context.Context, service, account string) error {
 	})
 }
 
+// runWithContext runs fn in a goroutine and returns its error unless ctx is
+// cancelled first. Note: OS keychain operations are not interruptible — if ctx
+// is cancelled, the goroutine completes independently. This is an accepted
+// trade-off since keychain operations are bounded (typically < 100ms).
 func runWithContext(ctx context.Context, fn func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
