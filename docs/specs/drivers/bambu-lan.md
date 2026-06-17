@@ -15,6 +15,7 @@ Initial target families:
 - X1
 - P1
 - A1
+- H2
 
 Initial auth mode:
 
@@ -123,8 +124,22 @@ The `pushall` payload:
 | X1 | Full status object in every push message |
 | P1 | Delta only (changed fields only) in autonomous push messages |
 | A1 | Delta only (changed fields only) in autonomous push messages |
+| H2 | Full status object; some fields use different JSON types (see below) |
 
 Always publish `pushall` on connect to obtain a complete status object regardless of family. Do not rely on autonomous push messages for the initial status read.
+
+### H2 Family Payload Differences
+
+The H2 family uses the same MQTT topics and `pushall` command but differs in several field types and locations compared to X1/P1/A1:
+
+| Field | X1/P1/A1 | H2 |
+|---|---|---|
+| `print.stg` | Integer (stage ID) | Array (stage list) |
+| `print.gcode_file_prepare_percent` | Integer | String |
+| `print.wifi_signal` | String numeric (e.g. `"-45"`) | String with unit (e.g. `"-69dBm"`) |
+| `lights_report` | Top-level sibling of `print` | Nested inside `print` |
+
+The driver must tolerate these type variations without failing. JSON unmarshaling must not reject entire messages due to type mismatches in non-essential fields.
 
 ## File Storage Transport
 

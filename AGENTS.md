@@ -109,7 +109,7 @@ Stable exit codes:
 
 Initial Bambu scope:
 
-- X1, P1, and A1 families.
+- X1, P1, A1, and H2 families.
 - LAN access code only.
 - Implemented commands: discovery, TLS refresh, and read-only status.
 - Capability-gated behavior.

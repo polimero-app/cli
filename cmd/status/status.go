@@ -256,7 +256,7 @@ func writeHumanSuccess(w io.Writer, name string, result *driver.StatusResult, de
 		fmt.Sprintf("Printer: %s", name),
 		fmt.Sprintf("State: %s", result.State),
 	}
-	if detailed && result.Stage != nil {
+	if detailed && result.Stage != nil && result.State != "idle" {
 		lines = append(lines, fmt.Sprintf("Stage: %s", *result.Stage))
 	}
 	if result.Progress != nil {

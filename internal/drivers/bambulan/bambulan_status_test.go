@@ -882,3 +882,99 @@ func TestStatus_PublishWaitHonorsContext(t *testing.T) {
 		t.Errorf("expected exit 4 for publish timeout, got %v", err)
 	}
 }
+
+// --- H2C compatibility tests ---
+
+func TestIsPushallReport_H2C_StgArray(t *testing.T) {
+	// H2C sends "stg" as an array instead of int. isPushallReport must still
+	// detect the report via gcode_state.
+	data := []byte(`{"print":{"gcode_state":"IDLE","stg":[],"stg_cur":-1}}`)
+	if !isPushallReport(data) {
+		t.Error("isPushallReport should accept H2C payload with stg as array")
+	}
+}
+
+func TestParseReport_H2C_TypeMismatchFields(t *testing.T) {
+	// H2C payload with stg as array and gcode_file_prepare_percent as string.
+	data := []byte(`{"print":{
+		"gcode_state":"IDLE",
+		"nozzle_temper":31.0,"nozzle_target_temper":0.0,
+		"bed_temper":23.0,"bed_target_temper":0.0,
+		"mc_percent":0,
+		"hms":[],
+		"stg":[],"stg_cur":-1,
+		"gcode_file_prepare_percent":"0",
+		"spd_lvl":2,
+		"wifi_signal":"-69dBm",
+		"lights_report":[{"node":"chamber_light","mode":"off"}]
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.State != "idle" {
+		t.Errorf("State = %q, want idle", result.State)
+	}
+	if result.Temperatures == nil || result.Temperatures.Nozzle == nil {
+		t.Fatal("expected nozzle temperature")
+	}
+	if result.Temperatures.Nozzle.CurrentCelsius != 31.0 {
+		t.Errorf("nozzle temp = %v, want 31.0", result.Temperatures.Nozzle.CurrentCelsius)
+	}
+	if result.SpeedLevel == nil || *result.SpeedLevel != "standard" {
+		t.Errorf("SpeedLevel = %v, want standard", result.SpeedLevel)
+	}
+	// Wi-Fi should parse "-69dBm" suffix format.
+	if result.Wifi == nil {
+		t.Fatal("expected wifi data")
+	}
+	if result.Wifi.SignalDbm != -69 {
+		t.Errorf("SignalDbm = %d, want -69", result.Wifi.SignalDbm)
+	}
+	// Lights nested inside print on H2C.
+	if result.Lights == nil {
+		t.Fatal("expected lights data")
+	}
+	if result.Lights["chamber_light"] != "off" {
+		t.Errorf("chamber_light = %q, want off", result.Lights["chamber_light"])
+	}
+}
+
+func TestParseReport_H2C_LightsInsidePrint(t *testing.T) {
+	// When lights_report is inside print (H2C) and absent at top level.
+	data := []byte(`{"print":{
+		"gcode_state":"IDLE",
+		"nozzle_temper":25.0,
+		"bed_temper":22.0,
+		"mc_percent":0,
+		"hms":[],
+		"lights_report":[{"node":"chamber_light","mode":"on"},{"node":"work_light","mode":"off"}]
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Lights == nil || len(result.Lights) != 2 {
+		t.Fatalf("expected 2 lights, got %v", result.Lights)
+	}
+	if result.Lights["chamber_light"] != "on" {
+		t.Errorf("chamber_light = %q, want on", result.Lights["chamber_light"])
+	}
+	if result.Lights["work_light"] != "off" {
+		t.Errorf("work_light = %q, want off", result.Lights["work_light"])
+	}
+}
+
+func TestMapWifi_DBMSuffix(t *testing.T) {
+	sig := rawValueString("-69dBm")
+	p := &bambuPrint{WifiSignal: &sig}
+	wifi := mapWifi(p)
+	if wifi == nil {
+		t.Fatal("expected wifi result")
+	}
+	if wifi.SignalDbm != -69 {
+		t.Errorf("SignalDbm = %d, want -69", wifi.SignalDbm)
+	}
+}

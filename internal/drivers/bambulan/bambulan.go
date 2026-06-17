@@ -303,8 +303,15 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 // isPushallReport returns true when data contains a full pushall response.
 // Delta reports from P1/A1 autonomous pushes omit print.gcode_state and must
 // be skipped — accepting them can yield stale or partial status.
+//
+// Uses a minimal struct to avoid UnmarshalTypeError from fields whose JSON
+// type varies across printer families (e.g. H2C sends "stg" as an array).
 func isPushallReport(data []byte) bool {
-	var rep bambuReport
+	var rep struct {
+		Print *struct {
+			GcodeState *string `json:"gcode_state"`
+		} `json:"print"`
+	}
 	if err := json.Unmarshal(data, &rep); err != nil {
 		return false
 	}
@@ -406,10 +413,12 @@ type bambuPrint struct {
 	SpdLvl          *int    `json:"spd_lvl"`
 	SpdMag          *int    `json:"spd_mag"`
 	WifiSignal      *rawValueString `json:"wifi_signal"`
-	GcodeFilePreparePercent *int `json:"gcode_file_prepare_percent"`
+	GcodeFilePreparePercent *rawValueString `json:"gcode_file_prepare_percent"`
 
-	Stg    *int `json:"stg"`
-	StgCur *int `json:"stg_cur"`
+	// Stg type varies across families: int on X1/P1/A1, array on H2C.
+	// Not used in mappings (mapStage uses StgCur); accept any JSON value.
+	Stg    json.RawMessage `json:"stg"`
+	StgCur *int            `json:"stg_cur"`
 
 	NozzleDiameter    *rawValueString `json:"nozzle_diameter"`
 	TotalLayerCount   *int            `json:"total_layer_num_bak"` // not used; total_layer_num preferred
@@ -433,6 +442,10 @@ type bambuPrint struct {
 
 	// BedType (plate type identifier).
 	BedType *rawValueString `json:"bed_type"`
+
+	// LightsReport is nested inside "print" on some families (H2C).
+	// On X1/P1/A1 it appears at the top level of the report instead.
+	LightsReport []bambuLightReport `json:"lights_report"`
 }
 
 type bambuAMS struct {
@@ -481,10 +494,16 @@ func (v *rawValueString) UnmarshalJSON(data []byte) error {
 
 // parseReport unmarshals a Bambu pushall report payload into a StatusResult.
 // This is a pure function — no network access, safe to unit test with raw bytes.
+//
+// Tolerates json.UnmarshalTypeError from fields whose JSON type varies across
+// printer families (e.g. H2C sends "stg" as an array instead of an int).
 func parseReport(data []byte) (*driver.StatusResult, error) {
 	var rep bambuReport
 	if err := json.Unmarshal(data, &rep); err != nil {
-		return nil, apperr.Wrap(4, "invalid status report", err)
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) {
+			return nil, apperr.Wrap(4, "invalid status report", err)
+		}
 	}
 	p := rep.Print
 	state := "unknown"
@@ -517,7 +536,12 @@ func parseReport(data []byte) (*driver.StatusResult, error) {
 	result.TimeEstimates = mapTimeEstimates(p)
 	result.SpeedLevel = mapSpeedLevel(p)
 	result.Wifi = mapWifi(p)
-	result.Lights = mapLights(rep.LightsReport)
+	// lights_report lives at top level on X1/P1/A1 and inside print on H2C.
+	lightsReport := rep.LightsReport
+	if len(lightsReport) == 0 && p != nil {
+		lightsReport = p.LightsReport
+	}
+	result.Lights = mapLights(lightsReport)
 	result.PrintMeta = mapPrintMeta(p)
 	result.Stage = mapStage(p)
 	result.Timelapse = mapTimelapse(p)
@@ -737,6 +761,14 @@ func mapWifi(p *bambuPrint) *driver.Wifi {
 	}
 	val := rawToInt(p.WifiSignal)
 	if val == nil {
+		// H2C sends "-69dBm" with unit suffix; strip non-numeric suffix and retry.
+		s := strings.TrimSpace(string(*p.WifiSignal))
+		s = strings.TrimSuffix(strings.TrimSuffix(s, "dBm"), "dbm")
+		if n, err := strconv.Atoi(s); err == nil {
+			val = &n
+		}
+	}
+	if val == nil {
 		return nil
 	}
 	return &driver.Wifi{SignalDbm: *val}
@@ -834,7 +866,7 @@ var bambuStages = map[int]string{
 }
 
 func mapStage(p *bambuPrint) *string {
-	if p == nil || p.StgCur == nil {
+	if p == nil || p.StgCur == nil || *p.StgCur < 0 {
 		return nil
 	}
 	name, ok := bambuStages[*p.StgCur]
