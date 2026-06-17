@@ -110,13 +110,21 @@ func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format
 		}
 	}
 
+	// Remove profile and save config first to avoid orphaning keychain entries.
+	if _, err := cfg.RemoveProfile(name); err != nil {
+		return apperr.Newf(1, "cannot remove profile: %s", err)
+	}
+	if err := config.Save(dir, cfg); err != nil {
+		return apperr.Newf(1, "cannot save config: %s", err)
+	}
+
 	var warnings []removeWarning
 	accessCodeRemoved := false
 	tlsFingerprintRemoved := false
 	kcCtx, kcCancel := secretStoreContext(cmd.Context())
 	defer kcCancel()
 
-	// Delete access code (missing = warning, not fatal)
+	// Delete access code (best-effort: missing = warning, failure = warning)
 	kcAcct := fmt.Sprintf("%s:%s:access-code", p.Driver, name)
 	if err := deps.KC.Delete(kcCtx, "polimero", kcAcct); err != nil {
 		if errors.Is(err, keychain.ErrNotFound) {
@@ -125,13 +133,16 @@ func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format
 				Message: "profile was removed, but no stored access code was found",
 			})
 		} else {
-			return apperr.Wrap(3, "cannot delete access code from keychain", err)
+			warnings = append(warnings, removeWarning{
+				Code:    "access_code_delete_failed",
+				Message: "profile was removed, but the stored access code could not be deleted from keychain",
+			})
 		}
 	} else {
 		accessCodeRemoved = true
 	}
 
-	// Delete TLS fingerprint (missing on insecure profile = expected, no warning)
+	// Delete TLS fingerprint (best-effort: missing on insecure profile = expected)
 	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
 	if err := deps.KC.Delete(kcCtx, "polimero", kcFpAcct); err != nil {
 		if errors.Is(err, keychain.ErrNotFound) {
@@ -142,17 +153,13 @@ func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format
 				})
 			}
 		} else {
-			return apperr.Wrap(3, "cannot delete TLS fingerprint from keychain", err)
+			warnings = append(warnings, removeWarning{
+				Code:    "tls_fingerprint_delete_failed",
+				Message: "profile was removed, but the stored TLS fingerprint could not be deleted from keychain",
+			})
 		}
 	} else {
 		tlsFingerprintRemoved = true
-	}
-
-	if _, err := cfg.RemoveProfile(name); err != nil {
-		return apperr.Newf(1, "cannot remove profile: %s", err)
-	}
-	if err := config.Save(dir, cfg); err != nil {
-		return apperr.Newf(1, "cannot save config; keychain entries may have already been deleted: %s", err)
 	}
 
 	return writeRemoveSuccess(cmd.OutOrStdout(), format, name, accessCodeRemoved, tlsFingerprintRemoved, warnings)
@@ -210,14 +217,14 @@ func removeErrorCode(err error) string {
 	case 2:
 		return "config_error"
 	case 3:
-		return "secret_error"
+		return "secret_not_found"
 	default:
 		return "error"
 	}
 }
 
 func removeErrorMessage(err error) string {
-	if removeErrorCode(err) == "secret_error" {
+	if removeErrorCode(err) == "secret_not_found" {
 		return "keychain operation failed"
 	}
 	return err.Error()

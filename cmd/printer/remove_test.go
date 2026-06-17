@@ -328,20 +328,24 @@ func TestRemove_JSON_KeychainErrorIsSanitized(t *testing.T) {
 
 	out, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: &tty.Mock{Terminal: false}},
 		"myprinter", "--yes", "--output", "json")
-	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
-		t.Fatalf("expected exit 3, got %v", err)
+	if err != nil {
+		t.Fatalf("expected success (keychain cleanup is best-effort), got %v", err)
 	}
 	var env map[string]any
 	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
 		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
 	}
-	errDetail := env["error"].(map[string]any)
-	if errDetail["code"] != "secret_error" {
-		t.Fatalf("error.code = %v, want secret_error", errDetail["code"])
+	if env["ok"] != true {
+		t.Fatalf("expected ok=true, got %v", env["ok"])
 	}
-	if errDetail["message"] != "keychain operation failed" {
-		t.Fatalf("error.message = %v, want keychain operation failed", errDetail["message"])
+	data := env["data"].(map[string]any)
+	warnings := data["warnings"].([]any)
+	if len(warnings) < 1 {
+		t.Fatal("expected at least one warning for keychain delete failure")
+	}
+	w0 := warnings[0].(map[string]any)
+	if w0["code"] != "access_code_delete_failed" {
+		t.Fatalf("warning code = %v, want access_code_delete_failed", w0["code"])
 	}
 	if bytes.Contains([]byte(out), []byte("secret-token")) {
 		t.Fatalf("raw keychain detail leaked in output:\n%s", out)

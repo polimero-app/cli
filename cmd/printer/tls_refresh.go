@@ -150,9 +150,6 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 	defer cancel()
 
 	if insecureFlag {
-		if delErr := deps.KC.Delete(ctx, "polimero", kcFpAcct); delErr != nil && !errors.Is(delErr, keychain.ErrNotFound) {
-			return "", 0, name, apperr.Wrap(3, "cannot delete TLS fingerprint from keychain", delErr)
-		}
 		p.Insecure = true
 		p.Updated = time.Now().UTC()
 		if setErr := cfg.SetProfile(name, p); setErr != nil {
@@ -161,12 +158,22 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 		if saveErr := config.Save(dir, cfg); saveErr != nil {
 			return "", 0, name, apperr.Newf(1, "cannot save config: %s", saveErr)
 		}
+		// Config saved successfully; now clean up keychain (best-effort).
+		if delErr := deps.KC.Delete(ctx, "polimero", kcFpAcct); delErr != nil && !errors.Is(delErr, keychain.ErrNotFound) {
+			return "", 0, name, apperr.Wrap(3, "cannot delete TLS fingerprint from keychain", delErr)
+		}
 		return "", 0, "", nil
 	}
 
-	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Connecting to %s:8883...", p.Host))
+	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Connecting to %s...", p.Host))
+	captureInput := driver.ProfileInput{
+		Name:   name,
+		Driver: p.Driver,
+		Host:   p.Host,
+		Serial: p.Serial,
+	}
 	start := time.Now()
-	fp, err := drv.CaptureFingerprint(ctx, p.Host, p.Serial)
+	fp, err := drv.CaptureFingerprint(ctx, captureInput)
 	durationMs := time.Since(start).Milliseconds()
 	if err != nil {
 		return "", 0, name, err
@@ -252,7 +259,7 @@ func writeTlsRefreshError(out, errOut io.Writer, format output.Format, err error
 func tlsRefreshErrorMessage(err error) string {
 	msg := err.Error()
 	switch tlsRefreshErrorCode(err) {
-	case "secret_error":
+	case "secret_not_found":
 		return "keychain operation failed"
 	case "connection_failed":
 		if strings.Contains(msg, "TLS connect failed") {
@@ -276,7 +283,7 @@ func tlsRefreshErrorCode(err error) string {
 	case 2:
 		return "config_error"
 	case 3:
-		return "secret_error"
+		return "secret_not_found"
 	case 4:
 		return "connection_failed"
 	case 5:
