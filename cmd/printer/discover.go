@@ -91,13 +91,25 @@ func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag string, deps Discov
 	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Scanning local network for printers (timeout: %s)...", timeout))
 
 	start := time.Now()
-	var found []discoverResult
+	type driverResult struct {
+		printers []driver.DiscoveredPrinter
+		err      error
+	}
+	results := make(chan driverResult, len(drvs))
 	for _, drv := range drvs {
-		printers, discErr := drv.Discover(ctx)
-		if discErr != nil {
-			return writeDiscoverError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, discErr)
+		go func(d driver.Driver) {
+			printers, discErr := d.Discover(ctx)
+			results <- driverResult{printers: printers, err: discErr}
+		}(drv)
+	}
+
+	var found []discoverResult
+	for range drvs {
+		res := <-results
+		if res.err != nil {
+			return writeDiscoverError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, res.err)
 		}
-		for _, p := range printers {
+		for _, p := range res.printers {
 			found = append(found, discoverResult{
 				DiscoveredPrinter: p,
 				ConfiguredAs:      findConfiguredProfile(cfg, p.Serial),
