@@ -10,10 +10,12 @@ Query current status from a configured printer through the driver-neutral status
 
 This is a top-level action command that consumes printer profiles managed by `printer`, following ADR 0008 and ADR 0010.
 
+Extended read-only telemetry is available via `--detailed`, following ADR 0011.
+
 ## Syntax
 
 ```text
-polimero status <name> [--timeout <duration>] [--insecure] [--output <format>]
+polimero status <name> [--detailed] [--timeout <duration>] [--insecure] [--output <format>]
 ```
 
 ## Arguments
@@ -22,6 +24,7 @@ polimero status <name> [--timeout <duration>] [--insecure] [--output <format>]
 
 ## Flags
 
+- `--detailed`: optional. Includes extended telemetry (fans, time estimates, speed, Wi-Fi, lights, print metadata, stage, timelapse, g-code position, and brand-specific extensions such as AMS). Without this flag, only summary fields are returned.
 - `--timeout <duration>`: optional. Overrides profile/default timeout for this command.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
@@ -62,10 +65,12 @@ If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowe
 - Partial status is allowed when optional fields cannot be retrieved.
 - Partial status must include warnings.
 - Unsupported driver capabilities fail with exit code `5`.
+- `--detailed` does not change network behavior. The same pushall request and timeout apply. The flag controls parsing and output scope only.
+- Both human and JSON output respect `--detailed`: without it, only summary fields are returned.
 
 ## Status Data Contract
 
-Portable status fields:
+### Summary fields (always returned)
 
 - `profile`: profile name.
 - `driver`: driver name.
@@ -77,9 +82,58 @@ Portable status fields:
 - `warnings`: partial-data or non-fatal retrieval warnings. Always an array; empty when none.
 - `capabilities`: driver capability metadata. Always present.
 
-Drivers may include adapter-specific raw fields only inside a namespaced extension object. The first implementation should avoid extensions unless required for debugging a documented gap.
+### Extended portable fields (returned with `--detailed`)
+
+All extended fields are `null` or omitted when unavailable. Missing extended data does not produce an error; a warning is added when a field is expected but absent for the connected hardware.
+
+- `fans`: named fan speeds. Object with string keys (fan name) and integer values (speed percentage 0-100). `null` if unavailable. Example keys: `partCooling`, `heatbreak`, `auxiliary`, `chamber`.
+- `timeEstimates`: time information for the current job. `null` if unavailable or no job active.
+  - `elapsedSeconds`: integer. Time since print started.
+  - `remainingSeconds`: integer or `null`. Estimated time remaining.
+  - `totalSeconds`: integer or `null`. Estimated total print time.
+- `speedLevel`: current speed profile or level. String value. Driver-defined values (for example `"silent"`, `"standard"`, `"sport"`, `"ludicrous"` for Bambu). `null` if unavailable.
+- `wifi`: network signal information. `null` if unavailable.
+  - `signalDbm`: integer. Wi-Fi signal strength in dBm.
+- `lights`: lighting state. Object with string keys (light name) and string values (`"on"`, `"off"`, or a brightness level). `null` if unavailable. Example keys: `chamber`.
+- `printMeta`: metadata about the current print file. `null` if unavailable or no job active.
+  - `fileName`: string. Full file path or name.
+  - `fileSize`: integer or `null`. File size in bytes.
+  - `nozzleDiameter`: float or `null`. Nozzle diameter in mm.
+  - `bedType`: string or `null`. Plate type (for example `"textured_pei"`, `"cool_plate"`).
+- `stage`: current operational sub-stage within the print state. String. More granular than `state` (for example `"heating"`, `"printing"`, `"cooling"`, `"leveling"`). `null` if unavailable.
+- `timelapse`: timelapse recording status. `null` if unavailable.
+  - `recording`: boolean. Whether timelapse recording is active.
+  - `progress`: integer or `null`. Recording progress percentage.
+  - `ready`: boolean or `null`. Whether a timelapse file is ready for retrieval.
+- `gcodePosition`: g-code execution position. `null` if unavailable.
+  - `zMm`: float. Current Z height in millimeters.
+  - `currentLine`: integer. Current g-code line number.
+  - `totalLines`: integer. Total g-code lines.
+
+### Brand-specific extensions (returned with `--detailed`)
+
+- `extensions`: object keyed by driver name. Contains hardware-specific data that has no portable equivalent. `null` if the driver has no extensions or `--detailed` is not set.
+
+For the `bambu-lan` driver:
+
+- `extensions.bambu-lan.ams`: AMS (Automatic Material System) data. `null` if no AMS connected or data unavailable.
+  - `units`: array of AMS unit objects.
+    - `id`: integer. Unit index (0-based).
+    - `humidity`: integer or `null`. Humidity percentage inside the unit.
+    - `temperature`: float or `null`. Temperature in Celsius inside the unit.
+    - `trays`: array of tray objects.
+      - `slot`: integer. Tray slot index (0-based).
+      - `filamentType`: string or `null`. Material type (for example `"PLA"`, `"PETG"`, `"ABS"`).
+      - `color`: string or `null`. Hex color code (for example `"FF0000"`).
+      - `remainingPercent`: integer or `null`. Estimated remaining filament percentage.
+      - `nozzleTempMin`: integer or `null`. Minimum nozzle temperature for this filament in Celsius.
+      - `nozzleTempMax`: integer or `null`. Maximum nozzle temperature for this filament in Celsius.
+
+Other drivers define their own extension keys as needed.
 
 ## Output
+
+### Summary output (default)
 
 Human success example:
 
@@ -135,6 +189,165 @@ JSON success example:
     },
     "progress": {
       "percent": 42
+    },
+    "errors": [],
+    "warnings": [],
+    "capabilities": {
+      "status": true
+    }
+  },
+  "error": null,
+  "meta": {
+    "command": "status",
+    "durationMs": 148
+  }
+}
+```
+
+### Detailed output (`--detailed`)
+
+Human detailed example:
+
+```text
+Printer: garage-x1c
+State: printing
+Stage: printing
+Progress: 42% (layer 84 / 200)
+Speed: standard
+Time: 1h 12m elapsed, 1h 40m remaining
+Nozzle: 215.0 C / 220.0 C
+Bed: 60.0 C / 60.0 C
+Chamber: 38.0 C
+Fans:
+  Part cooling: 100%
+  Heatbreak: 70%
+  Auxiliary: 50%
+  Chamber: 30%
+Wi-Fi: -45 dBm
+Lights:
+  Chamber: on
+Job: bracket.3mf (14.2 MB, 0.4mm nozzle, textured_pei)
+G-code: Z 12.40 mm, line 48201 / 112400
+Timelapse: recording (35%)
+AMS:
+  Unit 0 (humidity: 25%, temp: 28.0 C):
+    Slot 0: PLA red (85%)
+    Slot 1: PLA white (62%)
+    Slot 2: PETG black (40%)
+    Slot 3: (empty)
+```
+
+JSON detailed example:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "profile": "garage-x1c",
+    "driver": "bambu-lan",
+    "state": "printing",
+    "temperatures": {
+      "nozzle": {
+        "currentCelsius": 215.0,
+        "targetCelsius": 220.0
+      },
+      "bed": {
+        "currentCelsius": 60.0,
+        "targetCelsius": 60.0
+      },
+      "chamber": {
+        "currentCelsius": 38.0
+      }
+    },
+    "job": {
+      "name": "bracket.3mf"
+    },
+    "progress": {
+      "percent": 42,
+      "currentLayer": 84,
+      "totalLayers": 200
+    },
+    "fans": {
+      "partCooling": 100,
+      "heatbreak": 70,
+      "auxiliary": 50,
+      "chamber": 30
+    },
+    "timeEstimates": {
+      "elapsedSeconds": 4320,
+      "remainingSeconds": 6000,
+      "totalSeconds": 10320
+    },
+    "speedLevel": "standard",
+    "wifi": {
+      "signalDbm": -45
+    },
+    "lights": {
+      "chamber": "on"
+    },
+    "printMeta": {
+      "fileName": "bracket.3mf",
+      "fileSize": 14893261,
+      "nozzleDiameter": 0.4,
+      "bedType": "textured_pei"
+    },
+    "stage": "printing",
+    "timelapse": {
+      "recording": true,
+      "progress": 35,
+      "ready": false
+    },
+    "gcodePosition": {
+      "zMm": 12.4,
+      "currentLine": 48201,
+      "totalLines": 112400
+    },
+    "extensions": {
+      "bambu-lan": {
+        "ams": {
+          "units": [
+            {
+              "id": 0,
+              "humidity": 25,
+              "temperature": 28.0,
+              "trays": [
+                {
+                  "slot": 0,
+                  "filamentType": "PLA",
+                  "color": "FF0000",
+                  "remainingPercent": 85,
+                  "nozzleTempMin": 190,
+                  "nozzleTempMax": 230
+                },
+                {
+                  "slot": 1,
+                  "filamentType": "PLA",
+                  "color": "FFFFFF",
+                  "remainingPercent": 62,
+                  "nozzleTempMin": 190,
+                  "nozzleTempMax": 230
+                },
+                {
+                  "slot": 2,
+                  "filamentType": "PETG",
+                  "color": "000000",
+                  "remainingPercent": 40,
+                  "nozzleTempMin": 220,
+                  "nozzleTempMax": 260
+                },
+                {
+                  "slot": 3,
+                  "filamentType": null,
+                  "color": null,
+                  "remainingPercent": null,
+                  "nozzleTempMin": null,
+                  "nozzleTempMax": null
+                }
+              ]
+            }
+          ]
+        }
+      }
     },
     "errors": [],
     "warnings": [],
@@ -206,6 +419,8 @@ JSON timeout example:
 
 ## Test Scenarios
 
+### Summary mode
+
 - Returns full status for a mock driver.
 - Returns partial status with warnings.
 - Fails when profile is missing.
@@ -220,6 +435,24 @@ JSON timeout example:
 - Uses command timeout override.
 - Emits stable JSON envelope.
 - Does not leak secrets in output or logs.
+- Does not include extended fields without `--detailed`.
+
+### Detailed mode
+
+- Returns all available extended portable fields with `--detailed`.
+- Returns brand-specific extensions under `extensions.<driver>` with `--detailed`.
+- Omits `extensions` key without `--detailed`.
+- Returns partial extended data with warnings when some fields are unavailable.
+- Returns `null` for AMS when no AMS is connected (not an error).
+- Fan speeds are integer percentages 0-100.
+- Time estimates use seconds as the unit.
+- Speed level is a string value from the driver.
+- Wi-Fi signal is in dBm (negative integer).
+- Lights values are strings (`"on"`, `"off"`, or brightness level).
+- G-code position includes Z height, current line, and total lines.
+- Timelapse reports recording state, not camera stream access.
+- JSON detailed output includes all fields in the documented schema.
+- Human detailed output formats extended fields readably.
 
 ## Non-goals
 
@@ -227,3 +460,6 @@ JSON timeout example:
 - Discovering printers.
 - Showing Bambu cloud state.
 - Retrying transient failures.
+- Camera stream access (separate `camera stream` command).
+- Controlling temperatures, fans, speed, or any other printer state.
+- Polling or continuous monitoring (single snapshot per invocation).
