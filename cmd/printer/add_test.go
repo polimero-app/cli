@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/polimero-app/cli/cmd/printer"
 	"github.com/polimero-app/cli/internal/apperr"
@@ -28,8 +27,22 @@ type stubDriver struct {
 }
 
 func (s *stubDriver) Name() string { return "bambu-lan" }
-func (s *stubDriver) ConnectCheck(_ context.Context, _, _, _ string, insecure bool, _ time.Duration) (string, error) {
-	if insecure {
+func (s *stubDriver) ValidateProfile(p driver.ProfileInput) error {
+	if p.Serial == "" {
+		return apperr.New(2, "--serial is required for bambu-lan driver")
+	}
+	if len(p.Serial) > 64 {
+		return apperr.New(2, "--serial too long (max 64 chars)")
+	}
+	for _, c := range p.Serial {
+		if c < 0x21 || c > 0x7E {
+			return apperr.New(2, "--serial contains invalid character (must be printable ASCII with no whitespace)")
+		}
+	}
+	return nil
+}
+func (s *stubDriver) ConnectCheck(_ context.Context, p driver.ProfileInput, _ driver.SecretsBundle) (string, error) {
+	if p.Insecure {
 		return "", nil
 	}
 	return s.fingerprint, s.err
@@ -39,7 +52,7 @@ func (s *stubDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.S
 	return nil, nil
 }
 
-func (s *stubDriver) CaptureFingerprint(_ context.Context, _, _ string) (string, error) {
+func (s *stubDriver) CaptureFingerprint(_ context.Context, _ driver.ProfileInput) (string, error) {
 	return "", nil
 }
 
@@ -640,7 +653,7 @@ func TestAdd_Verbose_ShowsProgressSteps(t *testing.T) {
 	}
 
 	wantLines := []string{
-		"Connecting to 192.0.2.10:8883...",
+		"Connecting to 192.0.2.10...",
 		"Connection verified. TLS fingerprint: sha256:",
 		"Storing credentials in keychain...",
 		"Saving profile",

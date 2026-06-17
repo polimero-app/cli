@@ -18,6 +18,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/driver"
 )
 
 func makeSelfSignedTLSCert(t *testing.T) tls.Certificate {
@@ -71,7 +72,8 @@ func TestCaptureFingerprint_HappyPath(t *testing.T) {
 		return tlsClient, nil
 	})
 
-	fp, err := drv.CaptureFingerprint(context.Background(), "192.0.2.1", "SN001")
+	pi := driver.ProfileInput{Host: "192.0.2.1", Serial: "SN001"}
+	fp, err := drv.CaptureFingerprint(context.Background(), pi)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,7 +86,8 @@ func TestCaptureFingerprint_DialError_ExitsCode4(t *testing.T) {
 	drv := newDialTLSDriver(func(_ context.Context, _ string, _ *tls.Config) (*tls.Conn, error) {
 		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
 	})
-	_, err := drv.CaptureFingerprint(context.Background(), "192.0.2.1", "SN001")
+	pi := driver.ProfileInput{Host: "192.0.2.1", Serial: "SN001"}
+	_, err := drv.CaptureFingerprint(context.Background(), pi)
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
 		t.Errorf("expected exit 4, got %v", err)
@@ -97,7 +100,8 @@ func TestCaptureFingerprint_ContextCancelled_ExitsCode4(t *testing.T) {
 	drv := newDialTLSDriver(func(ctx context.Context, _ string, _ *tls.Config) (*tls.Conn, error) {
 		return nil, ctx.Err()
 	})
-	_, err := drv.CaptureFingerprint(ctx, "192.0.2.1", "SN001")
+	pi := driver.ProfileInput{Host: "192.0.2.1", Serial: "SN001"}
+	_, err := drv.CaptureFingerprint(ctx, pi)
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
 		t.Errorf("expected exit 4, got %v", err)

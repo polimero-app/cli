@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/eclipse/paho.mqtt.golang/packets"
@@ -99,7 +98,11 @@ func realBrowse(ctx context.Context, service string) (<-chan *mdnsEntry, error) 
 			if host == "" {
 				continue
 			}
-			out <- &mdnsEntry{Host: host, Port: e.Port, Text: e.Text}
+			select {
+			case out <- &mdnsEntry{Host: host, Port: e.Port, Text: e.Text}:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	return out, nil
@@ -145,18 +148,34 @@ func buildTLSConfig(serial, fingerprint string, insecure bool) (*tls.Config, err
 	return cfg, nil
 }
 
+// ValidateProfile checks bambu-lan-specific profile requirements.
+func (d *Driver) ValidateProfile(p driver.ProfileInput) error {
+	if p.Serial == "" {
+		return apperr.New(2, "--serial is required for bambu-lan driver")
+	}
+	if len(p.Serial) > 64 {
+		return apperr.Newf(2, "--serial too long (max 64 chars)")
+	}
+	for _, c := range p.Serial {
+		if c < 0x21 || c > 0x7E {
+			return apperr.Newf(2, "--serial contains invalid character (must be printable ASCII with no whitespace)")
+		}
+	}
+	return nil
+}
+
 // ConnectCheck performs a full TLS+MQTT handshake to verify credentials and capture the
-// leaf certificate fingerprint. Returns ("", nil) immediately when insecure=true.
+// leaf certificate fingerprint. Returns ("", nil) immediately when p.Insecure is true.
 //
 // Exit codes on error:
 //   - 3: MQTT auth rejected
 //   - 4: TLS dial failure, network timeout, or context cancelled
-func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode string, insecure bool, timeout time.Duration) (string, error) {
-	if insecure {
+func (d *Driver) ConnectCheck(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle) (string, error) {
+	if p.Insecure {
 		return "", nil
 	}
 
-	tlsCfg := buildCaptureTLSConfig(serial)
+	tlsCfg := buildCaptureTLSConfig(p.Serial)
 
 	var (
 		mu      sync.Mutex
@@ -172,12 +191,12 @@ func (d *Driver) ConnectCheck(ctx context.Context, host, serial, accessCode stri
 	}
 
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tls://%s:8883", host))
+	opts.AddBroker(fmt.Sprintf("tls://%s:8883", p.Host))
 	opts.SetClientID(randomClientID())
 	opts.SetUsername("bblp")
-	opts.SetPassword(accessCode)
+	opts.SetPassword(s.AccessCode)
 	opts.SetTLSConfig(tlsCfg)
-	opts.SetConnectTimeout(timeout)
+	opts.SetConnectTimeout(p.Timeout)
 	opts.SetAutoReconnect(false)
 	opts.SetKeepAlive(60)
 
@@ -524,12 +543,12 @@ func mapHMSErrors(p *bambuPrint) []driver.StatusError {
 	return errs
 }
 
-func (d *Driver) CaptureFingerprint(ctx context.Context, host, serial string) (string, error) {
+func (d *Driver) CaptureFingerprint(ctx context.Context, p driver.ProfileInput) (string, error) {
 	cfg := &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // Bambu CA not in OS trust stores; capturing cert for TOFU pin (ADR 0007)
-		ServerName:         serial,
+		ServerName:         p.Serial,
 	}
-	conn, err := d.dialTLS(ctx, fmt.Sprintf("%s:8883", host), cfg)
+	conn, err := d.dialTLS(ctx, fmt.Sprintf("%s:8883", p.Host), cfg)
 	if err != nil {
 		return "", apperr.Wrap(4, "TLS connect failed", err)
 	}

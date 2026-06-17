@@ -172,7 +172,7 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbos
 		TLSFingerprint: tlsFingerprint,
 	}
 
-	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Connecting to %s:8883...", p.Host))
+	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Connecting to %s...", p.Host))
 	start := time.Now()
 	result, err := drv.Status(ctx, pi, secrets, deps.Log)
 	durationMs := time.Since(start).Milliseconds()
@@ -184,6 +184,9 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbos
 }
 
 func writeStatusSuccess(w io.Writer, format output.Format, name, driverName string, result *driver.StatusResult, durationMs int64) error {
+	if result == nil {
+		return fmt.Errorf("driver returned nil status result")
+	}
 	if format == output.FormatJSON {
 		dm := durationMs
 		type statusData struct {
@@ -298,18 +301,18 @@ func statusErrorMessage(err error) string {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
 	switch statusErrorCode(err) {
-	case "auth_error":
+	case "authentication_failed":
 		switch {
 		case strings.Contains(msg, "MQTT authentication rejected"):
 			return "MQTT authentication rejected"
 		case strings.Contains(msg, "TLS fingerprint mismatch"):
 			return "TLS fingerprint mismatch"
-		case strings.Contains(lower, "keychain"):
-			return msg
 		default:
 			return "authentication or secret error"
 		}
-	case "network_error":
+	case "secret_not_found":
+		return "secret not found"
+	case "connection_failed":
 		switch {
 		case strings.Contains(lower, "cancelled"):
 			return "printer status request cancelled"
@@ -338,9 +341,13 @@ func statusErrorCode(err error) string {
 	case 2:
 		return "config_error"
 	case 3:
-		return "auth_error"
+		msg := err.Error()
+		if strings.Contains(msg, "MQTT authentication") || strings.Contains(msg, "TLS fingerprint mismatch") {
+			return "authentication_failed"
+		}
+		return "secret_not_found"
 	case 4:
-		return "network_error"
+		return "connection_failed"
 	case 5:
 		return "capability_unsupported"
 	default:
@@ -353,6 +360,9 @@ func isStatusTimeout(err error) bool {
 	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
 		return false
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout")
+	return strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
 }

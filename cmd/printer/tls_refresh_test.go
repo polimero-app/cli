@@ -28,13 +28,16 @@ type stubRefreshDriver struct {
 
 func (s *stubRefreshDriver) Name() string                      { return "bambu-lan" }
 func (s *stubRefreshDriver) Capabilities() driver.Capabilities { return s.caps }
-func (s *stubRefreshDriver) ConnectCheck(_ context.Context, _, _, _ string, _ bool, _ time.Duration) (string, error) {
+func (s *stubRefreshDriver) ValidateProfile(_ driver.ProfileInput) error {
+	return nil
+}
+func (s *stubRefreshDriver) ConnectCheck(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle) (string, error) {
 	return "", nil
 }
 func (s *stubRefreshDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
 	return nil, nil
 }
-func (s *stubRefreshDriver) CaptureFingerprint(_ context.Context, _, _ string) (string, error) {
+func (s *stubRefreshDriver) CaptureFingerprint(_ context.Context, _ driver.ProfileInput) (string, error) {
 	return s.fp, s.err
 }
 
@@ -493,8 +496,8 @@ func TestTlsRefresh_Verbose_ShowsProgressSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "Connecting to 192.0.2.10:8883...") {
-		t.Errorf("expected 'Connecting to 192.0.2.10:8883...' in output:\n%s", out)
+	if !strings.Contains(out, "Connecting to 192.0.2.10...") {
+		t.Errorf("expected 'Connecting to 192.0.2.10...' in output:\n%s", out)
 	}
 	if !strings.Contains(out, "TLS certificate captured. New fingerprint: sha256:") {
 		t.Errorf("expected 'TLS certificate captured. New fingerprint: sha256:' in output:\n%s", out)

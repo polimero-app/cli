@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/polimero-app/cli/cmd/printer"
 	"github.com/polimero-app/cli/internal/apperr"
@@ -26,14 +25,17 @@ type stubStatusDriver struct {
 
 func (s *stubStatusDriver) Name() string                      { return "bambu-lan" }
 func (s *stubStatusDriver) Capabilities() driver.Capabilities { return s.caps }
-func (s *stubStatusDriver) ConnectCheck(_ context.Context, _, _, _ string, _ bool, _ time.Duration) (string, error) {
+func (s *stubStatusDriver) ValidateProfile(_ driver.ProfileInput) error {
+	return nil
+}
+func (s *stubStatusDriver) ConnectCheck(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle) (string, error) {
 	return "", nil
 }
 func (s *stubStatusDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
 	return s.result, s.err
 }
 
-func (s *stubStatusDriver) CaptureFingerprint(_ context.Context, _, _ string) (string, error) {
+func (s *stubStatusDriver) CaptureFingerprint(_ context.Context, _ driver.ProfileInput) (string, error) {
 	return "", nil
 }
 
@@ -491,8 +493,8 @@ func TestStatus_Verbose_ShowsProgressSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "Connecting to 192.0.2.10:8883...") {
-		t.Errorf("expected 'Connecting to 192.0.2.10:8883...' in output:\n%s", out)
+	if !strings.Contains(out, "Connecting to 192.0.2.10...") {
+		t.Errorf("expected 'Connecting to 192.0.2.10...' in output:\n%s", out)
 	}
 	if !strings.Contains(out, "Response received (") {
 		t.Errorf("expected 'Response received (' in output:\n%s", out)

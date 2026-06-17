@@ -120,7 +120,8 @@ func parseSSDPHeaders(msg string) map[string]string {
 	return headers
 }
 
-// extractIPFromURL extracts the host IP from a URL like "http://192.0.2.10/" or "http://192.0.2.10:80/path".
+// extractIPFromURL extracts the host IP from a URL like "http://192.0.2.10/" or "http://[::1]:80/path".
+// Handles both IPv4 and IPv6 addresses correctly.
 func extractIPFromURL(url string) string {
 	s := url
 	if i := strings.Index(s, "://"); i >= 0 {
@@ -129,11 +130,12 @@ func extractIPFromURL(url string) string {
 	if i := strings.Index(s, "/"); i >= 0 {
 		s = s[:i]
 	}
-	// Strip port if present (e.g. "192.0.2.10:80" -> "192.0.2.10")
-	if i := strings.LastIndex(s, ":"); i >= 0 {
-		s = s[:i]
+	// Try net.SplitHostPort first (handles both IPv4 "host:port" and IPv6 "[::1]:port").
+	if host, _, err := net.SplitHostPort(s); err == nil {
+		return host
 	}
-	return s
+	// No port present; strip brackets for bare IPv6 like "[::1]".
+	return strings.TrimSuffix(strings.TrimPrefix(s, "["), "]")
 }
 
 // extractSerialFromUSN extracts the serial from a USN like "uuid:SERIAL::urn:...".

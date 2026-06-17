@@ -67,9 +67,9 @@ func AddCommandWithDeps(deps AddDeps) *cobra.Command {
 
 	cmd.Flags().StringVar(&flags.driverName, "driver", "", "driver name (e.g. bambu-lan)")
 	cmd.Flags().StringVar(&flags.host, "host", "", "printer IP or hostname")
-	cmd.Flags().StringVar(&flags.serial, "serial", "", "printer serial number (required for bambu-lan)")
+	cmd.Flags().StringVar(&flags.serial, "serial", "", "printer serial number (required by some drivers)")
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "10s", "connection timeout")
-	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS verification and MQTT auth check")
+	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS verification and auth check")
 	cmd.Flags().StringVar(&flags.accessCodeFile, "access-code-file", "", "file containing the access code")
 
 	return cmd
@@ -118,10 +118,14 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 	if !ok {
 		return apperr.Newf(2, "unknown driver %q; valid drivers: %s", driverName, strings.Join(drivers.Names(), ", "))
 	}
-	if driverName == "bambu-lan" {
-		if err := validateSerial(serial); err != nil {
-			return err
-		}
+	profileInput := driver.ProfileInput{
+		Name:   name,
+		Driver: driverName,
+		Host:   host,
+		Serial: serial,
+	}
+	if err := drv.ValidateProfile(profileInput); err != nil {
+		return err
 	}
 	timeout, err := time.ParseDuration(timeoutStr)
 	if err != nil {
@@ -151,7 +155,7 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 			return err
 		}
 	} else if deps.Prompter.IsTerminal() {
-		accessCode, err = deps.Prompter.ReadHidden(fmt.Sprintf("Enter Bambu LAN access code for %s: ", name))
+		accessCode, err = deps.Prompter.ReadHidden(fmt.Sprintf("Enter access code for %s: ", name))
 		if err != nil {
 			return apperr.Newf(1, "cannot read access code: %s", err)
 		}
@@ -169,13 +173,23 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 	verbose := verboseFlag && format == output.FormatHuman
 	w := cmd.OutOrStdout()
 
+	connectProfile := driver.ProfileInput{
+		Name:     name,
+		Driver:   driverName,
+		Host:     host,
+		Serial:   serial,
+		Timeout:  timeout,
+		Insecure: insecure,
+	}
+	connectSecrets := driver.SecretsBundle{AccessCode: accessCode}
+
 	var fingerprint string
 	opCtx, opCancel := context.WithTimeout(cmd.Context(), timeout)
 	defer opCancel()
 	if !insecure {
 		// 3. Connectivity check (TLS + MQTT CONNECT + CONNACK)
-		output.Verbose(w, verbose, fmt.Sprintf("Connecting to %s:8883...", host))
-		fingerprint, err = drv.ConnectCheck(opCtx, host, serial, accessCode, false, timeout)
+		output.Verbose(w, verbose, fmt.Sprintf("Connecting to %s...", host))
+		fingerprint, err = drv.ConnectCheck(opCtx, connectProfile, connectSecrets)
 		if err != nil {
 			return err // already an *apperr.ExitError with code 3 or 4
 		}
@@ -303,15 +317,16 @@ func writeAddError(out, errOut io.Writer, format output.Format, err error) error
 }
 
 func addErrorMessage(err error) string {
-	switch addErrorCode(err) {
-	case "auth_error":
+	code := addErrorCode(err)
+	switch code {
+	case "authentication_failed":
 		return "MQTT authentication rejected"
-	case "network_error":
+	case "connection_failed":
 		if strings.Contains(err.Error(), "connection cancelled") {
 			return "connection cancelled"
 		}
 		return "connection failed"
-	case "keychain_error":
+	case "secret_not_found":
 		return "keychain operation failed"
 	default:
 		return err.Error()
@@ -319,18 +334,31 @@ func addErrorMessage(err error) string {
 }
 
 func addErrorCode(err error) string {
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "already exists"):
-		return "profile_exists"
-	case strings.Contains(msg, "unknown driver"):
-		return "unknown_driver"
-	case strings.Contains(msg, "MQTT authentication"):
-		return "auth_error"
-	case strings.Contains(msg, "connection failed"), strings.Contains(msg, "connection cancelled"):
-		return "network_error"
-	case strings.Contains(msg, "keychain"):
-		return "keychain_error"
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) {
+		return "error"
+	}
+	switch exitErr.Code {
+	case 2:
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "already exists"):
+			return "invalid_profile"
+		case strings.Contains(msg, "unknown driver"):
+			return "invalid_profile"
+		default:
+			return "config_error"
+		}
+	case 3:
+		msg := err.Error()
+		if strings.Contains(msg, "MQTT authentication") {
+			return "authentication_failed"
+		}
+		return "secret_not_found"
+	case 4:
+		return "connection_failed"
+	case 5:
+		return "capability_unsupported"
 	default:
 		return "error"
 	}
@@ -391,21 +419,6 @@ func looksLikeIPv4Literal(host string) bool {
 		}
 	}
 	return true
-}
-
-func validateSerial(serial string) error {
-	if serial == "" {
-		return apperr.New(2, "--serial is required for bambu-lan driver")
-	}
-	if len(serial) > 64 {
-		return apperr.Newf(2, "--serial too long (max 64 chars)")
-	}
-	for _, c := range serial {
-		if c < 0x21 || c > 0x7E {
-			return apperr.Newf(2, "--serial contains invalid character (must be printable ASCII with no whitespace)")
-		}
-	}
-	return nil
 }
 
 func readAccessCodeFile(path string) (string, error) {

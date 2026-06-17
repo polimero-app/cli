@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/polimero-app/cli/cmd/printer"
 	"github.com/polimero-app/cli/internal/apperr"
@@ -26,13 +25,16 @@ type stubDiscoverDriver struct {
 
 func (s *stubDiscoverDriver) Name() string                      { return s.name }
 func (s *stubDiscoverDriver) Capabilities() driver.Capabilities { return s.caps }
-func (s *stubDiscoverDriver) ConnectCheck(_ context.Context, _, _, _ string, _ bool, _ time.Duration) (string, error) {
+func (s *stubDiscoverDriver) ValidateProfile(_ driver.ProfileInput) error {
+	return nil
+}
+func (s *stubDiscoverDriver) ConnectCheck(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle) (string, error) {
 	return "", nil
 }
 func (s *stubDiscoverDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
 	return nil, nil
 }
-func (s *stubDiscoverDriver) CaptureFingerprint(_ context.Context, _, _ string) (string, error) {
+func (s *stubDiscoverDriver) CaptureFingerprint(_ context.Context, _ driver.ProfileInput) (string, error) {
 	return "", nil
 }
 func (s *stubDiscoverDriver) Discover(_ context.Context) ([]driver.DiscoveredPrinter, error) {
