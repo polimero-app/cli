@@ -46,3 +46,13 @@ make ci
 ```
 
 `make ci` runs tests, race tests, and linting when the relevant tools are available.
+
+## References
+
+### Bambu LAN
+
+* https://github.com/BambuTools/bambulabs_api
+* https://github.com/ClusterM/open-bamboo-networking
+* https://github.com/Doridian/OpenBambuAPI
+* https://github.com/Keralots/BambuHelper
+* https://github.com/maziggy/bambuddy
