@@ -16,11 +16,11 @@ import (
 	"github.com/polimero-app/cli/internal/drivers"
 	"github.com/polimero-app/cli/internal/keychain"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/profile"
 	"github.com/polimero-app/cli/internal/tty"
 	"github.com/spf13/cobra"
 )
 
-var profileNameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 var dnsLabelRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 // AddDeps holds injectable dependencies for the printer add command.
@@ -365,16 +365,7 @@ func addErrorCode(err error) string {
 }
 
 func validateProfileName(name string) error {
-	if name == "" {
-		return apperr.New(2, "profile name is required")
-	}
-	if len(name) > 64 {
-		return apperr.Newf(2, "profile name too long (max 64 chars): %q", name)
-	}
-	if !profileNameRE.MatchString(name) {
-		return apperr.Newf(2, "invalid profile name %q: use only ASCII letters, digits, '.', '_', '-', starting with a letter or digit", name)
-	}
-	return nil
+	return profile.ValidateName(name)
 }
 
 func validateHost(host string) error {
