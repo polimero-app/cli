@@ -1,0 +1,476 @@
+package bambulan
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"log/slog"
+	"path"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/jlaffaye/ftp"
+	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/driver"
+)
+
+const (
+	ftpPort         = 990
+	ftpUser         = "bblp"
+	ftpRootName     = "sdcard"
+	ftpRootDesc     = "SD card"
+	ftpPassiveStart = 50000
+	ftpPassiveEnd   = 50100
+)
+
+// ftpConn is the subset of *ftp.ServerConn used by this driver.
+type ftpConn interface {
+	Login(user, password string) error
+	List(path string) ([]*ftp.Entry, error)
+	Retr(path string) (io.ReadCloser, error)
+	Stor(path string, r io.Reader) error
+	Quit() error
+}
+
+// ftpConnAdapter wraps *ftp.ServerConn to satisfy the ftpConn interface.
+type ftpConnAdapter struct {
+	conn *ftp.ServerConn
+}
+
+func (a *ftpConnAdapter) Login(user, password string) error { return a.conn.Login(user, password) }
+func (a *ftpConnAdapter) List(path string) ([]*ftp.Entry, error) { return a.conn.List(path) }
+func (a *ftpConnAdapter) Retr(path string) (io.ReadCloser, error) { return a.conn.Retr(path) }
+func (a *ftpConnAdapter) Stor(path string, r io.Reader) error { return a.conn.Stor(path, r) }
+func (a *ftpConnAdapter) Quit() error { return a.conn.Quit() }
+
+// ftpDialer creates FTP connections. Injected for testing.
+type ftpDialer func(ctx context.Context, addr string, tlsCfg *tls.Config) (ftpConn, error)
+
+// realFTPDial creates a real FTPS connection to a Bambu printer.
+func realFTPDial(ctx context.Context, addr string, tlsCfg *tls.Config) (ftpConn, error) {
+	// DialWithContext governs the initial control connection.
+	// DialWithTimeout sets net.Dialer.Timeout for passive data connections.
+	timeout := 10 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = time.Until(deadline)
+		if timeout <= 0 {
+			timeout = 1 * time.Second
+		}
+	}
+
+	conn, err := ftp.Dial(addr,
+		ftp.DialWithContext(ctx),
+		ftp.DialWithTimeout(timeout),
+		ftp.DialWithTLS(tlsCfg),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &ftpConnAdapter{conn: conn}, nil
+}
+
+// ftpDial is the driver's FTP dialer, overridable in tests.
+func (d *Driver) ftpDial() ftpDialer {
+	if d.dialFTP != nil {
+		return d.dialFTP
+	}
+	return realFTPDial
+}
+
+// connectFTP establishes an authenticated FTPS connection.
+func (d *Driver) connectFTP(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, log *slog.Logger) (ftpConn, error) {
+	tlsCfg, err := buildFTPTLSConfig(p.Serial, s.TLSFingerprint, p.Insecure)
+	if err != nil {
+		return nil, err
+	}
+
+	addr := fmt.Sprintf("%s:%d", p.Host, ftpPort)
+	log.Debug("connecting to FTPS", "addr", addr, "insecure", p.Insecure)
+
+	conn, err := d.ftpDial()(ctx, addr, tlsCfg)
+	if err != nil {
+		log.Debug("FTPS connection failed", "err", err.Error())
+		return nil, apperr.Newf(4, "FTP connection failed: %s", sanitizeFTPError(err))
+	}
+
+	log.Debug("FTPS connected, authenticating")
+	if err := conn.Login(ftpUser, s.AccessCode); err != nil {
+		_ = conn.Quit()
+		log.Debug("FTPS authentication failed")
+		return nil, apperr.Newf(3, "FTP authentication failed")
+	}
+
+	log.Debug("FTPS authenticated successfully")
+	return conn, nil
+}
+
+// buildFTPTLSConfig creates a TLS config for FTPS with fingerprint verification.
+// A ClientSessionCache is required because Bambu printers (especially H2 family)
+// enforce TLS session reuse on data connections (RFC 4217).
+func buildFTPTLSConfig(serial, fingerprint string, insecure bool) (*tls.Config, error) {
+	cfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // Bambu CA not in OS trust stores; leaf cert pinned by TOFU (ADR 0007)
+		ServerName:         serial,
+		ClientSessionCache: tls.NewLRUClientSessionCache(1),
+	}
+
+	if insecure {
+		return cfg, nil
+	}
+
+	if !driver.ValidTLSFingerprint(fingerprint) {
+		return nil, apperr.New(3, "TLS fingerprint is missing or invalid")
+	}
+
+	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return apperr.New(3, "no peer certificate presented")
+		}
+		leaf := cs.PeerCertificates[0]
+		hash := sha256.Sum256(leaf.Raw)
+		got := "sha256:" + hex.EncodeToString(hash[:])
+		if got != fingerprint {
+			return &fingerprintMismatchError{got: got, want: fingerprint}
+		}
+		return nil
+	}
+
+	return cfg, nil
+}
+
+// FileRoots returns the storage roots available on the Bambu printer.
+func (d *Driver) FileRoots(
+	ctx context.Context,
+	p driver.ProfileInput,
+	s driver.SecretsBundle,
+	log *slog.Logger,
+) ([]driver.FileRoot, error) {
+	conn, err := d.connectFTP(ctx, p, s, log)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Quit() }()
+
+	roots := []driver.FileRoot{
+		{
+			Name:          ftpRootName,
+			Description:   ftpRootDesc,
+			Writable:      true,
+			CapacityBytes: nil,
+			FreeBytes:     nil,
+			Metadata:      map[string]any{},
+		},
+	}
+
+	return roots, nil
+}
+
+// FileList lists files at the given root and path on the Bambu printer.
+func (d *Driver) FileList(
+	ctx context.Context,
+	p driver.ProfileInput,
+	s driver.SecretsBundle,
+	root string,
+	remotePath string,
+	recursive bool,
+	log *slog.Logger,
+) (*driver.FileListResult, error) {
+	if root != ftpRootName {
+		return nil, apperr.Newf(2, "unknown root %q", root)
+	}
+
+	conn, err := d.connectFTP(ctx, p, s, log)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Quit() }()
+
+	if recursive {
+		return d.listRecursive(conn, root, remotePath, log)
+	}
+
+	entries, err := d.listDir(conn, root, remotePath, log)
+	if err != nil {
+		return nil, err
+	}
+
+	return &driver.FileListResult{Entries: entries}, nil
+}
+
+func (d *Driver) listDir(conn ftpConn, root, remotePath string, log *slog.Logger) ([]driver.FileEntry, error) {
+	ftpPath := mapToFTPPath(remotePath)
+	log.Debug("listing FTP directory", "path", ftpPath)
+
+	rawEntries, err := conn.List(ftpPath)
+	if err != nil {
+		return nil, mapFTPError(err, remotePath)
+	}
+
+	entries := make([]driver.FileEntry, 0, len(rawEntries))
+	for _, e := range rawEntries {
+		if e.Name == "." || e.Name == ".." {
+			continue
+		}
+		entry := mapFTPEntry(e, root, remotePath)
+		entries = append(entries, entry)
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+
+	return entries, nil
+}
+
+func (d *Driver) listRecursive(conn ftpConn, root, remotePath string, log *slog.Logger) (*driver.FileListResult, error) {
+	var allEntries []driver.FileEntry
+
+	type queueItem struct {
+		path string
+	}
+	queue := []queueItem{{path: remotePath}}
+
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+
+		entries, err := d.listDir(conn, root, item.path, log)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, entry := range entries {
+			allEntries = append(allEntries, entry)
+			if entry.Type == driver.FileEntryTypeDirectory {
+				queue = append(queue, queueItem{path: entry.Path})
+			}
+		}
+	}
+
+	sort.Slice(allEntries, func(i, j int) bool {
+		return allEntries[i].DevicePath < allEntries[j].DevicePath
+	})
+
+	return &driver.FileListResult{Entries: allEntries}, nil
+}
+
+// FileDownload downloads a file from the Bambu printer's storage.
+func (d *Driver) FileDownload(
+	ctx context.Context,
+	p driver.ProfileInput,
+	s driver.SecretsBundle,
+	root string,
+	remotePath string,
+	dst io.Writer,
+	log *slog.Logger,
+) (*driver.FileTransferResult, error) {
+	if root != ftpRootName {
+		return nil, apperr.Newf(2, "unknown root %q", root)
+	}
+
+	conn, err := d.connectFTP(ctx, p, s, log)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Quit() }()
+
+	ftpPath := mapToFTPPath(remotePath)
+	log.Debug("downloading file via FTP", "path", ftpPath)
+
+	resp, err := conn.Retr(ftpPath)
+	if err != nil {
+		return nil, mapFTPError(err, remotePath)
+	}
+	defer func() { _ = resp.Close() }()
+
+	n, err := io.Copy(dst, resp)
+	if err != nil {
+		return nil, apperr.Newf(4, "download stream interrupted")
+	}
+
+	return &driver.FileTransferResult{BytesTransferred: &n}, nil
+}
+
+// FileUpload uploads a file to the Bambu printer's storage.
+func (d *Driver) FileUpload(
+	ctx context.Context,
+	p driver.ProfileInput,
+	s driver.SecretsBundle,
+	root string,
+	remotePath string,
+	src io.Reader,
+	size int64,
+	overwrite bool,
+	log *slog.Logger,
+) (*driver.FileTransferResult, error) {
+	if root != ftpRootName {
+		return nil, apperr.Newf(2, "unknown root %q", root)
+	}
+
+	conn, err := d.connectFTP(ctx, p, s, log)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Quit() }()
+
+	ftpPath := mapToFTPPath(remotePath)
+
+	// Check existence when overwrite is false.
+	if !overwrite {
+		existing, listErr := conn.List(ftpPath)
+		if listErr == nil && len(existing) > 0 {
+			for _, e := range existing {
+				if e.Name == path.Base(ftpPath) {
+					return nil, apperr.Newf(2, "device path already exists: %s:%s", root, remotePath)
+				}
+			}
+		}
+	}
+
+	log.Debug("uploading file via FTP", "path", ftpPath)
+
+	// Wrap reader to count bytes.
+	cr := &countingReader{r: src}
+	if err := conn.Stor(ftpPath, cr); err != nil {
+		return nil, mapFTPError(err, remotePath)
+	}
+
+	n := cr.n
+	return &driver.FileTransferResult{BytesTransferred: &n}, nil
+}
+
+// countingReader wraps an io.Reader and counts bytes read.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	cr.n += int64(n)
+	return n, err
+}
+
+// mapToFTPPath converts a normalized device path to an FTP path.
+// sdcard:/ -> /   sdcard:/models/cube.3mf -> /models/cube.3mf
+func mapToFTPPath(devicePath string) string {
+	// Device path is already the path portion (e.g. "/" or "/models/cube.3mf")
+	if devicePath == "" || devicePath == "/" {
+		return "/"
+	}
+	return devicePath
+}
+
+// mapFTPEntry converts an FTP entry to a driver.FileEntry.
+func mapFTPEntry(e *ftp.Entry, root, parentPath string) driver.FileEntry {
+	entryPath := parentPath
+	if entryPath == "/" {
+		entryPath = "/" + e.Name
+	} else {
+		entryPath = strings.TrimSuffix(entryPath, "/") + "/" + e.Name
+	}
+
+	var entryType driver.FileEntryType
+	switch e.Type {
+	case ftp.EntryTypeFile:
+		entryType = driver.FileEntryTypeFile
+	case ftp.EntryTypeFolder:
+		entryType = driver.FileEntryTypeDirectory
+	default:
+		entryType = driver.FileEntryTypeUnknown
+	}
+
+	var sizeBytes *int64
+	if entryType == driver.FileEntryTypeFile && e.Size > 0 {
+		s := int64(e.Size)
+		sizeBytes = &s
+	}
+
+	var modifiedAt *string
+	if !e.Time.IsZero() {
+		t := e.Time.UTC().Format(time.RFC3339)
+		modifiedAt = &t
+	}
+
+	return driver.FileEntry{
+		Name:       e.Name,
+		Root:       root,
+		Path:       entryPath,
+		DevicePath: root + ":" + entryPath,
+		Type:       entryType,
+		SizeBytes:  sizeBytes,
+		ModifiedAt: modifiedAt,
+		Metadata:   map[string]any{},
+	}
+}
+
+// mapFTPError converts FTP errors to appropriate apperr codes.
+func mapFTPError(err error, remotePath string) error {
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+
+	switch {
+	case strings.Contains(lower, "550"):
+		return apperr.Newf(2, "device path not found: %s", remotePath)
+	case strings.Contains(lower, "no such file") ||
+		strings.Contains(lower, "not found"):
+		return apperr.Newf(2, "device path not found: %s", remotePath)
+	case strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "deadline") ||
+		strings.Contains(lower, "i/o timeout"):
+		return apperr.Newf(4, "FTP operation timed out")
+	case strings.Contains(lower, "refused"):
+		return apperr.Newf(4, "FTP data connection refused")
+	case strings.Contains(lower, "reset"):
+		return apperr.Newf(4, "FTP data connection reset")
+	case strings.Contains(lower, "pasv") || strings.Contains(lower, "epsv"):
+		return apperr.Newf(4, "FTP passive mode negotiation failed")
+	default:
+		// Include sanitized detail for unexpected errors to aid debugging.
+		sanitized := sanitizeProtocolError(msg)
+		return apperr.Newf(4, "FTP operation failed: %s", sanitized)
+	}
+}
+
+// sanitizeProtocolError removes credentials and protocol secrets from an error,
+// keeping the structural information useful for debugging.
+func sanitizeProtocolError(msg string) string {
+	lower := strings.ToLower(msg)
+	// Strip anything that looks like it might contain credentials.
+	if strings.Contains(lower, "pass") || strings.Contains(lower, "user") {
+		return "protocol error (details redacted)"
+	}
+	// Truncate long messages.
+	if len(msg) > 120 {
+		msg = msg[:120] + "..."
+	}
+	return msg
+}
+
+// sanitizeFTPError removes potential secrets from FTP error messages.
+func sanitizeFTPError(err error) string {
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline"):
+		return "connection timed out"
+	case strings.Contains(lower, "refused"):
+		return "connection refused (is Developer Mode enabled?)"
+	case strings.Contains(lower, "reset"):
+		return "connection reset by printer"
+	case strings.Contains(lower, "no route"):
+		return "no route to host"
+	case strings.Contains(lower, "tls"):
+		return "TLS handshake failed"
+	case strings.Contains(lower, "i/o timeout"):
+		return "connection timed out"
+	case strings.Contains(lower, "eof"):
+		return "connection closed unexpectedly"
+	default:
+		return "connection failed"
+	}
+}
