@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/eclipse/paho.mqtt.golang/packets"
@@ -50,11 +52,12 @@ func (e *fingerprintMismatchError) Error() string {
 
 // Driver implements the bambu-lan protocol for Bambu Lab printers.
 type Driver struct {
-	newClient  func(*mqtt.ClientOptions) mqttConn
-	dialTLS    func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)
-	browse     func(ctx context.Context, service string) (<-chan *mdnsEntry, error)
-	browseSSDP func(ctx context.Context) (<-chan *mdnsEntry, error)
-	browseUDP  func(ctx context.Context) (<-chan *mdnsEntry, error)
+	newClient   func(*mqtt.ClientOptions) mqttConn
+	dialTLS     func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)
+	dialRTSPSFn func(tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error)
+	browse      func(ctx context.Context, service string) (<-chan *mdnsEntry, error)
+	browseSSDP  func(ctx context.Context) (<-chan *mdnsEntry, error)
+	browseUDP   func(ctx context.Context) (<-chan *mdnsEntry, error)
 }
 
 // New returns a bambu-lan Driver backed by a real paho MQTT client.
@@ -69,9 +72,10 @@ func New() *Driver {
 			}
 			return conn.(*tls.Conn), nil
 		},
-		browse:     realBrowse,
-		browseSSDP: realBrowseSSDP,
-		browseUDP:  realBrowseUDP,
+		dialRTSPSFn: dialRTSPS,
+		browse:      realBrowse,
+		browseSSDP:  realBrowseSSDP,
+		browseUDP:   realBrowseUDP,
 	}
 }
 
@@ -113,7 +117,7 @@ func (d *Driver) Name() string { return "bambu-lan" }
 
 // Capabilities returns the bambu-lan driver's supported operations.
 func (d *Driver) Capabilities() driver.Capabilities {
-	return driver.Capabilities{Status: true, TLSRefresh: true, Discovery: true}
+	return driver.Capabilities{Status: true, TLSRefresh: true, Discovery: true, CameraStream: true}
 }
 
 func buildCaptureTLSConfig(serial string) *tls.Config {
@@ -960,6 +964,148 @@ func mapAMS(ams *bambuAMS) *driver.AMSData {
 		return nil
 	}
 	return &driver.AMSData{Units: units}
+}
+
+const (
+	cameraPortMJPEG    = 6000
+	cameraPortH264     = 322
+	cameraProbeTimeout = 2 * time.Second
+
+	// cameraAuthSize is the fixed size of the MJPEG camera auth packet.
+	cameraAuthSize = 80
+	// cameraFrameHeaderSize is the size of each MJPEG frame header.
+	cameraFrameHeaderSize = 16
+	// cameraMaxFrameSize caps how large a single JPEG frame can be (1 MB).
+	cameraMaxFrameSize = 1 << 20
+	// cameraUsername is the fixed username for Bambu camera auth.
+	cameraUsername = "bblp"
+)
+
+// CameraStream opens a live camera stream from the printer.
+// It auto-detects the protocol by probing port 322 (RTSPS/H.264) first,
+// falling back to port 6000 (MJPEG) if the RTSPS probe fails.
+// H-series and X-series printers serve camera only via RTSPS;
+// A1/A1 mini family printers refuse port 322 and serve MJPEG on port 6000.
+func (d *Driver) CameraStream(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
+	tlsCfg, err := buildTLSConfig(p.Serial, s.TLSFingerprint, p.Insecure)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try port 322 (RTSPS / H.264) first.
+	rtspTLS := tlsCfg.Clone()
+	rtspStream, rtspErr := d.dialRTSPSFn(rtspTLS, p.Host, s.AccessCode)
+	if rtspErr == nil {
+		return &driver.CameraStreamResult{
+			Format:       driver.CameraFormatH264,
+			Stream:       rtspStream,
+			Capabilities: d.Capabilities(),
+		}, nil
+	}
+
+	// Fall back to port 6000 (MJPEG) with a short timeout.
+	mjpegCtx, mjpegCancel := context.WithTimeout(ctx, cameraProbeTimeout)
+	conn, mjpegErr := d.dialTLS(mjpegCtx, fmt.Sprintf("%s:%d", p.Host, cameraPortMJPEG), tlsCfg.Clone())
+	mjpegCancel()
+
+	if mjpegErr != nil {
+		return nil, apperr.New(4, "camera endpoint unreachable: both ports 322 and 6000 failed")
+	}
+
+	if authErr := sendCameraAuth(conn, s.AccessCode); authErr != nil {
+		_ = conn.Close()
+		return nil, apperr.Wrap(4, "camera authentication failed", authErr)
+	}
+
+	stream := newMJPEGStream(conn)
+	return &driver.CameraStreamResult{
+		Format:       driver.CameraFormatMJPEG,
+		Stream:       stream,
+		Capabilities: d.Capabilities(),
+	}, nil
+}
+
+// sendCameraAuth writes the 80-byte authentication packet to the camera TLS connection.
+// Layout:
+//
+//	[0..3]   LE u32 = 0x40    (payload size)
+//	[4..7]   LE u32 = 0x3000  (packet type: auth)
+//	[8..15]  zeros
+//	[16..47] 32 bytes: username "bblp", NUL-padded
+//	[48..79] 32 bytes: access code, NUL-padded
+func sendCameraAuth(conn io.Writer, accessCode string) error {
+	var pkt [cameraAuthSize]byte
+	// Payload size = 0x40 (64), little-endian.
+	pkt[0] = 0x40
+	// Packet type = 0x3000, little-endian.
+	pkt[4] = 0x00
+	pkt[5] = 0x30
+	// Username at offset 16 (32 bytes, NUL-padded).
+	copy(pkt[16:48], cameraUsername)
+	// Access code at offset 48 (32 bytes, NUL-padded).
+	copy(pkt[48:80], accessCode)
+	_, err := conn.Write(pkt[:])
+	return err
+}
+
+// mjpegStream reads the Bambu proprietary MJPEG frame format and re-emits
+// as multipart/x-mixed-replace boundary-delimited JPEG frames suitable for
+// direct browser consumption.
+type mjpegStream struct {
+	conn   io.ReadCloser
+	buf    []byte
+	closed bool
+}
+
+func newMJPEGStream(conn io.ReadCloser) *mjpegStream {
+	return &mjpegStream{conn: conn}
+}
+
+// Read implements io.Reader. Each call emits bytes from a multipart frame:
+// --frame\r\nContent-Type: image/jpeg\r\nContent-Length: N\r\n\r\n<jpeg>\r\n
+func (m *mjpegStream) Read(p []byte) (int, error) {
+	for len(m.buf) == 0 {
+		if m.closed {
+			return 0, io.EOF
+		}
+		frame, err := m.readFrame()
+		if err != nil {
+			return 0, err
+		}
+		// Format as multipart part.
+		header := fmt.Sprintf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame))
+		m.buf = make([]byte, 0, len(header)+len(frame)+2)
+		m.buf = append(m.buf, header...)
+		m.buf = append(m.buf, frame...)
+		m.buf = append(m.buf, '\r', '\n')
+	}
+	n := copy(p, m.buf)
+	m.buf = m.buf[n:]
+	return n, nil
+}
+
+// readFrame reads one JPEG frame from the Bambu proprietary protocol.
+// Frame format: 16-byte header (payload_size u32le, itrack u32le, flags u32le, pad u32le)
+// followed by payload_size bytes of JPEG data.
+func (m *mjpegStream) readFrame() ([]byte, error) {
+	var hdr [cameraFrameHeaderSize]byte
+	if _, err := io.ReadFull(m.conn, hdr[:]); err != nil {
+		return nil, err
+	}
+	size := uint32(hdr[0]) | uint32(hdr[1])<<8 | uint32(hdr[2])<<16 | uint32(hdr[3])<<24
+	if size == 0 || size > cameraMaxFrameSize {
+		return nil, fmt.Errorf("invalid MJPEG frame size: %d", size)
+	}
+	frame := make([]byte, size)
+	if _, err := io.ReadFull(m.conn, frame); err != nil {
+		return nil, err
+	}
+	return frame, nil
+}
+
+func (m *mjpegStream) Close() error {
+	m.closed = true
+	return m.conn.Close()
 }
 
 func (d *Driver) CaptureFingerprint(ctx context.Context, p driver.ProfileInput) (string, error) {
