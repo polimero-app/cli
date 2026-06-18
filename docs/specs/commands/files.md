@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (not yet implemented)
+Accepted
 
 ## Purpose
 

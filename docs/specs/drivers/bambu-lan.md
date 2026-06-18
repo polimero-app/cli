@@ -27,6 +27,10 @@ Initial command support:
 - `status`
 - `printer tls refresh`
 - `camera stream`
+- `files roots`
+- `files list`
+- `files download`
+- `files upload`
 
 Out of scope:
 
@@ -144,9 +148,9 @@ The driver must tolerate these type variations without failing. JSON unmarshalin
 
 ## File Storage Transport
 
-Implementation status: accepted for future work; not part of the initial implemented command set.
+Implementation status: implemented.
 
-Planned capabilities when file operations are implemented:
+Capabilities:
 
 - `FileList: true`
 - `FileDownload: true`
@@ -169,6 +173,8 @@ Connection parameters:
 | Root | `sdcard` maps to FTP server root `/` |
 
 The driver must use encrypted control and data connections. It must not fall back to plaintext FTP.
+
+The driver must enable TLS session reuse (via `ClientSessionCache`) so that the data connection can resume the TLS session established by the control connection. The H2 family enforces this requirement and rejects data connections without session reuse with FTP status 522.
 
 The driver verifies the FTP TLS leaf certificate using the same pinned fingerprint behavior as MQTT:
 

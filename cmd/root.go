@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/polimero-app/cli/cmd/camera"
+	"github.com/polimero-app/cli/cmd/files"
 	"github.com/polimero-app/cli/cmd/printer"
 	"github.com/polimero-app/cli/cmd/status"
 	"github.com/polimero-app/cli/internal/apperr"
@@ -25,6 +26,7 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(printer.Command())
 	root.AddCommand(status.Command())
 	root.AddCommand(camera.Command())
+	root.AddCommand(files.Command())
 	return root
 }
 
