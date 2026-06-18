@@ -49,6 +49,7 @@ Capabilities {
     MotionControl    bool
     TLSRefresh       bool
     CameraStream     bool
+    CameraSnapshot   bool
 }
 ```
 
@@ -237,6 +238,35 @@ Contract:
 - Return `unsupported_capability` when the driver does not support camera streaming.
 - Sanitize transport, TLS, and camera protocol errors before returning them.
 - Do not log camera payload contents or secrets.
+
+## Camera Snapshot Operation
+
+Drivers that declare `CameraSnapshot: true` in their `Capabilities` must implement:
+
+```go
+CameraSnapshot(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger) (*CameraSnapshotResult, error)
+```
+
+Where:
+
+```go
+type CameraSnapshotResult struct {
+    Data         []byte       // JPEG-encoded image
+    Protocol     string       // "mjpeg" or "h264" (source protocol used)
+    Capabilities Capabilities
+}
+```
+
+Contract:
+
+- The driver connects to the camera endpoint, captures a single frame, and returns JPEG-encoded bytes.
+- `ctx` controls the connection and frame capture lifetime; abort if context is canceled or deadline exceeded.
+- For MJPEG endpoints: read one frame from the proprietary format (already JPEG) and return it directly.
+- For H.264/RTSPS endpoints: connect, wait for the first I-frame (keyframe), decode it, encode as JPEG, and return.
+- The driver must use the same pinned TLS fingerprint as for the MQTT and camera stream connections. No additional keychain entry is required.
+- Return `unsupported_capability` when the driver does not support camera snapshot.
+- Sanitize transport, TLS, decode, and encode errors before returning them.
+- Do not log camera image data or secrets.
 
 ## Errors
 
