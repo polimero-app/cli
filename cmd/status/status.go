@@ -66,7 +66,7 @@ func writeUsageError(cmd *cobra.Command, message string) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
 		return apperr.New(2, "")
 	}
 	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), errorContext{})
@@ -76,7 +76,7 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, de
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
 		return apperr.New(2, "")
 	}
 

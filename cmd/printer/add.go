@@ -79,7 +79,7 @@ func writeAddUsageError(cmd *cobra.Command, message string) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
 		return apperr.New(2, "")
 	}
 	return writeAddError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message))
@@ -89,7 +89,7 @@ func runAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr st
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
 		return apperr.New(2, "")
 	}
 

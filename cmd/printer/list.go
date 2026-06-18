@@ -25,7 +25,7 @@ func runList(cmd *cobra.Command, _ []string) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, err := output.ParseFormat(formatStr)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", err)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", err)
 		return apperr.New(2, "")
 	}
 
