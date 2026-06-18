@@ -1,6 +1,9 @@
 package driver
 
-import "time"
+import (
+	"io"
+	"time"
+)
 
 const tlsFingerprintPrefix = "sha256:"
 
@@ -25,6 +28,7 @@ func ValidTLSFingerprint(fingerprint string) bool {
 type Capabilities struct {
 	Status           bool `json:"status"`
 	Discovery        bool `json:"discovery"`
+	CameraStream     bool `json:"cameraStream"`
 	JobUpload        bool `json:"jobUpload"`
 	JobStart         bool `json:"jobStart"`
 	JobPause         bool `json:"jobPause"`
@@ -189,4 +193,19 @@ type StatusResult struct {
 	Timelapse     *Timelapse     `json:"timelapse,omitempty"`
 	GcodePosition *GcodePosition `json:"gcodePosition,omitempty"`
 	Extensions    map[string]any `json:"extensions,omitempty"`
+}
+
+// CameraFormat identifies the video encoding of a camera stream.
+type CameraFormat string
+
+const (
+	CameraFormatMJPEG CameraFormat = "mjpeg"
+	CameraFormatH264  CameraFormat = "h264"
+)
+
+// CameraStreamResult is returned by Driver.CameraStream with an open stream.
+type CameraStreamResult struct {
+	Format       CameraFormat
+	Stream       io.ReadCloser
+	Capabilities Capabilities
 }

@@ -30,6 +30,15 @@ type Driver interface {
 		log *slog.Logger,
 	) (*StatusResult, error)
 
+	// CameraStream opens a live camera stream from the printer.
+	// The caller owns the returned io.ReadCloser and must close it.
+	CameraStream(
+		ctx context.Context,
+		p ProfileInput,
+		s SecretsBundle,
+		log *slog.Logger,
+	) (*CameraStreamResult, error)
+
 	// CaptureFingerprint performs a TLS handshake to the printer and returns
 	// the SHA-256 leaf certificate fingerprint as "sha256:<lowercase-hex>".
 	CaptureFingerprint(ctx context.Context, p ProfileInput) (fingerprint string, err error)
