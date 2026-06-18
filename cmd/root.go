@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/polimero-app/cli/cmd/camera"
 	"github.com/polimero-app/cli/cmd/printer"
 	"github.com/polimero-app/cli/cmd/status"
 	"github.com/polimero-app/cli/internal/apperr"
@@ -23,6 +24,7 @@ func NewRoot() *cobra.Command {
 	root.PersistentFlags().BoolP("verbose", "v", false, "show detailed progress output")
 	root.AddCommand(printer.Command())
 	root.AddCommand(status.Command())
+	root.AddCommand(camera.Command())
 	return root
 }
 

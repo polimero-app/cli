@@ -47,6 +47,10 @@ func (s *stubDriver) Discover(_ context.Context) ([]driver.DiscoveredPrinter, er
 	return []driver.DiscoveredPrinter{}, nil
 }
 
+func (s *stubDriver) CameraStream(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
+	return nil, nil
+}
+
 func defaultDriver() *stubDriver {
 	nozzleTarget := 220.0
 	bedTarget := 60.0
@@ -151,6 +155,34 @@ func TestStatus_TooManyArgs_ExitsCode2(t *testing.T) {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
 		t.Errorf("expected exit 2, got %v", err)
+	}
+}
+
+func TestStatus_InvalidOutputFormat_PrintsError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := makeDeps(t, dir, kc, defaultDriver())
+	out, err := runCmd(t, deps, "myprinter", "--output", "xml")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
+	}
+}
+
+func TestStatus_InvalidOutputFormat_TooManyArgs_PrintsError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := makeDeps(t, dir, kc, defaultDriver())
+	out, err := runCmd(t, deps, "one", "two", "--output", "xml")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
 	}
 }
 

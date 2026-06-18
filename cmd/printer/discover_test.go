@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/polimero-app/cli/cmd/printer"
@@ -39,6 +40,10 @@ func (s *stubDiscoverDriver) CaptureFingerprint(_ context.Context, _ driver.Prof
 }
 func (s *stubDiscoverDriver) Discover(_ context.Context) ([]driver.DiscoveredPrinter, error) {
 	return s.found, s.discErr
+}
+
+func (s *stubDiscoverDriver) CameraStream(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
+	return nil, nil
 }
 
 func defaultDiscoverDriver() *stubDiscoverDriver {
@@ -230,6 +235,19 @@ func TestDiscover_DriverNoDiscovery_ExitsCode5(t *testing.T) {
 		t.Fatal("expected error for driver without discovery")
 	}
 	checkExitCode(t, err, 5)
+}
+
+func TestDiscover_InvalidOutputFormat_PrintsError(t *testing.T) {
+	dir := t.TempDir()
+	deps := discoverDeps(t, dir, defaultDiscoverDriver())
+	out, err := runDiscoverCmd(t, deps, "--output", "xml")
+	if err == nil {
+		t.Fatal("expected error for invalid output format")
+	}
+	checkExitCode(t, err, 2)
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
+	}
 }
 
 func TestDiscover_InvalidTimeout_ExitsCode2(t *testing.T) {

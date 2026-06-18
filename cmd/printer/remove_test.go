@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +185,34 @@ func TestRemove_TooManyArgsShowsJSONError(t *testing.T) {
 	errDetail := env["error"].(map[string]any)
 	if errDetail["message"] != "expected exactly one profile name, got 2" {
 		t.Fatalf("error.message = %v", errDetail["message"])
+	}
+}
+
+func TestRemove_InvalidOutputFormat_PrintsError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, Lines: []string{"yes"}}
+	out, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: p}, "myprinter", "--yes", "--output", "xml")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
+	}
+}
+
+func TestRemove_InvalidOutputFormat_NoArgs_PrintsError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, Lines: []string{"yes"}}
+	out, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: p}, "--output", "xml")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
 	}
 }
 

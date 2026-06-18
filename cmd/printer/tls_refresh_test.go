@@ -45,6 +45,10 @@ func (s *stubRefreshDriver) Discover(_ context.Context) ([]driver.DiscoveredPrin
 	return []driver.DiscoveredPrinter{}, nil
 }
 
+func (s *stubRefreshDriver) CameraStream(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
+	return nil, nil
+}
+
 func defaultRefreshDriver() *stubRefreshDriver {
 	return &stubRefreshDriver{
 		fp:   alternateFingerprint,
@@ -91,6 +95,34 @@ func runTlsRefreshCmd(t *testing.T, deps printer.TlsRefreshDeps, args ...string)
 }
 
 // --- Tests ---
+
+func TestTlsRefresh_InvalidOutputFormat_PrintsError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := tlsRefreshDeps(t, dir, kc, defaultRefreshDriver(), &tty.Mock{Terminal: false})
+	out, err := runTlsRefreshCmd(t, deps, "myprinter", "--yes", "--output", "xml")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
+	}
+}
+
+func TestTlsRefresh_InvalidOutputFormat_NoArgs_PrintsError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := tlsRefreshDeps(t, dir, kc, defaultRefreshDriver(), &tty.Mock{Terminal: false})
+	out, err := runTlsRefreshCmd(t, deps, "--output", "xml")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
+	}
+}
 
 func TestTlsRefresh_NoArgs_ExitsCode2(t *testing.T) {
 	dir := t.TempDir()
