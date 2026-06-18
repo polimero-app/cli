@@ -122,7 +122,7 @@ func TestDrivers_JSON(t *testing.T) {
 }
 
 func TestDrivers_InvalidOutputFormat(t *testing.T) {
-	_, err := runDrivers(t, func() []drivers.Info {
+	out, err := runDrivers(t, func() []drivers.Info {
 		return []drivers.Info{{Name: "bambu-lan", Description: "Bambu Lab printers over LAN mode"}}
 	}, "--output", "xml")
 	if err == nil {
@@ -134,5 +134,8 @@ func TestDrivers_InvalidOutputFormat(t *testing.T) {
 	}
 	if exitErr.Code != 2 {
 		t.Fatalf("exit code = %d, want 2", exitErr.Code)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
 	}
 }

@@ -259,6 +259,35 @@ func TestAdd_InvalidProfileName(t *testing.T) {
 	}
 }
 
+func TestAdd_InvalidOutputFormat_PrintsError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	out, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", "SN001", "--output", "xml")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
+	}
+}
+
+func TestAdd_InvalidOutputFormat_NoArgs_PrintsError(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: false}
+	out, err := runAddCmd(t, dir, defaultAddDeps(kc, p), "--output", "xml")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
+	}
+}
+
 func TestAdd_TooManyArgsShowsHumanError(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()

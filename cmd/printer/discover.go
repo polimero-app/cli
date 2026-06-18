@@ -53,7 +53,8 @@ func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag string, deps Discov
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
-		return apperr.New(2, fmtErr.Error())
+		fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
+		return apperr.New(2, "")
 	}
 
 	timeout, err := time.ParseDuration(timeoutFlag)

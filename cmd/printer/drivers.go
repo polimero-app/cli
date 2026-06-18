@@ -32,7 +32,8 @@ func runDrivers(cmd *cobra.Command, list func() []drivers.Info) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, err := output.ParseFormat(formatStr)
 	if err != nil {
-		return apperr.New(2, err.Error())
+		fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", err)
+		return apperr.New(2, "")
 	}
 
 	driverInfos := sortedDriverInfos(list())

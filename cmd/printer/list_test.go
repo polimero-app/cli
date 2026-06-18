@@ -249,7 +249,7 @@ func TestList_JSON_Meta(t *testing.T) {
 // --- Error tests ---
 
 func TestList_InvalidOutputFormat(t *testing.T) {
-	_, err := runList(t, t.TempDir(), "--output", "xml")
+	out, err := runList(t, t.TempDir(), "--output", "xml")
 	if err == nil {
 		t.Fatal("expected error for invalid output format")
 	}
@@ -259,6 +259,9 @@ func TestList_InvalidOutputFormat(t *testing.T) {
 	}
 	if exitErr.Code != 2 {
 		t.Errorf("exit code = %d, want 2", exitErr.Code)
+	}
+	if !strings.Contains(out, "must be human or json") {
+		t.Errorf("expected error message naming valid --output values, got:\n%s", out)
 	}
 }
 
