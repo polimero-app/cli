@@ -58,6 +58,7 @@ type Driver struct {
 	browse      func(ctx context.Context, service string) (<-chan *mdnsEntry, error)
 	browseSSDP  func(ctx context.Context) (<-chan *mdnsEntry, error)
 	browseUDP   func(ctx context.Context) (<-chan *mdnsEntry, error)
+	dialFTP     ftpDialer
 }
 
 // New returns a bambu-lan Driver backed by a real paho MQTT client.
@@ -117,7 +118,7 @@ func (d *Driver) Name() string { return "bambu-lan" }
 
 // Capabilities returns the bambu-lan driver's supported operations.
 func (d *Driver) Capabilities() driver.Capabilities {
-	return driver.Capabilities{Status: true, TLSRefresh: true, Discovery: true, CameraStream: true}
+	return driver.Capabilities{Status: true, TLSRefresh: true, Discovery: true, CameraStream: true, FileList: true, FileDownload: true, FileUpload: true}
 }
 
 func buildCaptureTLSConfig(serial string) *tls.Config {
@@ -929,8 +930,11 @@ func mapAMS(ams *bambuAMS) *driver.AMSData {
 			ID:    id,
 			Trays: make([]driver.AMSTray, 0, len(u.Tray)),
 		}
-		if h, err := strconv.Atoi(string(u.Humidity)); err == nil && h >= 0 {
-			unit.Humidity = &h
+		if h, err := strconv.Atoi(string(u.Humidity)); err == nil && h >= 1 && h <= 5 {
+			r := amsHumidityRange(h)
+			l := amsHumidityLevel(h)
+			unit.HumidityRange = &r
+			unit.HumidityLevel = &l
 		}
 		if t, err := strconv.ParseFloat(string(u.Temp), 64); err == nil && t > 0 {
 			unit.Temperature = &t
@@ -964,6 +968,42 @@ func mapAMS(ams *bambuAMS) *driver.AMSData {
 		return nil
 	}
 	return &driver.AMSData{Units: units}
+}
+
+// amsHumidityRange maps a Bambu humidity index (1-5) to a human-readable range.
+func amsHumidityRange(index int) string {
+	switch index {
+	case 1:
+		return "< 10%"
+	case 2:
+		return "10-20%"
+	case 3:
+		return "20-30%"
+	case 4:
+		return "30-40%"
+	case 5:
+		return "> 40%"
+	default:
+		return ""
+	}
+}
+
+// amsHumidityLevel maps a Bambu humidity index (1-5) to a qualitative level.
+func amsHumidityLevel(index int) string {
+	switch index {
+	case 1:
+		return "very dry"
+	case 2:
+		return "dry"
+	case 3:
+		return "moderate"
+	case 4:
+		return "slightly humid"
+	case 5:
+		return "humid"
+	default:
+		return ""
+	}
 }
 
 const (

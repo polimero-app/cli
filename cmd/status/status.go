@@ -457,8 +457,8 @@ func formatAMS(ams *driver.AMSData) string {
 	for _, unit := range ams.Units {
 		unitLine := fmt.Sprintf("  Unit %d", unit.ID)
 		var unitParts []string
-		if unit.Humidity != nil {
-			unitParts = append(unitParts, fmt.Sprintf("humidity: %d%%", *unit.Humidity))
+		if unit.HumidityRange != nil {
+			unitParts = append(unitParts, fmt.Sprintf("humidity: %s [%s]", *unit.HumidityRange, *unit.HumidityLevel))
 		}
 		if unit.Temperature != nil {
 			unitParts = append(unitParts, fmt.Sprintf("temp: %.1f C", *unit.Temperature))

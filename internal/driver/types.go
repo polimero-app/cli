@@ -29,6 +29,9 @@ type Capabilities struct {
 	Status           bool `json:"status"`
 	Discovery        bool `json:"discovery"`
 	CameraStream     bool `json:"cameraStream"`
+	FileList         bool `json:"fileList"`
+	FileDownload     bool `json:"fileDownload"`
+	FileUpload       bool `json:"fileUpload"`
 	JobUpload        bool `json:"jobUpload"`
 	JobStart         bool `json:"jobStart"`
 	JobPause         bool `json:"jobPause"`
@@ -155,10 +158,11 @@ type AMSTray struct {
 
 // AMSUnit holds data for a single AMS unit.
 type AMSUnit struct {
-	ID          int       `json:"id"`
-	Humidity    *int      `json:"humidity,omitempty"`
-	Temperature *float64  `json:"temperature,omitempty"`
-	Trays       []AMSTray `json:"trays"`
+	ID            int       `json:"id"`
+	HumidityRange *string   `json:"humidityRange,omitempty"`
+	HumidityLevel *string   `json:"humidityLevel,omitempty"`
+	Temperature   *float64  `json:"temperature,omitempty"`
+	Trays         []AMSTray `json:"trays"`
 }
 
 // AMSData holds the full AMS status.

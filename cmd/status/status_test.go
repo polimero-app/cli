@@ -611,7 +611,8 @@ func detailedDriver() *stubDriver {
 	fileSize := 14893261
 	progress := 35
 	ready := false
-	humidity := 25
+	humidityRange := "20-30%"
+	humidityLevel := "moderate"
 	temp := 28.0
 	filType := "PLA"
 	color := "FF0000"
@@ -670,7 +671,8 @@ func detailedDriver() *stubDriver {
 						Units: []driver.AMSUnit{
 							{
 								ID:          0,
-								Humidity:    &humidity,
+								HumidityRange: &humidityRange,
+								HumidityLevel: &humidityLevel,
 								Temperature: &temp,
 								Trays: []driver.AMSTray{
 									{Slot: 0, FilamentType: &filType, Color: &color, RemainingPercent: &remain, NozzleTempMin: &nMin, NozzleTempMax: &nMax},
@@ -711,7 +713,7 @@ func TestStatus_Detailed_HumanOutput(t *testing.T) {
 		"Timelapse: recording (35%)",
 		"AMS:",
 		"Unit 0",
-		"humidity: 25%",
+		"humidity: 20-30% [moderate]",
 		"Slot 0: PLA FF0000 (85%)",
 	} {
 		if !strings.Contains(out, want) {

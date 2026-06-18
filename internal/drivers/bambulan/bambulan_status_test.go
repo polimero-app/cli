@@ -516,7 +516,7 @@ func TestParseReport_ExtendedFields_AMS(t *testing.T) {
 		"ams":{
 			"ams":[{
 				"id":"0",
-				"humidity":"25",
+				"humidity":"3",
 				"temp":"28.5",
 				"tray":[
 					{"id":"0","tray_type":"PLA","tray_color":"FF0000","remain":85,"nozzle_temp_min":190,"nozzle_temp_max":230},
@@ -555,8 +555,13 @@ func TestParseReport_ExtendedFields_AMS(t *testing.T) {
 	if unit.ID != 0 {
 		t.Errorf("unit.ID = %d, want 0", unit.ID)
 	}
-	if unit.Humidity == nil || *unit.Humidity != 25 {
-		t.Errorf("unit.Humidity = %v, want 25", unit.Humidity)
+	wantRange := "20-30%"
+	wantLevel := "moderate"
+	if unit.HumidityRange == nil || *unit.HumidityRange != wantRange {
+		t.Errorf("unit.HumidityRange = %v, want %q", unit.HumidityRange, wantRange)
+	}
+	if unit.HumidityLevel == nil || *unit.HumidityLevel != wantLevel {
+		t.Errorf("unit.HumidityLevel = %v, want %q", unit.HumidityLevel, wantLevel)
 	}
 	if unit.Temperature == nil || *unit.Temperature != 28.5 {
 		t.Errorf("unit.Temperature = %v, want 28.5", unit.Temperature)
