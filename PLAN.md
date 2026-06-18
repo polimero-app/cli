@@ -4,7 +4,7 @@
 
 Polimero is a greenfield command line interface for interacting with 3D printers through brand-specific drivers behind a common command surface. The project continues to grow incrementally, one command at a time, with ADR and spec driven development authorizing new behavior before code lands.
 
-The implementation stack is Go with Cobra for CLI structure and `gopkg.in/yaml.v3` for non-secret configuration. Security is the highest-priority quality attribute. The first real printer integration is Bambu LAN for X1, P1, and A1 families, using LAN access code authentication only.
+The implementation stack is Go with Cobra for CLI structure and `gopkg.in/yaml.v3` for non-secret configuration. Security is the highest-priority quality attribute. The first real printer integration is Bambu LAN for X1, P1, A1, and H2 families, using LAN access code authentication only.
 
 ## Project Decisions
 
@@ -17,7 +17,7 @@ The implementation stack is Go with Cobra for CLI structure and `gopkg.in/yaml.v
 - First driver: Bambu LAN.
 - First read command: `polimero status <name>`.
 - First profile commands: `printer add`, `printer list`, and `printer remove`.
-- Implemented command set: `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`.
+- Implemented command set: `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`, `camera stream`.
 - Config format: versioned YAML at `polimero/polimero.yaml` under `os.UserConfigDir`; profiles stored as a map keyed by name.
 - Secret storage: OS keychain first; fail closed if unavailable.
 - Keychain naming scheme: service `polimero`; accounts `<driver>:<name>:access-code` and `<driver>:<name>:tls-fingerprint`.
@@ -128,7 +128,7 @@ Expected local targets:
 - `make lint`
 - `make ci`
 
-## Initial Documentation Set
+## Documentation Set
 
 Initial ADRs:
 
@@ -139,8 +139,12 @@ Initial ADRs:
 - `docs/adr/0005-configuration-and-secrets.md`
 - `docs/adr/0006-bambu-lan-first-driver.md`
 - `docs/adr/0007-tls-trust-on-first-use.md`
+- `docs/adr/0008-top-level-action-commands.md`
+- `docs/adr/0009-device-file-management-commands.md`
+- `docs/adr/0010-promote-status-to-top-level.md`
+- `docs/adr/0011-extended-read-only-status.md`
 
-Initial command specs:
+Command specs:
 
 - `docs/specs/commands/printer-add.md`
 - `docs/specs/commands/printer-drivers.md`
@@ -148,9 +152,12 @@ Initial command specs:
 - `docs/specs/commands/printer-list.md`
 - `docs/specs/commands/printer-remove.md`
 - `docs/specs/commands/printer-tls-refresh.md`
+- `docs/specs/commands/printer-status.md` (superseded by `status.md`)
 - `docs/specs/commands/status.md`
+- `docs/specs/commands/camera-stream.md`
+- `docs/specs/commands/files.md`
 
-Initial driver and security docs:
+Driver and security docs:
 
 - `docs/specs/drivers/driver-contract.md`
 - `docs/specs/drivers/bambu-lan.md`

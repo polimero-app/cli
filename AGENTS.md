@@ -6,7 +6,7 @@ Instructions for agents working in this repository.
 
 Polimero is a greenfield Go CLI for interacting with 3D printers through brand-specific drivers behind a stable command surface.
 
-Current phase: initial printer-management and network command slices are implemented (`printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`). Keep using accepted ADRs and specs to authorize new behavior before implementation.
+Current phase: initial printer-management and network command slices are implemented (`printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`, `camera stream`). Keep using accepted ADRs and specs to authorize new behavior before implementation.
 
 Primary references:
 
@@ -111,7 +111,7 @@ Initial Bambu scope:
 
 - X1, P1, A1, and H2 families.
 - LAN access code only.
-- Implemented commands: discovery, TLS refresh, and read-only status.
+- Implemented commands: discovery, TLS refresh, read-only status, and camera streaming.
 - Capability-gated behavior.
 
 Out of scope unless a later accepted ADR/spec says otherwise:

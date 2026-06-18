@@ -26,6 +26,7 @@ Initial command support:
 - `printer discover`
 - `status`
 - `printer tls refresh`
+- `camera stream`
 
 Out of scope:
 
