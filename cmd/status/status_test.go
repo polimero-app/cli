@@ -51,6 +51,10 @@ func (s *stubDriver) CameraStream(_ context.Context, _ driver.ProfileInput, _ dr
 	return nil, nil
 }
 
+func (s *stubDriver) CameraSnapshot(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraSnapshotResult, error) {
+	return nil, nil
+}
+
 func defaultDriver() *stubDriver {
 	nozzleTarget := 220.0
 	bedTarget := 60.0
@@ -629,15 +633,15 @@ func detailedDriver() *stubDriver {
 				Bed:     &driver.Temperature{CurrentCelsius: 60.0, TargetCelsius: &bedTarget},
 				Chamber: &driver.Temperature{CurrentCelsius: 38.0},
 			},
-			Job:      &driver.Job{Name: "bracket.3mf"},
-			Progress: &driver.Progress{Percent: 42, CurrentLayer: &layer, TotalLayers: &total},
-			Errors:   []driver.StatusError{},
-			Warnings: []driver.StatusWarning{},
+			Job:          &driver.Job{Name: "bracket.3mf"},
+			Progress:     &driver.Progress{Percent: 42, CurrentLayer: &layer, TotalLayers: &total},
+			Errors:       []driver.StatusError{},
+			Warnings:     []driver.StatusWarning{},
 			Capabilities: driver.Capabilities{Status: true},
 			Fans: driver.Fans{
 				"partCooling": 100,
 				"heatbreak":   70,
-				"auxiliary":    50,
+				"auxiliary":   50,
 				"chamber":     30,
 			},
 			TimeEstimates: &driver.TimeEstimates{
@@ -670,10 +674,10 @@ func detailedDriver() *stubDriver {
 					AMS: &driver.AMSData{
 						Units: []driver.AMSUnit{
 							{
-								ID:          0,
+								ID:            0,
 								HumidityRange: &humidityRange,
 								HumidityLevel: &humidityLevel,
-								Temperature: &temp,
+								Temperature:   &temp,
 								Trays: []driver.AMSTray{
 									{Slot: 0, FilamentType: &filType, Color: &color, RemainingPercent: &remain, NozzleTempMin: &nMin, NozzleTempMax: &nMax},
 								},

@@ -26,9 +26,11 @@ const testFingerprint = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 // stubDriver satisfies driver.Driver for camera stream command tests.
 type stubDriver struct {
-	caps      driver.Capabilities
-	streamRes *driver.CameraStreamResult
-	streamErr error
+	caps        driver.Capabilities
+	streamRes   *driver.CameraStreamResult
+	streamErr   error
+	snapshotRes *driver.CameraSnapshotResult
+	snapshotErr error
 }
 
 func (s *stubDriver) Name() string                      { return "bambu-lan" }
@@ -44,6 +46,9 @@ func (s *stubDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.S
 }
 func (s *stubDriver) CameraStream(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
 	return s.streamRes, s.streamErr
+}
+func (s *stubDriver) CameraSnapshot(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraSnapshotResult, error) {
+	return s.snapshotRes, s.snapshotErr
 }
 func (s *stubDriver) CaptureFingerprint(_ context.Context, _ driver.ProfileInput) (string, error) {
 	return "", nil

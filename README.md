@@ -8,7 +8,7 @@ The project is intentionally ADR and spec driven. Initial commands are implement
 
 This repository contains the ADR/spec foundation plus the first implemented printer-management and read-command slices.
 
-Implemented commands currently include `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, top-level `status`, `camera stream`, `files roots`, `files list`, `files download`, and `files upload`.
+Implemented commands currently include `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, top-level `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, and `files upload`.
 
 ## Key Decisions
 
@@ -46,6 +46,8 @@ make ci
 ```
 
 `make ci` runs tests, race tests, and linting when the relevant tools are available.
+
+H.264 camera snapshots use FFmpeg libraries through cgo for frame decoding and JPEG encoding. Development builds of that path require `pkg-config`, a C compiler, and FFmpeg development packages for `libavcodec`, `libavutil`, and `libswscale`. The project links against system FFmpeg libraries rather than vendoring codec code, so packagers should use maintained distro packages and verify their selected FFmpeg license configuration.
 
 ## References
 

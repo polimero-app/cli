@@ -208,7 +208,7 @@ Contract:
 Drivers that declare `CameraStream: true` in their `Capabilities` must implement:
 
 ```go
-CameraStream(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger) (CameraStreamResult, error)
+CameraStream(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger) (*CameraStreamResult, error)
 ```
 
 Where:

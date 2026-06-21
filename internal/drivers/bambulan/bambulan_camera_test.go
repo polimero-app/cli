@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
@@ -333,3 +334,174 @@ func TestCameraStream_Capabilities_Included(t *testing.T) {
 	}
 }
 
+func TestCameraSnapshot_H264_HappyPath(t *testing.T) {
+	drv := newCameraDriver(func(_ context.Context, _ string, _ *tls.Config) (*tls.Conn, error) {
+		t.Fatal("dialTLS should not be called when H.264 capture succeeds")
+		return nil, nil
+	})
+	frame := fakeJPEG("h264")
+	drv.captureH264Snapshot = func(_ context.Context, _ *tls.Config, host, accessCode string) ([]byte, error) {
+		if host != "192.0.2.1" {
+			t.Fatalf("unexpected host: %s", host)
+		}
+		if accessCode != "test" {
+			t.Fatalf("unexpected access code: %s", accessCode)
+		}
+		return frame, nil
+	}
+
+	pi := driver.ProfileInput{Host: "192.0.2.1", Serial: "SN001", Insecure: true}
+	secrets := driver.SecretsBundle{AccessCode: "test"}
+	result, err := drv.CameraSnapshot(context.Background(), pi, secrets, slog.Default())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Protocol != cameraProtocolH264 {
+		t.Fatalf("protocol = %q, want %q", result.Protocol, cameraProtocolH264)
+	}
+	if !bytes.Equal(result.Data, frame) {
+		t.Fatalf("snapshot data = %v, want %v", result.Data, frame)
+	}
+	if !result.Capabilities.CameraSnapshot {
+		t.Fatal("expected CameraSnapshot capability")
+	}
+}
+
+func TestCameraSnapshot_MJPEG_Fallback(t *testing.T) {
+	tlsCert := makeSelfSignedTLSCert(t)
+	serverCfg := &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+	frame := fakeJPEG("mjpeg")
+
+	drv := newCameraDriver(func(_ context.Context, addr string, clientCfg *tls.Config) (*tls.Conn, error) {
+		if !strings.Contains(addr, ":6000") {
+			t.Fatalf("expected port 6000 dial for MJPEG, got %s", addr)
+		}
+		serverConn, clientConn := net.Pipe()
+		tlsServer := tls.Server(serverConn, serverCfg)
+		tlsClient := tls.Client(clientConn, clientCfg)
+		go cameraServer(t, tlsServer, [][]byte{frame})
+		if err := tlsClient.Handshake(); err != nil {
+			return nil, err
+		}
+		return tlsClient, nil
+	})
+	drv.captureH264Snapshot = func(_ context.Context, _ *tls.Config, _ string, _ string) ([]byte, error) {
+		return nil, apperr.New(4, "RTSPS connection refused")
+	}
+
+	pi := driver.ProfileInput{Host: "192.0.2.1", Serial: "SN001", Insecure: true}
+	secrets := driver.SecretsBundle{AccessCode: "test"}
+	result, err := drv.CameraSnapshot(context.Background(), pi, secrets, slog.Default())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Protocol != cameraProtocolMJPEG {
+		t.Fatalf("protocol = %q, want %q", result.Protocol, cameraProtocolMJPEG)
+	}
+	if !bytes.Equal(result.Data, frame) {
+		t.Fatalf("snapshot data = %v, want %v", result.Data, frame)
+	}
+}
+
+func TestCameraSnapshot_H264DecodeError_DoesNotFallback(t *testing.T) {
+	drv := newCameraDriver(func(_ context.Context, _ string, _ *tls.Config) (*tls.Conn, error) {
+		t.Fatal("dialTLS should not be called when H.264 decode fails")
+		return nil, nil
+	})
+	drv.captureH264Snapshot = func(_ context.Context, _ *tls.Config, _ string, _ string) ([]byte, error) {
+		return nil, apperr.New(1, "H.264 frame decode failed")
+	}
+
+	pi := driver.ProfileInput{Host: "192.0.2.1", Serial: "SN001", Insecure: true}
+	secrets := driver.SecretsBundle{AccessCode: "test"}
+	_, err := drv.CameraSnapshot(context.Background(), pi, secrets, slog.Default())
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("expected exit 1, got %v", err)
+	}
+}
+
+func TestPrepareH264SnapshotStartAU_PrependsCachedParameters(t *testing.T) {
+	params := newH264ParameterSets(
+		testH264NALU(h264.NALUTypeSPS, 0x01),
+		testH264NALU(h264.NALUTypePPS, 0x02),
+	)
+	idr := testH264NALU(h264.NALUTypeIDR, 0x03)
+
+	got, ok := prepareH264SnapshotStartAU([][]byte{idr}, &params)
+	if !ok {
+		t.Fatal("expected access unit to be prepared")
+	}
+
+	want := [][]byte{params.sps, params.pps, idr}
+	if !equalH264AUs(got, want) {
+		t.Fatalf("prepared AU = %v, want %v", got, want)
+	}
+}
+
+func TestPrepareH264SnapshotStartAU_UsesInBandParametersWithoutDuplicates(t *testing.T) {
+	params := newH264ParameterSets(
+		testH264NALU(h264.NALUTypeSPS, 0x01),
+		testH264NALU(h264.NALUTypePPS, 0x02),
+	)
+	sps := testH264NALU(h264.NALUTypeSPS, 0x10)
+	pps := testH264NALU(h264.NALUTypePPS, 0x20)
+	idr := testH264NALU(h264.NALUTypeIDR, 0x30)
+
+	got, ok := prepareH264SnapshotStartAU([][]byte{sps, pps, idr}, &params)
+	if !ok {
+		t.Fatal("expected access unit to be prepared")
+	}
+
+	want := [][]byte{sps, pps, idr}
+	if !equalH264AUs(got, want) {
+		t.Fatalf("prepared AU = %v, want %v", got, want)
+	}
+}
+
+func TestPrepareH264SnapshotStartAU_WaitsForKeyframeAndParameters(t *testing.T) {
+	tests := []struct {
+		name   string
+		params h264ParameterSets
+		au     [][]byte
+	}{
+		{
+			name: "missing keyframe",
+			params: newH264ParameterSets(
+				testH264NALU(h264.NALUTypeSPS, 0x01),
+				testH264NALU(h264.NALUTypePPS, 0x02),
+			),
+			au: [][]byte{testH264NALU(h264.NALUTypeNonIDR, 0x03)},
+		},
+		{
+			name:   "missing parameters",
+			params: h264ParameterSets{},
+			au:     [][]byte{testH264NALU(h264.NALUTypeIDR, 0x03)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, ok := prepareH264SnapshotStartAU(tt.au, &tt.params); ok || got != nil {
+				t.Fatalf("prepareH264SnapshotStartAU() = %v, %v; want nil, false", got, ok)
+			}
+		})
+	}
+}
+
+func testH264NALU(typ h264.NALUType, payload ...byte) []byte {
+	nalu := []byte{0x60 | byte(typ)}
+	return append(nalu, payload...)
+}
+
+func equalH264AUs(a, b [][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !bytes.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}

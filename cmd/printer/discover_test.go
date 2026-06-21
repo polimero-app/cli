@@ -46,6 +46,10 @@ func (s *stubDiscoverDriver) CameraStream(_ context.Context, _ driver.ProfileInp
 	return nil, nil
 }
 
+func (s *stubDiscoverDriver) CameraSnapshot(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraSnapshotResult, error) {
+	return nil, nil
+}
+
 func defaultDiscoverDriver() *stubDiscoverDriver {
 	return &stubDiscoverDriver{
 		name: "bambu-lan",

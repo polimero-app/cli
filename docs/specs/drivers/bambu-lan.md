@@ -6,7 +6,7 @@ Accepted
 
 ## Purpose
 
-Define the Bambu LAN driver slice for printer discovery, TLS refresh, and status. Accepted future file-management behavior is also specified below for later implementation.
+Define the Bambu LAN driver slice for printer discovery, TLS refresh, status, camera streaming, camera snapshots, and file management.
 
 ## Scope
 
@@ -27,6 +27,7 @@ Initial command support:
 - `status`
 - `printer tls refresh`
 - `camera stream`
+- `camera snapshot`
 - `files roots`
 - `files list`
 - `files download`
@@ -145,6 +146,46 @@ The H2 family uses the same MQTT topics and `pushall` command but differs in sev
 | `lights_report` | Top-level sibling of `print` | Nested inside `print` |
 
 The driver must tolerate these type variations without failing. JSON unmarshaling must not reject entire messages due to type mismatches in non-essential fields.
+
+## Camera Transport
+
+Implementation status: implemented.
+
+Capabilities:
+
+- `CameraStream: true`
+- `CameraSnapshot: true`
+
+Bambu printers expose LAN camera feeds through family-specific endpoints:
+
+| Family | Endpoint | Protocol | Polimero use |
+|---|---|---|---|
+| A1 / A1 mini | port `6000` | TLS plus Bambu framed MJPEG | `camera stream`, `camera snapshot` |
+| X1 / P1 / H2 | port `322` | RTSPS with H.264 video | `camera stream`, `camera snapshot` |
+
+The driver probes RTSPS/H.264 first and falls back to MJPEG when the RTSPS endpoint is unreachable. It must use the same pinned TLS fingerprint behavior as MQTT:
+
+- If `insecure` is false: verify the presented leaf certificate SHA-256 fingerprint matches the pinned fingerprint.
+- If `insecure` is true: skip certificate verification.
+
+MJPEG snapshots read a single proprietary Bambu frame and return the JPEG payload directly.
+
+H.264 snapshots wait for a random-access frame, decode the frame, and JPEG-encode it before returning to the command layer. This implementation uses system FFmpeg libraries through cgo:
+
+| Library | Purpose |
+|---|---|
+| `libavcodec` | H.264 frame decode |
+| `libavutil` | FFmpeg frame allocation and image utilities |
+| `libswscale` | YUV-to-RGBA conversion before JPEG encoding |
+
+Dependency and audit posture:
+
+- FFmpeg is not vendored into the repository.
+- Builds link against system FFmpeg development packages discovered by `pkg-config`.
+- Packagers must use maintained FFmpeg packages and verify their selected FFmpeg license configuration.
+- Camera payloads and decoded image data must not be logged.
+
+If H.264 frame decoding or JPEG encoding fails, return a sanitized general failure. If the camera endpoint is unreachable or frame capture times out, return a sanitized network or timeout failure.
 
 ## File Storage Transport
 

@@ -49,6 +49,10 @@ func (s *stubRefreshDriver) CameraStream(_ context.Context, _ driver.ProfileInpu
 	return nil, nil
 }
 
+func (s *stubRefreshDriver) CameraSnapshot(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraSnapshotResult, error) {
+	return nil, nil
+}
+
 func defaultRefreshDriver() *stubRefreshDriver {
 	return &stubRefreshDriver{
 		fp:   alternateFingerprint,

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (not yet implemented)
+Accepted
 
 ## Purpose
 
@@ -71,6 +71,7 @@ If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowe
 - The command resolves the printer profile, loads secrets, and calls the driver's `CameraSnapshot` operation.
 - The driver connects to the camera endpoint, captures a single frame, decodes it if necessary (H.264), encodes it as JPEG, and returns the image bytes.
 - The command writes the JPEG data to the destination file.
+- The command validates the destination path before opening the camera connection.
 - Default timeout is `10s`.
 - No retry is performed by default.
 - No discovery or scanning is performed.
@@ -79,7 +80,9 @@ If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowe
 
 **MJPEG (A1/A1 mini family):** The driver connects to port 6000, authenticates, reads a single JPEG frame from the proprietary Bambu frame format, and returns it directly.
 
-**H.264/RTSPS (X1/P1/H2 family):** The driver connects via RTSPS on port 322, waits for the first I-frame (keyframe), decodes it from H.264, encodes the decoded frame as JPEG, and returns the image bytes.
+**H.264/RTSPS (X1/P1/H2 family):** The driver connects via RTSPS on port 322, waits for a keyframe with codec parameters, begins decoding there, continues feeding later access units until the decoder emits an image, encodes that image as JPEG, and returns the image bytes.
+
+The Bambu LAN implementation uses system FFmpeg libraries (`libavcodec`, `libavutil`, and `libswscale`) via cgo for H.264 frame decoding. This avoids vendoring codec code; packagers are responsible for using maintained FFmpeg packages and verifying their selected FFmpeg license configuration.
 
 ### File Write
 
@@ -160,7 +163,7 @@ JSON error example:
 - TLS fingerprint invalid in keychain (secure profile).
 - TLS fingerprint mismatch (TOFU violation).
 - Camera endpoint unreachable (both protocols failed).
-- Frame capture timed out (no keyframe received within timeout for H.264).
+- Frame capture timed out (no decodable image received within timeout for H.264).
 - Frame decode failure (corrupted H.264 data).
 - JPEG encoding failure.
 - Destination file exists without `--overwrite`.
@@ -202,7 +205,7 @@ Contract:
 - The driver connects to the camera endpoint, captures a single frame, and returns JPEG bytes.
 - `ctx` controls the connection and frame capture timeout.
 - For MJPEG: read one frame from the proprietary Bambu frame format (already JPEG).
-- For H.264: connect via RTSPS, wait for the first I-frame, decode it, and encode as JPEG.
+- For H.264: connect via RTSPS, start decoding at a keyframe with codec parameters, continue until a decoded image is available, and encode as JPEG.
 - The driver must use the same TLS fingerprint pinning as for the MQTT and camera stream connections.
 - Return `unsupported_capability` when the driver does not support camera snapshot.
 - Sanitize transport, TLS, decode, and encode errors before returning.

@@ -29,6 +29,7 @@ type Capabilities struct {
 	Status           bool `json:"status"`
 	Discovery        bool `json:"discovery"`
 	CameraStream     bool `json:"cameraStream"`
+	CameraSnapshot   bool `json:"cameraSnapshot"`
 	FileList         bool `json:"fileList"`
 	FileDownload     bool `json:"fileDownload"`
 	FileUpload       bool `json:"fileUpload"`
@@ -141,19 +142,19 @@ type Timelapse struct {
 
 // GcodePosition holds g-code execution position.
 type GcodePosition struct {
-	ZMm        float64 `json:"zMm"`
+	ZMm         float64 `json:"zMm"`
 	CurrentLine int     `json:"currentLine"`
 	TotalLines  int     `json:"totalLines"`
 }
 
 // AMSTray holds data for a single AMS tray slot.
 type AMSTray struct {
-	Slot            int      `json:"slot"`
-	FilamentType    *string  `json:"filamentType,omitempty"`
-	Color           *string  `json:"color,omitempty"`
+	Slot             int     `json:"slot"`
+	FilamentType     *string `json:"filamentType,omitempty"`
+	Color            *string `json:"color,omitempty"`
 	RemainingPercent *int    `json:"remainingPercent,omitempty"`
-	NozzleTempMin   *int     `json:"nozzleTempMin,omitempty"`
-	NozzleTempMax   *int     `json:"nozzleTempMax,omitempty"`
+	NozzleTempMin    *int    `json:"nozzleTempMin,omitempty"`
+	NozzleTempMax    *int    `json:"nozzleTempMax,omitempty"`
 }
 
 // AMSUnit holds data for a single AMS unit.
@@ -211,5 +212,12 @@ const (
 type CameraStreamResult struct {
 	Format       CameraFormat
 	Stream       io.ReadCloser
+	Capabilities Capabilities
+}
+
+// CameraSnapshotResult is returned by Driver.CameraSnapshot with JPEG image data.
+type CameraSnapshotResult struct {
+	Data         []byte
+	Protocol     string
 	Capabilities Capabilities
 }
