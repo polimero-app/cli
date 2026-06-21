@@ -62,12 +62,16 @@ func runSnapshot(cmd *cobra.Command, nameArg, toFlag string, overwrite bool, tim
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSnapshot, err)
 	}
+	// Checked again inside writeSnapshotFile after the capture completes, in
+	// case the destination is created during the (possibly multi-second)
+	// network round trip; this early check only avoids paying for that round
+	// trip when the destination is already known to be invalid.
 	if err := validateSnapshotDestination(dest, overwrite); err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSnapshot, err)
 	}
 
 	start := time.Now()
-	result, _, driverName, err := captureSnapshot(cmd, name, timeoutFlag, insecureFlag, deps)
+	result, driverName, err := captureSnapshot(cmd, name, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSnapshot, err)
 	}
@@ -86,13 +90,13 @@ func normalizedProfileName(nameArg string) (string, error) {
 	return name, nil
 }
 
-func captureSnapshot(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) (*driver.CameraSnapshotResult, string, string, error) {
+func captureSnapshot(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) (*driver.CameraSnapshotResult, string, error) {
 	rp, err := resolveProfile(cmd.Context(), nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", err
 	}
 	if !rp.driver.Capabilities().CameraSnapshot {
-		return nil, "", "", apperr.Newf(5, "driver %q does not support camera snapshot", rp.input.Driver)
+		return nil, "", apperr.Newf(5, "driver %q does not support camera snapshot", rp.input.Driver)
 	}
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
@@ -100,12 +104,12 @@ func captureSnapshot(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFl
 
 	result, err := rp.driver.CameraSnapshot(ctx, rp.input, rp.secrets, deps.Log)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", err
 	}
 	if result == nil {
-		return nil, "", "", apperr.New(1, "driver returned nil camera snapshot result")
+		return nil, "", apperr.New(1, "driver returned nil camera snapshot result")
 	}
-	return result, rp.name, rp.input.Driver, nil
+	return result, rp.input.Driver, nil
 }
 
 func resolveSnapshotDestination(toFlag, name string, now time.Time) (string, error) {
