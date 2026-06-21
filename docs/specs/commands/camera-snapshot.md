@@ -90,7 +90,7 @@ The Bambu LAN implementation uses system FFmpeg libraries (`libavcodec`, `libavu
 - If `--to` is omitted, the snapshot is written to the current working directory using the auto-generated name.
 - If `--to` names a file path, the snapshot is written to that exact path.
 - If the destination file exists and `--overwrite` is not set, the command fails with exit code `2`.
-- Local writes should use a temporary file in the destination directory and atomically rename it into place where the OS supports atomic rename.
+- Local writes use a temporary file in the destination directory. With `--overwrite`, the temporary file is renamed into place, replacing any existing destination. Without `--overwrite`, the temporary file is moved into place using a hard link followed by removing the temporary file, which fails atomically if the destination already exists instead of silently replacing it; on a destination filesystem that does not support hard links, this falls back to a check-then-rename, which narrows but does not fully close the window in which a file could appear at the destination between the check and the write.
 - Partial local files are removed after failed captures when practical.
 
 ## Output
@@ -230,7 +230,7 @@ Contract:
 - Fails with exit `4` when camera endpoint is unreachable.
 - Fails with exit `4` when frame capture times out.
 - Fails with exit `5` when driver does not support `CameraSnapshot`.
-- Uses atomic write with temporary file and rename.
+- Uses an atomic temporary-file write; the no-overwrite path refuses to replace a file that appears at the destination after the initial validation check.
 - Cleans up partial files on failure.
 - Emits stable JSON envelope when `--output json`.
 - JSON `data.sizeBytes` matches actual written file size.

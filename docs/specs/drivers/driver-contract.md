@@ -263,7 +263,7 @@ Contract:
 - The driver connects to the camera endpoint, captures a single frame, and returns JPEG-encoded bytes.
 - `ctx` controls the connection and frame capture lifetime; abort if context is canceled or deadline exceeded.
 - For MJPEG endpoints: read one frame from the proprietary format (already JPEG) and return it directly.
-- For H.264/RTSPS endpoints: connect, wait for the first I-frame (keyframe), decode it, encode as JPEG, and return.
+- For H.264/RTSPS endpoints: connect, start decoding at a keyframe with codec parameters, continue feeding later access units until a decoded image is available, encode as JPEG, and return.
 - The driver must use the same pinned TLS fingerprint as for the MQTT and camera stream connections. No additional keychain entry is required.
 - Return `unsupported_capability` when the driver does not support camera snapshot.
 - Sanitize transport, TLS, decode, and encode errors before returning them.

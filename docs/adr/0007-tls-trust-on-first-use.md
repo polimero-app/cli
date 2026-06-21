@@ -45,7 +45,7 @@ On each network command, Polimero loads the pinned fingerprint from the keychain
 
 ### Insecure Mode
 
-`--insecure` may be passed to `printer add`, `status`, `camera stream`, `files roots`, `files list`, `files download`, `files upload`, or `printer tls refresh`.
+`--insecure` may be passed to `printer add`, `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, `files upload`, or `printer tls refresh`.
 
 When `--insecure` is passed to `printer add`:
 
@@ -54,7 +54,7 @@ When `--insecure` is passed to `printer add`:
 - The profile is stored with `insecure: true`.
 - Human output includes a warning line.
 
-When `--insecure` is passed to `status`, `camera stream`, `files roots`, `files list`, `files download`, or `files upload`:
+When `--insecure` is passed to `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, or `files upload`:
 
 - TLS verification is skipped for that invocation regardless of the profile setting.
 
