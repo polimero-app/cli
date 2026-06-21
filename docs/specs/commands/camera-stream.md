@@ -202,4 +202,4 @@ JSON error example:
 - Cloud camera (TUTK/Agora p2p).
 - Recording or saving the stream to disk.
 - Multiple simultaneous streams from one command invocation.
-- Camera snapshot (`camera snapshot`) — separate future command.
+- Camera snapshot (`camera snapshot`) — separate command.

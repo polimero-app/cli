@@ -39,6 +39,14 @@ type Driver interface {
 		log *slog.Logger,
 	) (*CameraStreamResult, error)
 
+	// CameraSnapshot captures one JPEG-encoded camera frame from the printer.
+	CameraSnapshot(
+		ctx context.Context,
+		p ProfileInput,
+		s SecretsBundle,
+		log *slog.Logger,
+	) (*CameraSnapshotResult, error)
+
 	// CaptureFingerprint performs a TLS handshake to the printer and returns
 	// the SHA-256 leaf certificate fingerprint as "sha256:<lowercase-hex>".
 	CaptureFingerprint(ctx context.Context, p ProfileInput) (fingerprint string, err error)

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (not yet implemented)
+Accepted
 
 ## Purpose
 
@@ -71,6 +71,7 @@ If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowe
 - The command resolves the printer profile, loads secrets, and calls the driver's `CameraSnapshot` operation.
 - The driver connects to the camera endpoint, captures a single frame, decodes it if necessary (H.264), encodes it as JPEG, and returns the image bytes.
 - The command writes the JPEG data to the destination file.
+- The command validates the destination path before opening the camera connection.
 - Default timeout is `10s`.
 - No retry is performed by default.
 - No discovery or scanning is performed.
@@ -80,6 +81,8 @@ If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowe
 **MJPEG (A1/A1 mini family):** The driver connects to port 6000, authenticates, reads a single JPEG frame from the proprietary Bambu frame format, and returns it directly.
 
 **H.264/RTSPS (X1/P1/H2 family):** The driver connects via RTSPS on port 322, waits for the first I-frame (keyframe), decodes it from H.264, encodes the decoded frame as JPEG, and returns the image bytes.
+
+The Bambu LAN implementation uses system FFmpeg libraries (`libavcodec`, `libavutil`, and `libswscale`) via cgo for H.264 frame decoding. This avoids vendoring codec code; packagers are responsible for using maintained FFmpeg packages and verifying their selected FFmpeg license configuration.
 
 ### File Write
 

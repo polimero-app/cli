@@ -64,6 +64,10 @@ func (s *stubDriver) CameraStream(_ context.Context, _ driver.ProfileInput, _ dr
 	return nil, nil
 }
 
+func (s *stubDriver) CameraSnapshot(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraSnapshotResult, error) {
+	return nil, nil
+}
+
 func defaultAddDeps(kc *keychain.Mock, p *tty.Mock) printer.AddDeps {
 	return printer.AddDeps{
 		KC:       kc,

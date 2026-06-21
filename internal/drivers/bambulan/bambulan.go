@@ -52,13 +52,14 @@ func (e *fingerprintMismatchError) Error() string {
 
 // Driver implements the bambu-lan protocol for Bambu Lab printers.
 type Driver struct {
-	newClient   func(*mqtt.ClientOptions) mqttConn
-	dialTLS     func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)
-	dialRTSPSFn func(tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error)
-	browse      func(ctx context.Context, service string) (<-chan *mdnsEntry, error)
-	browseSSDP  func(ctx context.Context) (<-chan *mdnsEntry, error)
-	browseUDP   func(ctx context.Context) (<-chan *mdnsEntry, error)
-	dialFTP     ftpDialer
+	newClient           func(*mqtt.ClientOptions) mqttConn
+	dialTLS             func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)
+	dialRTSPSFn         func(tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error)
+	captureH264Snapshot func(ctx context.Context, tlsCfg *tls.Config, host, accessCode string) ([]byte, error)
+	browse              func(ctx context.Context, service string) (<-chan *mdnsEntry, error)
+	browseSSDP          func(ctx context.Context) (<-chan *mdnsEntry, error)
+	browseUDP           func(ctx context.Context) (<-chan *mdnsEntry, error)
+	dialFTP             ftpDialer
 }
 
 // New returns a bambu-lan Driver backed by a real paho MQTT client.
@@ -73,10 +74,11 @@ func New() *Driver {
 			}
 			return conn.(*tls.Conn), nil
 		},
-		dialRTSPSFn: dialRTSPS,
-		browse:      realBrowse,
-		browseSSDP:  realBrowseSSDP,
-		browseUDP:   realBrowseUDP,
+		dialRTSPSFn:         dialRTSPS,
+		captureH264Snapshot: captureRTSPSH264Snapshot,
+		browse:              realBrowse,
+		browseSSDP:          realBrowseSSDP,
+		browseUDP:           realBrowseUDP,
 	}
 }
 
@@ -118,7 +120,16 @@ func (d *Driver) Name() string { return "bambu-lan" }
 
 // Capabilities returns the bambu-lan driver's supported operations.
 func (d *Driver) Capabilities() driver.Capabilities {
-	return driver.Capabilities{Status: true, TLSRefresh: true, Discovery: true, CameraStream: true, FileList: true, FileDownload: true, FileUpload: true}
+	return driver.Capabilities{
+		Status:         true,
+		TLSRefresh:     true,
+		Discovery:      true,
+		CameraStream:   true,
+		CameraSnapshot: true,
+		FileList:       true,
+		FileDownload:   true,
+		FileUpload:     true,
+	}
 }
 
 func buildCaptureTLSConfig(serial string) *tls.Config {
@@ -408,16 +419,16 @@ type bambuPrint struct {
 	HMS                []bambuHMS      `json:"hms"`
 
 	// Extended fields for --detailed status.
-	BigFan1Speed    *rawValueString `json:"big_fan1_speed"`
-	BigFan2Speed    *rawValueString `json:"big_fan2_speed"`
-	CoolingFanSpeed *rawValueString `json:"cooling_fan_speed"`
+	BigFan1Speed      *rawValueString `json:"big_fan1_speed"`
+	BigFan2Speed      *rawValueString `json:"big_fan2_speed"`
+	CoolingFanSpeed   *rawValueString `json:"cooling_fan_speed"`
 	HeatbreakFanSpeed *rawValueString `json:"heatbreak_fan_speed"`
 
-	McRemainingTime *int    `json:"mc_remaining_time"`
-	PrintedTime     *int    `json:"mc_print_line_number"` // not used; see below
-	SpdLvl          *int    `json:"spd_lvl"`
-	SpdMag          *int    `json:"spd_mag"`
-	WifiSignal      *rawValueString `json:"wifi_signal"`
+	McRemainingTime         *int            `json:"mc_remaining_time"`
+	PrintedTime             *int            `json:"mc_print_line_number"` // not used; see below
+	SpdLvl                  *int            `json:"spd_lvl"`
+	SpdMag                  *int            `json:"spd_mag"`
+	WifiSignal              *rawValueString `json:"wifi_signal"`
 	GcodeFilePreparePercent *rawValueString `json:"gcode_file_prepare_percent"`
 
 	// Stg type varies across families: int on X1/P1/A1, array on H2C.
@@ -425,9 +436,9 @@ type bambuPrint struct {
 	Stg    json.RawMessage `json:"stg"`
 	StgCur *int            `json:"stg_cur"`
 
-	NozzleDiameter    *rawValueString `json:"nozzle_diameter"`
-	TotalLayerCount   *int            `json:"total_layer_num_bak"` // not used; total_layer_num preferred
-	FileSize          *int            `json:"file_size"`           // not present in all FW; treat as optional
+	NozzleDiameter  *rawValueString `json:"nozzle_diameter"`
+	TotalLayerCount *int            `json:"total_layer_num_bak"` // not used; total_layer_num preferred
+	FileSize        *int            `json:"file_size"`           // not present in all FW; treat as optional
 
 	TimelapseStat *string `json:"ipcam_record_timelapse"`
 
@@ -454,25 +465,25 @@ type bambuPrint struct {
 }
 
 type bambuAMS struct {
-	AMS          []bambuAMSUnit `json:"ams"`
+	AMS          []bambuAMSUnit  `json:"ams"`
 	AMSExistBits *rawValueString `json:"ams_exist_bits"`
 	TrayNow      *rawValueString `json:"tray_now"`
 }
 
 type bambuAMSUnit struct {
-	ID        rawValueString `json:"id"`
-	Humidity  rawValueString `json:"humidity"`
-	Temp      rawValueString `json:"temp"`
-	Tray      []bambuAMSTray `json:"tray"`
+	ID       rawValueString `json:"id"`
+	Humidity rawValueString `json:"humidity"`
+	Temp     rawValueString `json:"temp"`
+	Tray     []bambuAMSTray `json:"tray"`
 }
 
 type bambuAMSTray struct {
-	ID             rawValueString `json:"id"`
-	TrayType       *string        `json:"tray_type"`
-	TrayColor      *string        `json:"tray_color"`
-	Remain         *int           `json:"remain"`
-	NozzleTempMin  *int           `json:"nozzle_temp_min"`
-	NozzleTempMax  *int           `json:"nozzle_temp_max"`
+	ID            rawValueString `json:"id"`
+	TrayType      *string        `json:"tray_type"`
+	TrayColor     *string        `json:"tray_color"`
+	Remain        *int           `json:"remain"`
+	NozzleTempMin *int           `json:"nozzle_temp_min"`
+	NozzleTempMax *int           `json:"nozzle_temp_max"`
 }
 
 type bambuHMS struct {
@@ -1128,8 +1139,12 @@ func (m *mjpegStream) Read(p []byte) (int, error) {
 // Frame format: 16-byte header (payload_size u32le, itrack u32le, flags u32le, pad u32le)
 // followed by payload_size bytes of JPEG data.
 func (m *mjpegStream) readFrame() ([]byte, error) {
+	return readMJPEGFrame(m.conn)
+}
+
+func readMJPEGFrame(r io.Reader) ([]byte, error) {
 	var hdr [cameraFrameHeaderSize]byte
-	if _, err := io.ReadFull(m.conn, hdr[:]); err != nil {
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return nil, err
 	}
 	size := uint32(hdr[0]) | uint32(hdr[1])<<8 | uint32(hdr[2])<<16 | uint32(hdr[3])<<24
@@ -1137,7 +1152,7 @@ func (m *mjpegStream) readFrame() ([]byte, error) {
 		return nil, fmt.Errorf("invalid MJPEG frame size: %d", size)
 	}
 	frame := make([]byte, size)
-	if _, err := io.ReadFull(m.conn, frame); err != nil {
+	if _, err := io.ReadFull(r, frame); err != nil {
 		return nil, err
 	}
 	return frame, nil

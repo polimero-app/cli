@@ -32,5 +32,6 @@ func CommandWithDeps(deps Deps) *cobra.Command {
 		Short: "Camera operations on a named printer",
 	}
 	cmd.AddCommand(streamCommandWithDeps(deps))
+	cmd.AddCommand(snapshotCommandWithDeps(deps))
 	return cmd
 }

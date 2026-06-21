@@ -24,15 +24,15 @@ const testFingerprint = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 // stubFileDriver satisfies driver.FileDriver for files command tests.
 type stubFileDriver struct {
-	caps          driver.Capabilities
-	rootsResult   []driver.FileRoot
-	rootsErr      error
-	listResult    *driver.FileListResult
-	listErr       error
-	downloadData  []byte
-	downloadErr   error
-	uploadResult  *driver.FileTransferResult
-	uploadErr     error
+	caps         driver.Capabilities
+	rootsResult  []driver.FileRoot
+	rootsErr     error
+	listResult   *driver.FileListResult
+	listErr      error
+	downloadData []byte
+	downloadErr  error
+	uploadResult *driver.FileTransferResult
+	uploadErr    error
 }
 
 func (s *stubFileDriver) Name() string                      { return "bambu-lan" }
@@ -47,6 +47,9 @@ func (s *stubFileDriver) Status(_ context.Context, _ driver.ProfileInput, _ driv
 	return nil, nil
 }
 func (s *stubFileDriver) CameraStream(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
+	return nil, nil
+}
+func (s *stubFileDriver) CameraSnapshot(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraSnapshotResult, error) {
 	return nil, nil
 }
 func (s *stubFileDriver) CaptureFingerprint(_ context.Context, _ driver.ProfileInput) (string, error) {

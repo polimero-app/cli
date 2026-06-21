@@ -17,7 +17,7 @@ The implementation stack is Go with Cobra for CLI structure and `gopkg.in/yaml.v
 - First driver: Bambu LAN.
 - First read command: `polimero status <name>`.
 - First profile commands: `printer add`, `printer list`, and `printer remove`.
-- Implemented command set: `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`, `camera stream`, `files roots`, `files list`, `files download`, `files upload`.
+- Implemented command set: `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, `files upload`.
 - Config format: versioned YAML at `polimero/polimero.yaml` under `os.UserConfigDir`; profiles stored as a map keyed by name.
 - Secret storage: OS keychain first; fail closed if unavailable.
 - Keychain naming scheme: service `polimero`; accounts `<driver>:<name>:access-code` and `<driver>:<name>:tls-fingerprint`.
@@ -155,6 +155,7 @@ Command specs:
 - `docs/specs/commands/printer-status.md` (superseded by `status.md`)
 - `docs/specs/commands/status.md`
 - `docs/specs/commands/camera-stream.md`
+- `docs/specs/commands/camera-snapshot.md`
 - `docs/specs/commands/files.md`
 
 Driver and security docs:
