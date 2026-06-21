@@ -53,14 +53,19 @@ Controls:
 
 Risks:
 
-- Future commands may heat, move, print, pause, or cancel unexpectedly.
+- Job, temperature, and motion commands (ADR 0012) may heat, move, print, pause, cancel, or resume unexpectedly.
 - Automation may invoke state-changing commands without confirmation.
+- A temperature or motion command sent while a print is in progress could ruin the job or crash the toolhead into the part or bed.
+- An out-of-range temperature or jog request could cause thermal or mechanical damage if sent unchecked.
+- A command may appear to succeed without the printer actually reaching the requested state.
 
 Controls:
 
-- First slice is read-only.
-- Future dangerous commands require exact confirmation behavior in specs.
-- Non-interactive bypass flags must be explicit.
+- `jobs`, `temperature`, and `motion` commands (ADR 0012) require interactive confirmation by default (`tty.Prompter`); a non-interactive session without an explicit `--yes` flag fails closed.
+- Each command validates the printer's current state before dispatch and refuses to run when the precondition is not met (e.g. `temperature set` and `motion home`/`jog` require `idle`; `jobs pause` requires `printing`).
+- Temperature and jog-distance values are checked against generic safety bounds before any network call, independent of firmware-side limits.
+- Commands wait for driver-confirmed completion (resulting state, acknowledged target, or motion-finished signal) rather than reporting success once a command is merely sent; a contradicting end-state is reported as a failure.
+- `jobs start` only starts a print from a file already on printer storage; it cannot be used to implicitly upload and run an arbitrary local file.
 
 ### Network Misuse
 

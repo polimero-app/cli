@@ -43,6 +43,7 @@ Capabilities {
     JobUpload        bool
     JobStart         bool
     JobPause         bool
+    JobResume        bool
     JobCancel        bool
     TemperatureRead  bool
     TemperatureWrite bool
@@ -268,6 +269,119 @@ Contract:
 - Sanitize transport, TLS, decode, and encode errors before returning them.
 - Do not log camera image data or secrets.
 
+## Job Control Operations
+
+Drivers that declare `JobStart`, `JobPause`, `JobResume`, or `JobCancel` in their `Capabilities` must implement the corresponding operation:
+
+```go
+JobStart(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger, devicePath string, opts JobStartOptions) (JobActionResult, error)
+JobPause(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger) (JobActionResult, error)
+JobResume(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger) (JobActionResult, error)
+JobCancel(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger) (JobActionResult, error)
+```
+
+Where:
+
+```go
+type JobStartOptions struct {
+    Plate        *int // nil means driver/printer default (e.g. first or only plate)
+    SkipLeveling bool
+}
+
+type JobActionResult struct {
+    State        string // resulting portable state ("idle", "printing", "paused", "error", "unknown"), confirmed
+    Warnings     []StatusWarning
+    Capabilities Capabilities
+}
+```
+
+Contract:
+
+- The command layer checks the state precondition (via the status operation) and obtains operator confirmation before calling any job action method. Drivers do not re-derive or enforce these business-level preconditions themselves.
+- `devicePath` passed to `JobStart` is already validated and normalized by the command layer, identical to file operation paths.
+- Each method sends the action to the printer and then blocks, bounded by `ctx`, until it can confirm the resulting state from the printer rather than merely that the command was transmitted.
+- If the confirmed resulting state contradicts the expected transition for that action (`JobStart`/`JobResume` → `printing`, `JobPause` → `paused`, `JobCancel` → `idle`), return `job_action_failed` rather than a result indicating success.
+- Return `timeout` if no confirming state update arrives before the context deadline.
+- Return `unsupported_capability` when the driver does not support the requested action.
+- `JobStart` must not implicitly upload a file; the file must already exist on printer storage.
+- Sanitize transport and protocol errors before returning them.
+- Drivers may log the action name and resulting state but must not log secrets or raw protocol payloads.
+
+## Temperature Control Operation
+
+Drivers that declare `TemperatureWrite: true` in their `Capabilities` must implement:
+
+```go
+TemperatureSet(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger, targets TemperatureTargets) (TemperatureResult, error)
+```
+
+Where:
+
+```go
+type TemperatureTargets struct {
+    NozzleCelsius  *float64 // nil means "leave unchanged"
+    BedCelsius     *float64
+    ChamberCelsius *float64
+}
+
+type TemperatureResult struct {
+    Targets      TemperatureTargets // acknowledged targets, as confirmed by the printer
+    Warnings     []StatusWarning
+    Capabilities Capabilities
+}
+```
+
+Contract:
+
+- The command layer enforces generic safety bounds (nozzle 0–300°C, bed 0–120°C, chamber 0–65°C) and the `idle`-state precondition before calling this operation. Drivers do not re-derive these checks.
+- A target of `0` means "turn the heater off."
+- The driver blocks, bounded by `ctx`, until the printer acknowledges the new target value(s) — not until the current temperature reaches target.
+- `TemperatureWrite: true` means the driver supports the temperature-set protocol generally. If the connected model does not have a specific heater (e.g. no chamber heater), return `unsupported_capability` for that specific request rather than assuming uniform hardware across the driver's supported models.
+- Return `timeout` if no acknowledgment arrives before the context deadline.
+- Sanitize transport and protocol errors before returning them.
+
+## Motion Control Operation
+
+Drivers that declare `MotionControl: true` in their `Capabilities` must implement:
+
+```go
+MotionHome(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger, axes []Axis) (MotionResult, error)
+MotionJog(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger, delta JogDelta) (MotionResult, error)
+```
+
+Where:
+
+```go
+type Axis string
+
+const (
+    AxisX Axis = "x"
+    AxisY Axis = "y"
+    AxisZ Axis = "z"
+)
+
+type JogDelta struct {
+    XMillimeters     *float64 // nil means "do not move this axis"
+    YMillimeters     *float64
+    ZMillimeters     *float64
+    FeedrateMmPerMin int
+}
+
+type MotionResult struct {
+    Warnings     []StatusWarning
+    Capabilities Capabilities
+}
+```
+
+Contract:
+
+- The command layer enforces the `idle`-state precondition and the generic jog distance bound (±10mm per axis per call) before calling either method. Drivers do not re-derive these checks.
+- `MotionHome` with an empty `axes` slice homes all axes.
+- The driver blocks, bounded by `ctx`, until it can confirm the requested motion (homing or jog) has physically finished, not merely that the command was sent.
+- Return `timeout` if no motion-finished confirmation arrives before the context deadline.
+- Return `unsupported_capability` when the driver does not support the requested axis or motion type.
+- Sanitize transport and protocol errors before returning them.
+
 ## Errors
 
 Drivers return typed errors using internal error codes. The command layer maps these to the public JSON `error.code` values emitted in `--output json` responses. These are two distinct namespaces; the mapping is:
@@ -285,6 +399,9 @@ Drivers return typed errors using internal error codes. The command layer maps t
 | `device_storage_rejected` | `device_storage_rejected` |
 | `timeout` | `timeout` |
 | `unsupported_capability` | `capability_unsupported` |
+| `invalid_printer_state` | `invalid_printer_state` |
+| `job_action_failed` | `job_action_failed` |
+| `unsafe_value` | `unsafe_value` |
 | `driver_internal_error` | `internal_error` |
 
 The command layer is responsible for the translation. Driver implementations must use the internal codes only.
@@ -312,5 +429,6 @@ Every driver must support:
 - Contract tests for error mapping.
 - Contract tests for redaction.
 - Contract tests for file capability handling, path errors, empty directory results, transfer overwrite handling, and secret redaction when file operations are supported.
+- Contract tests for job/temperature/motion capability handling, confirmed-state-vs-expected-transition mismatches (`job_action_failed`), and timeout while awaiting confirmation, when these capabilities are supported.
 
 Hardware tests must be opt-in and build-tagged.

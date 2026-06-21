@@ -143,6 +143,7 @@ Initial ADRs:
 - `docs/adr/0009-device-file-management-commands.md`
 - `docs/adr/0010-promote-status-to-top-level.md`
 - `docs/adr/0011-extended-read-only-status.md`
+- `docs/adr/0012-printer-control-commands.md`
 
 Command specs:
 
@@ -156,6 +157,9 @@ Command specs:
 - `docs/specs/commands/status.md`
 - `docs/specs/commands/camera-stream.md`
 - `docs/specs/commands/files.md`
+- `docs/specs/commands/jobs.md`
+- `docs/specs/commands/temperature.md`
+- `docs/specs/commands/motion.md`
 
 Driver and security docs:
 
