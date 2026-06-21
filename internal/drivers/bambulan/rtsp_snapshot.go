@@ -71,12 +71,7 @@ func captureRTSPSH264Snapshot(ctx context.Context, tlsCfg *tls.Config, host, acc
 	}
 	defer frameDec.close()
 
-	if forma.SPS != nil {
-		_, _ = frameDec.decode([][]byte{forma.SPS})
-	}
-	if forma.PPS != nil {
-		_, _ = frameDec.decode([][]byte{forma.PPS})
-	}
+	params := newH264ParameterSets(forma.SPS, forma.PPS)
 
 	if _, err := c.Setup(desc.BaseURL, medi, 0, 0); err != nil {
 		return nil, apperr.Wrap(4, "RTSPS camera setup failed", err)
@@ -90,6 +85,7 @@ func captureRTSPSH264Snapshot(ctx context.Context, tlsCfg *tls.Config, host, acc
 		}
 	}
 
+	decoderStarted := false
 	c.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
 		if ctx.Err() != nil {
 			return
@@ -100,19 +96,25 @@ func captureRTSPSH264Snapshot(ctx context.Context, tlsCfg *tls.Config, host, acc
 			if !errors.Is(decErr, rtph264.ErrNonStartingPacketAndNoPrevious) &&
 				!errors.Is(decErr, rtph264.ErrMorePacketsNeeded) {
 				sendResult(h264CaptureResult{err: apperr.Wrap(1, "H.264 RTP decode failed", decErr)})
-				c.Close()
 			}
 			return
 		}
 
-		if !h264.IsRandomAccess(au) {
-			return
+		decodeAU := au
+		if !decoderStarted {
+			preparedAU, ok := prepareH264SnapshotStartAU(au, &params)
+			if !ok {
+				return
+			}
+			decodeAU = preparedAU
+			decoderStarted = true
+		} else {
+			params.updateFromAU(au)
 		}
 
-		img, decErr := frameDec.decode(au)
+		img, decErr := frameDec.decode(decodeAU)
 		if decErr != nil {
 			sendResult(h264CaptureResult{err: apperr.Wrap(1, "H.264 frame decode failed", decErr)})
-			c.Close()
 			return
 		}
 		if img == nil {
@@ -122,12 +124,10 @@ func captureRTSPSH264Snapshot(ctx context.Context, tlsCfg *tls.Config, host, acc
 		var buf bytes.Buffer
 		if encErr := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 80}); encErr != nil {
 			sendResult(h264CaptureResult{err: apperr.Wrap(1, "JPEG encoding failed", encErr)})
-			c.Close()
 			return
 		}
 
-		sendResult(h264CaptureResult{data: buf.Bytes()})
-		c.Close()
+		sendResult(h264CaptureResult{data: append([]byte(nil), buf.Bytes()...)})
 	})
 
 	if _, err := c.Play(nil); err != nil {
@@ -154,6 +154,67 @@ func captureRTSPSH264Snapshot(ctx context.Context, tlsCfg *tls.Config, host, acc
 		c.Close()
 		return nil, cameraContextError(ctx.Err())
 	}
+}
+
+type h264ParameterSets struct {
+	sps []byte
+	pps []byte
+}
+
+func newH264ParameterSets(sps, pps []byte) h264ParameterSets {
+	return h264ParameterSets{
+		sps: cloneH264NALU(sps),
+		pps: cloneH264NALU(pps),
+	}
+}
+
+func cloneH264NALU(nalu []byte) []byte {
+	if len(nalu) == 0 {
+		return nil
+	}
+	return append([]byte(nil), nalu...)
+}
+
+func (p *h264ParameterSets) updateFromAU(au [][]byte) bool {
+	hasIDR := false
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		switch h264.NALUType(nalu[0] & 0x1F) {
+		case h264.NALUTypeSPS:
+			p.sps = cloneH264NALU(nalu)
+		case h264.NALUTypePPS:
+			p.pps = cloneH264NALU(nalu)
+		case h264.NALUTypeIDR:
+			hasIDR = true
+		}
+	}
+	return hasIDR
+}
+
+func prepareH264SnapshotStartAU(au [][]byte, params *h264ParameterSets) ([][]byte, bool) {
+	if !params.updateFromAU(au) {
+		return nil, false
+	}
+	if len(params.sps) == 0 || len(params.pps) == 0 {
+		return nil, false
+	}
+
+	prepared := make([][]byte, 0, len(au)+2)
+	prepared = append(prepared, params.sps, params.pps)
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		switch h264.NALUType(nalu[0] & 0x1F) {
+		case h264.NALUTypeSPS, h264.NALUTypePPS:
+			continue
+		default:
+			prepared = append(prepared, nalu)
+		}
+	}
+	return prepared, true
 }
 
 func rtspTimeout(ctx context.Context) time.Duration {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
@@ -418,4 +419,89 @@ func TestCameraSnapshot_H264DecodeError_DoesNotFallback(t *testing.T) {
 	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
 		t.Fatalf("expected exit 1, got %v", err)
 	}
+}
+
+func TestPrepareH264SnapshotStartAU_PrependsCachedParameters(t *testing.T) {
+	params := newH264ParameterSets(
+		testH264NALU(h264.NALUTypeSPS, 0x01),
+		testH264NALU(h264.NALUTypePPS, 0x02),
+	)
+	idr := testH264NALU(h264.NALUTypeIDR, 0x03)
+
+	got, ok := prepareH264SnapshotStartAU([][]byte{idr}, &params)
+	if !ok {
+		t.Fatal("expected access unit to be prepared")
+	}
+
+	want := [][]byte{params.sps, params.pps, idr}
+	if !equalH264AUs(got, want) {
+		t.Fatalf("prepared AU = %v, want %v", got, want)
+	}
+}
+
+func TestPrepareH264SnapshotStartAU_UsesInBandParametersWithoutDuplicates(t *testing.T) {
+	params := newH264ParameterSets(
+		testH264NALU(h264.NALUTypeSPS, 0x01),
+		testH264NALU(h264.NALUTypePPS, 0x02),
+	)
+	sps := testH264NALU(h264.NALUTypeSPS, 0x10)
+	pps := testH264NALU(h264.NALUTypePPS, 0x20)
+	idr := testH264NALU(h264.NALUTypeIDR, 0x30)
+
+	got, ok := prepareH264SnapshotStartAU([][]byte{sps, pps, idr}, &params)
+	if !ok {
+		t.Fatal("expected access unit to be prepared")
+	}
+
+	want := [][]byte{sps, pps, idr}
+	if !equalH264AUs(got, want) {
+		t.Fatalf("prepared AU = %v, want %v", got, want)
+	}
+}
+
+func TestPrepareH264SnapshotStartAU_WaitsForKeyframeAndParameters(t *testing.T) {
+	tests := []struct {
+		name   string
+		params h264ParameterSets
+		au     [][]byte
+	}{
+		{
+			name: "missing keyframe",
+			params: newH264ParameterSets(
+				testH264NALU(h264.NALUTypeSPS, 0x01),
+				testH264NALU(h264.NALUTypePPS, 0x02),
+			),
+			au: [][]byte{testH264NALU(h264.NALUTypeNonIDR, 0x03)},
+		},
+		{
+			name:   "missing parameters",
+			params: h264ParameterSets{},
+			au:     [][]byte{testH264NALU(h264.NALUTypeIDR, 0x03)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, ok := prepareH264SnapshotStartAU(tt.au, &tt.params); ok || got != nil {
+				t.Fatalf("prepareH264SnapshotStartAU() = %v, %v; want nil, false", got, ok)
+			}
+		})
+	}
+}
+
+func testH264NALU(typ h264.NALUType, payload ...byte) []byte {
+	nalu := []byte{0x60 | byte(typ)}
+	return append(nalu, payload...)
+}
+
+func equalH264AUs(a, b [][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !bytes.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }

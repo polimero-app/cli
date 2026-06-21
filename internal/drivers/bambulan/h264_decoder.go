@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"runtime"
+	"sync"
 	"unsafe"
 
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
@@ -12,6 +13,7 @@ import (
 // #cgo pkg-config: libavcodec libavutil libswscale
 // #include <libavcodec/avcodec.h>
 // #include <libavutil/imgutils.h>
+// #include <libavutil/log.h>
 // #include <libswscale/swscale.h>
 import "C"
 
@@ -31,7 +33,13 @@ type h264FrameDecoder struct {
 	swsCtx       *C.struct_SwsContext
 }
 
+var quietFFmpegLogs sync.Once
+
 func newH264FrameDecoder() (*h264FrameDecoder, error) {
+	quietFFmpegLogs.Do(func() {
+		C.av_log_set_level(C.AV_LOG_QUIET)
+	})
+
 	codec := C.avcodec_find_decoder(C.AV_CODEC_ID_H264)
 	if codec == nil {
 		return nil, fmt.Errorf("H.264 decoder not found")
