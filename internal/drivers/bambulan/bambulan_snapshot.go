@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
@@ -77,7 +78,7 @@ func (d *Driver) captureMJPEGSnapshot(ctx context.Context, p driver.ProfileInput
 
 	frame, err := readMJPEGFrame(conn)
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || isNetTimeout(err) {
 			return nil, cameraContextError(ctx.Err())
 		}
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -93,4 +94,14 @@ func cameraContextError(err error) error {
 		return apperr.New(4, "camera frame capture cancelled")
 	}
 	return apperr.New(4, "camera frame capture timed out")
+}
+
+// isNetTimeout reports whether err is a network deadline-exceeded error.
+// conn's read deadline and ctx's deadline are set to the same instant but
+// fire via independent timers, so a deadline-exceeded read can observably
+// occur before ctx.Err() has flipped non-nil; checking the error itself
+// avoids misclassifying that as a generic decode failure.
+func isNetTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }

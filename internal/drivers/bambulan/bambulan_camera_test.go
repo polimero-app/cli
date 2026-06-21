@@ -634,3 +634,21 @@ func TestCloneAU_DeepCopiesEachNALU(t *testing.T) {
 		t.Fatal("cloneAU shares backing storage with the original NALUs")
 	}
 }
+
+type fakeTimeoutErr struct{}
+
+func (fakeTimeoutErr) Error() string   { return "i/o timeout" }
+func (fakeTimeoutErr) Timeout() bool   { return true }
+func (fakeTimeoutErr) Temporary() bool { return true }
+
+func TestIsNetTimeout_RecognizesTimeoutError(t *testing.T) {
+	if !isNetTimeout(fakeTimeoutErr{}) {
+		t.Error("expected isNetTimeout to recognize a net.Error with Timeout()==true")
+	}
+}
+
+func TestIsNetTimeout_RejectsNonTimeoutError(t *testing.T) {
+	if isNetTimeout(errors.New("some other error")) {
+		t.Error("expected isNetTimeout to reject a plain error")
+	}
+}
