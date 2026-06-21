@@ -11,6 +11,7 @@ import (
 )
 
 // #cgo pkg-config: libavcodec libavutil libswscale
+// #include <errno.h>
 // #include <libavcodec/avcodec.h>
 // #include <libavutil/imgutils.h>
 // #include <libavutil/log.h>
@@ -125,6 +126,21 @@ func (d *h264FrameDecoder) reinitRGBAFrame() error {
 	return nil
 }
 
+// containsH264Slice reports whether au contains an actual picture slice
+// (IDR or non-IDR), as opposed to only parameter sets or SEI data.
+func containsH264Slice(au [][]byte) bool {
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		switch h264.NALUType(nalu[0] & 0x1F) {
+		case h264.NALUTypeIDR, h264.NALUTypeNonIDR:
+			return true
+		}
+	}
+	return false
+}
+
 func (d *h264FrameDecoder) decode(au [][]byte) (*image.RGBA, error) {
 	annexb, err := h264.AnnexB(au).Marshal()
 	if err != nil {
@@ -143,12 +159,21 @@ func (d *h264FrameDecoder) decode(au [][]byte) (*image.RGBA, error) {
 	res := C.avcodec_send_packet(d.codecCtx, &pkt)
 	pinner.Unpin()
 	if res < 0 {
-		return nil, nil
+		if !containsH264Slice(au) {
+			// No picture data in this access unit (parameter sets and/or
+			// SEI only); there is nothing for the decoder to reject, so
+			// this is not a real decode failure.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("H.264 decoder rejected access unit (libavcodec error %d)", int(res))
 	}
 
 	res = C.avcodec_receive_frame(d.codecCtx, d.yuv420Frame)
 	if res < 0 {
-		return nil, nil
+		if res == -C.EAGAIN {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("H.264 decoder failed to produce frame (libavcodec error %d)", int(res))
 	}
 
 	if d.rgbaFrame == nil || d.rgbaFrame.width != d.yuv420Frame.width || d.rgbaFrame.height != d.yuv420Frame.height {
