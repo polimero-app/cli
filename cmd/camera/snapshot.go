@@ -170,33 +170,43 @@ func writeSnapshotFile(dest string, data []byte, overwrite bool) error {
 }
 
 // commitSnapshotFile moves tmpName into place at dest. When overwrite is
-// false, it uses Link+Remove instead of Rename: hard-link creation fails
-// atomically with os.ErrExist if dest already exists, which Rename alone
-// does not guarantee — rename(2) silently replaces an existing dest on
-// POSIX regardless of any earlier existence check, so a file created at
-// dest between validateSnapshotDestination and this call would otherwise
-// be silently clobbered even with --overwrite not set.
+// false, it tries Link+Remove first: hard-link creation fails atomically
+// with os.ErrExist if dest already exists, which Rename alone does not
+// guarantee — rename(2) silently replaces an existing dest on POSIX
+// regardless of any earlier existence check, so a file created at dest
+// between validateSnapshotDestination and this call would otherwise be
+// silently clobbered even with --overwrite not set. Filesystems that don't
+// support hard links (e.g. FAT/exFAT, some FUSE/network mounts) fall back
+// to a stat-then-rename, which narrows but does not fully close that TOCTOU
+// window — best effort on those filesystems only, matching the spec's
+// "atomically rename it into place where the OS supports atomic rename."
 func commitSnapshotFile(tmpName, dest string, overwrite bool) error {
 	if overwrite {
-		if err := os.Rename(tmpName, dest); err != nil {
-			if errors.Is(err, os.ErrPermission) {
-				return apperr.Wrap(2, "destination directory is not writable", err)
-			}
-			return apperr.Wrap(1, "cannot move snapshot file into place", err)
-		}
-		return nil
+		return renameSnapshotFile(tmpName, dest)
 	}
 
-	if err := os.Link(tmpName, dest); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return apperr.Newf(2, "destination file %q already exists", dest)
-		}
+	if err := os.Link(tmpName, dest); err == nil {
+		_ = os.Remove(tmpName)
+		return nil
+	} else if errors.Is(err, os.ErrExist) {
+		return apperr.Newf(2, "destination file %q already exists", dest)
+	}
+
+	if _, statErr := os.Stat(dest); statErr == nil {
+		return apperr.Newf(2, "destination file %q already exists", dest)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return apperr.Wrap(2, "cannot inspect destination path", statErr)
+	}
+	return renameSnapshotFile(tmpName, dest)
+}
+
+func renameSnapshotFile(tmpName, dest string) error {
+	if err := os.Rename(tmpName, dest); err != nil {
 		if errors.Is(err, os.ErrPermission) {
 			return apperr.Wrap(2, "destination directory is not writable", err)
 		}
 		return apperr.Wrap(1, "cannot move snapshot file into place", err)
 	}
-	_ = os.Remove(tmpName)
 	return nil
 }
 
