@@ -158,13 +158,41 @@ func writeSnapshotFile(dest string, data []byte, overwrite bool) error {
 	if err := tmp.Close(); err != nil {
 		return apperr.Wrap(1, "cannot close snapshot file", err)
 	}
-	if err := os.Rename(tmpName, dest); err != nil {
+	if err := commitSnapshotFile(tmpName, dest, overwrite); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// commitSnapshotFile moves tmpName into place at dest. When overwrite is
+// false, it uses Link+Remove instead of Rename: hard-link creation fails
+// atomically with os.ErrExist if dest already exists, which Rename alone
+// does not guarantee — rename(2) silently replaces an existing dest on
+// POSIX regardless of any earlier existence check, so a file created at
+// dest between validateSnapshotDestination and this call would otherwise
+// be silently clobbered even with --overwrite not set.
+func commitSnapshotFile(tmpName, dest string, overwrite bool) error {
+	if overwrite {
+		if err := os.Rename(tmpName, dest); err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				return apperr.Wrap(2, "destination directory is not writable", err)
+			}
+			return apperr.Wrap(1, "cannot move snapshot file into place", err)
+		}
+		return nil
+	}
+
+	if err := os.Link(tmpName, dest); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return apperr.Newf(2, "destination file %q already exists", dest)
+		}
 		if errors.Is(err, os.ErrPermission) {
 			return apperr.Wrap(2, "destination directory is not writable", err)
 		}
 		return apperr.Wrap(1, "cannot move snapshot file into place", err)
 	}
-	committed = true
+	_ = os.Remove(tmpName)
 	return nil
 }
 
