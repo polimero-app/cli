@@ -652,3 +652,24 @@ func TestIsNetTimeout_RejectsNonTimeoutError(t *testing.T) {
 		t.Error("expected isNetTimeout to reject a plain error")
 	}
 }
+
+func TestCameraSnapshot_H264ContextDone_SkipsMJPEGFallback(t *testing.T) {
+	drv := newCameraDriver(func(_ context.Context, _ string, _ *tls.Config) (*tls.Conn, error) {
+		t.Fatal("dialTLS should not be called when the context is already done")
+		return nil, nil
+	})
+	drv.captureH264Snapshot = func(_ context.Context, _ *tls.Config, _ string, _ string) ([]byte, error) {
+		return nil, apperr.New(4, "camera frame capture timed out")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	pi := driver.ProfileInput{Host: "192.0.2.1", Serial: "SN001", Insecure: true}
+	secrets := driver.SecretsBundle{AccessCode: "test"}
+	_, err := drv.CameraSnapshot(ctx, pi, secrets, slog.Default())
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Fatalf("expected exit code 4, got %v", err)
+	}
+}

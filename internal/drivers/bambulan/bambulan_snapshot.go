@@ -38,6 +38,13 @@ func (d *Driver) CameraSnapshot(ctx context.Context, p driver.ProfileInput, s dr
 			Capabilities: d.Capabilities(),
 		}, nil
 	}
+	if ctx.Err() != nil {
+		// The H.264 attempt already consumed the whole timeout/cancellation
+		// budget; an MJPEG fallback dial would fail instantly on the same
+		// expired context, so report the real cause directly instead of
+		// attempting a doomed connection.
+		return nil, cameraContextError(ctx.Err())
+	}
 	if !isConnectionError(h264Err) {
 		return nil, h264Err
 	}
