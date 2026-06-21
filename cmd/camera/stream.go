@@ -8,18 +8,16 @@ import (
 	"net"
 	"net/http"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
-	"github.com/polimero-app/cli/internal/config"
 	"github.com/polimero-app/cli/internal/driver"
-	"github.com/polimero-app/cli/internal/keychain"
 	"github.com/polimero-app/cli/internal/output"
-	"github.com/polimero-app/cli/internal/profile"
 	"github.com/spf13/cobra"
 )
+
+const commandStream = "camera stream"
 
 // streamCommandWithDeps constructs the "camera stream" cobra command with injected dependencies.
 func streamCommandWithDeps(deps Deps) *cobra.Command {
@@ -37,7 +35,7 @@ func streamCommandWithDeps(deps Deps) *cobra.Command {
 				return cmd.Help()
 			}
 			if len(args) > 1 {
-				return writeUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
+				return writeUsageError(cmd, commandStream, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
 			return runStream(cmd, args[0], flags.port, flags.timeout, flags.insecure, deps)
 		},
@@ -52,18 +50,16 @@ func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string,
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
-		return apperr.New(2, fmtErr.Error())
+		return writeUsageError(cmd, commandStream, fmtErr.Error())
 	}
-
-	name := strings.ToLower(nameArg)
 
 	if err := validateFlags(port, timeoutFlag); err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err)
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
 	}
 
-	result, err := openStream(cmd, name, timeoutFlag, insecureFlag, deps)
+	result, name, err := openStream(cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err)
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
 	}
 	defer func() { _ = result.Stream.Close() }()
 
@@ -86,95 +82,23 @@ func validateFlags(port int, timeoutFlag string) error {
 	return nil
 }
 
-func openStream(cmd *cobra.Command, name, timeoutFlag string, insecureFlag bool, deps Deps) (*driver.CameraStreamResult, error) {
-	if err := profile.ValidateName(name); err != nil {
-		return nil, err
+func openStream(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) (*driver.CameraStreamResult, string, error) {
+	rp, err := resolveProfile(cmd.Context(), nameArg, timeoutFlag, insecureFlag, deps)
+	if err != nil {
+		return nil, "", err
+	}
+	if !rp.driver.Capabilities().CameraStream {
+		return nil, "", apperr.Newf(5, "driver %q does not support camera streaming", rp.input.Driver)
 	}
 
-	dir, err := config.ConfigDir()
-	if err != nil {
-		return nil, apperr.Newf(1, "cannot resolve config directory: %s", err)
-	}
-	cfg, err := config.Open(dir)
-	if err != nil {
-		return nil, apperr.Newf(2, "cannot load config: %s", err)
-	}
-	p, ok := cfg.GetProfile(name)
-	if !ok {
-		return nil, apperr.Newf(2, "printer profile %q not found", name)
-	}
-
-	// Determine connection timeout for the camera probe.
-	timeoutStr := p.Timeout
-	if timeoutFlag != "" {
-		timeoutStr = timeoutFlag
-	}
-	if timeoutStr == "" {
-		timeoutStr = "10s"
-	}
-	timeout, err := time.ParseDuration(timeoutStr)
-	if err != nil {
-		return nil, apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
-	}
-	if timeout <= 0 {
-		return nil, apperr.New(2, "--timeout must be greater than zero")
-	}
-
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
 	defer cancel()
 
-	insecure := p.Insecure || insecureFlag
-
-	kcAcct := fmt.Sprintf("%s:%s:access-code", p.Driver, name)
-	accessCode, err := deps.KC.Get(ctx, "polimero", kcAcct)
+	result, err := rp.driver.CameraStream(ctx, rp.input, rp.secrets, deps.Log)
 	if err != nil {
-		if errors.Is(err, keychain.ErrNotFound) {
-			return nil, apperr.Newf(3, "access code not found in keychain for %q", name)
-		}
-		return nil, apperr.Wrap(3, "cannot read access code from keychain", err)
+		return nil, "", err
 	}
-
-	var tlsFingerprint string
-	if !insecure {
-		kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
-		tlsFingerprint, err = deps.KC.Get(ctx, "polimero", kcFpAcct)
-		if err != nil {
-			if errors.Is(err, keychain.ErrNotFound) {
-				return nil, apperr.Newf(3, "TLS fingerprint not found in keychain for %q", name)
-			}
-			return nil, apperr.Wrap(3, "cannot read TLS fingerprint from keychain", err)
-		}
-		if !driver.ValidTLSFingerprint(tlsFingerprint) {
-			return nil, apperr.Newf(3, "invalid TLS fingerprint in keychain for %q", name)
-		}
-	}
-
-	drv, ok := deps.GetDriver(p.Driver)
-	if !ok {
-		return nil, apperr.Newf(2, "unknown driver %q", p.Driver)
-	}
-	if !drv.Capabilities().CameraStream {
-		return nil, apperr.Newf(5, "driver %q does not support camera streaming", p.Driver)
-	}
-
-	pi := driver.ProfileInput{
-		Name:     name,
-		Driver:   p.Driver,
-		Host:     p.Host,
-		Serial:   p.Serial,
-		Timeout:  timeout,
-		Insecure: insecure,
-	}
-	secrets := driver.SecretsBundle{
-		AccessCode:     accessCode,
-		TLSFingerprint: tlsFingerprint,
-	}
-
-	result, err := drv.CameraStream(ctx, pi, secrets, deps.Log)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+	return result, rp.name, nil
 }
 
 func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format output.Format, result *driver.CameraStreamResult) error {
@@ -184,7 +108,7 @@ func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		_ = result.Stream.Close()
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format,
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream,
 			apperr.Newf(2, "port %d is already in use or unavailable", port))
 	}
 
@@ -231,7 +155,7 @@ func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format
 
 	// Write output once server is ready.
 	if format == output.FormatJSON {
-		_ = writeJSONSuccess(cmd.OutOrStdout(), name, url, string(result.Format), port)
+		_ = writeStreamJSONSuccess(cmd.OutOrStdout(), name, url, string(result.Format), port)
 	} else {
 		writeHumanStart(cmd.OutOrStdout(), name, result.Format, url)
 	}
@@ -291,7 +215,7 @@ func writeHumanStart(w io.Writer, name string, format driver.CameraFormat, url s
 	_, _ = fmt.Fprintln(w, "Press Ctrl+C to stop.")
 }
 
-func writeJSONSuccess(w io.Writer, name, url, format string, port int) error {
+func writeStreamJSONSuccess(w io.Writer, name, url, format string, port int) error {
 	type streamData struct {
 		Profile string `json:"profile"`
 		URL     string `json:"url"`
@@ -307,62 +231,6 @@ func writeJSONSuccess(w io.Writer, name, url, format string, port int) error {
 			Port:    port,
 		},
 		Error: nil,
-		Meta:  output.Meta{Command: "camera stream"},
+		Meta:  output.Meta{Command: commandStream},
 	})
-}
-
-func writeUsageError(cmd *cobra.Command, message string) error {
-	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
-	format, fmtErr := output.ParseFormat(formatStr)
-	if fmtErr != nil {
-		return apperr.New(2, fmtErr.Error())
-	}
-	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message))
-}
-
-func writeError(out, errOut io.Writer, format output.Format, err error) error {
-	var exitErr *apperr.ExitError
-	code := 1
-	if errors.As(err, &exitErr) {
-		code = exitErr.Code
-	}
-	errDetail := buildErrorDetail(err)
-	if format == output.FormatJSON {
-		_ = output.WriteEnvelope(out, output.Envelope{
-			OK:    false,
-			Data:  nil,
-			Error: &errDetail,
-			Meta:  output.Meta{Command: "camera stream"},
-		})
-	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", errDetail.Message)
-	}
-	return apperr.New(code, "")
-}
-
-func buildErrorDetail(err error) output.ErrDetail {
-	return output.ErrDetail{Code: errorCode(err), Message: err.Error()}
-}
-
-func errorCode(err error) string {
-	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) {
-		return "error"
-	}
-	switch exitErr.Code {
-	case 2:
-		return "config_error"
-	case 3:
-		msg := err.Error()
-		if strings.Contains(msg, "TLS fingerprint mismatch") {
-			return "authentication_failed"
-		}
-		return "secret_not_found"
-	case 4:
-		return "connection_failed"
-	case 5:
-		return "capability_unsupported"
-	default:
-		return "error"
-	}
 }
