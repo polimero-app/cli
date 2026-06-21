@@ -18,11 +18,15 @@ import (
 	"github.com/polimero-app/cli/internal/apperr"
 )
 
-type h264CaptureResult struct {
-	data []byte
-	err  error
-}
-
+// captureRTSPSH264Snapshot connects to a Bambu RTSPS camera endpoint and
+// returns one JPEG-encoded frame.
+//
+// The OnPacketRTP callback below only depacketizes RTP into access units and
+// forwards them through auCh; it never touches frameDec. All cgo decode work
+// runs on this function's own goroutine inside decodeH264SnapshotLoop, so
+// frameDec is never accessed concurrently with its own teardown, regardless
+// of how long the underlying RTSP client keeps delivering packets after an
+// answer has already been found.
 func captureRTSPSH264Snapshot(ctx context.Context, tlsCfg *tls.Config, host, accessCode string) ([]byte, error) {
 	rtspURL := fmt.Sprintf("rtsps://%s:%s@%s:%d/streaming/live/1",
 		cameraUsername, accessCode, host, cameraPortH264)
@@ -71,89 +75,112 @@ func captureRTSPSH264Snapshot(ctx context.Context, tlsCfg *tls.Config, host, acc
 	}
 	defer frameDec.close()
 
-	params := newH264ParameterSets(forma.SPS, forma.PPS)
-
 	if _, err := c.Setup(desc.BaseURL, medi, 0, 0); err != nil {
 		return nil, apperr.Wrap(4, "RTSPS camera setup failed", err)
 	}
 
-	resultCh := make(chan h264CaptureResult, 1)
-	sendResult := func(result h264CaptureResult) {
-		select {
-		case resultCh <- result:
-		default:
-		}
-	}
+	auCh := make(chan [][]byte, 64)
+	errCh := make(chan error, 1)
 
-	decoderStarted := false
 	c.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
-		if ctx.Err() != nil {
-			return
-		}
-
 		au, decErr := rtpDec.Decode(pkt)
 		if decErr != nil {
 			if !errors.Is(decErr, rtph264.ErrNonStartingPacketAndNoPrevious) &&
 				!errors.Is(decErr, rtph264.ErrMorePacketsNeeded) {
-				sendResult(h264CaptureResult{err: apperr.Wrap(1, "H.264 RTP decode failed", decErr)})
+				select {
+				case errCh <- apperr.Wrap(1, "H.264 RTP decode failed", decErr):
+				default:
+				}
 			}
 			return
 		}
-
-		decodeAU := au
-		if !decoderStarted {
-			preparedAU, ok := prepareH264SnapshotStartAU(au, &params)
-			if !ok {
-				return
-			}
-			decodeAU = preparedAU
-			decoderStarted = true
-		} else {
-			params.updateFromAU(au)
+		select {
+		case auCh <- cloneAU(au):
+		default:
+			// Consumer is still busy with an earlier access unit; drop this
+			// one rather than block the RTP read loop.
 		}
-
-		img, decErr := frameDec.decode(decodeAU)
-		if decErr != nil {
-			sendResult(h264CaptureResult{err: apperr.Wrap(1, "H.264 frame decode failed", decErr)})
-			return
-		}
-		if img == nil {
-			return
-		}
-
-		var buf bytes.Buffer
-		if encErr := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 80}); encErr != nil {
-			sendResult(h264CaptureResult{err: apperr.Wrap(1, "JPEG encoding failed", encErr)})
-			return
-		}
-
-		sendResult(h264CaptureResult{data: append([]byte(nil), buf.Bytes()...)})
 	})
 
 	if _, err := c.Play(nil); err != nil {
 		return nil, apperr.Wrap(4, "RTSPS camera play failed", err)
 	}
 
-	waitCh := make(chan error, 1)
 	go func() {
-		waitCh <- c.Wait()
+		waitErr := c.Wait()
+		if waitErr == nil {
+			waitErr = errors.New("stream ended")
+		}
+		select {
+		case errCh <- apperr.Wrap(4, "RTSPS camera stream ended before snapshot", waitErr):
+		default:
+		}
 	}()
 
-	select {
-	case result := <-resultCh:
-		if result.err != nil {
-			return nil, result.err
+	params := newH264ParameterSets(forma.SPS, forma.PPS)
+	return decodeH264SnapshotLoop(ctx, frameDec, &params, auCh, errCh)
+}
+
+// decodeH264SnapshotLoop consumes access units from auCh, starting decode at
+// the first one that carries a keyframe plus both parameter sets, and
+// continuing to feed later access units until frameDec produces an image.
+// It runs entirely on the calling goroutine: frameDec is therefore never
+// touched by any other goroutine, including the RTP callback that feeds
+// auCh/errCh.
+func decodeH264SnapshotLoop(
+	ctx context.Context,
+	frameDec *h264FrameDecoder,
+	params *h264ParameterSets,
+	auCh <-chan [][]byte,
+	errCh <-chan error,
+) ([]byte, error) {
+	decoderStarted := false
+	for {
+		select {
+		case au := <-auCh:
+			decodeAU := au
+			if !decoderStarted {
+				preparedAU, ok := prepareH264SnapshotStartAU(au, params)
+				if !ok {
+					continue
+				}
+				decodeAU = preparedAU
+				decoderStarted = true
+			} else {
+				params.updateFromAU(au)
+			}
+
+			img, decErr := frameDec.decode(decodeAU)
+			if decErr != nil {
+				return nil, apperr.Wrap(1, "H.264 frame decode failed", decErr)
+			}
+			if img == nil {
+				continue
+			}
+
+			var buf bytes.Buffer
+			if encErr := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 80}); encErr != nil {
+				return nil, apperr.Wrap(1, "JPEG encoding failed", encErr)
+			}
+			return buf.Bytes(), nil
+		case err := <-errCh:
+			return nil, err
+		case <-ctx.Done():
+			return nil, cameraContextError(ctx.Err())
 		}
-		return result.data, nil
-	case err := <-waitCh:
-		if err != nil {
-			return nil, apperr.Wrap(4, "RTSPS camera stream ended before snapshot", err)
-		}
-		return nil, apperr.New(4, "RTSPS camera stream ended before snapshot")
-	case <-ctx.Done():
-		c.Close()
-		return nil, cameraContextError(ctx.Err())
 	}
+}
+
+// cloneAU deep-copies each NALU in au. gortsplib may reuse the buffer backing
+// an access unit's bytes for a later RTP packet, so anything crossing into
+// auCh — read by a different goroutine, at an unknown later time — must be
+// copied first.
+func cloneAU(au [][]byte) [][]byte {
+	cloned := make([][]byte, len(au))
+	for i, nalu := range au {
+		cloned[i] = cloneH264NALU(nalu)
+	}
+	return cloned
 }
 
 type h264ParameterSets struct {

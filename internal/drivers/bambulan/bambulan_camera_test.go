@@ -505,3 +505,132 @@ func equalH264AUs(a, b [][]byte) bool {
 	}
 	return true
 }
+
+// Fixture bytes below are a real, minimal H.264 elementary stream: a single
+// 16x16 black IDR frame encoded with libx264 baseline profile. Generated via:
+//   ffmpeg -f lavfi -i color=c=black:s=16x16:d=0.04 -frames:v 1 \
+//     -c:v libx264 -profile:v baseline -pix_fmt yuv420p -f h264 test.h264
+// and extracting the SPS/PPS/IDR NALUs from the Annex-B output.
+var snapshotLoopTestSPS = []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x1e, 0xc0, 0x44, 0x00, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xc8, 0x3c, 0x48, 0x99, 0x20}
+var snapshotLoopTestPPS = []byte{0x68, 0xcb, 0x83, 0xcb, 0x20}
+var snapshotLoopTestIDR = []byte{0x65, 0x88, 0x84, 0x0a, 0xf2, 0x62, 0x80, 0x00, 0xa7, 0xbe}
+
+func TestDecodeH264SnapshotLoop_ProducesJPEGOnFirstKeyframe(t *testing.T) {
+	frameDec, err := newH264FrameDecoder()
+	if err != nil {
+		t.Fatalf("newH264FrameDecoder: %v", err)
+	}
+	defer frameDec.close()
+
+	params := newH264ParameterSets(snapshotLoopTestSPS, snapshotLoopTestPPS)
+	auCh := make(chan [][]byte, 4)
+	errCh := make(chan error, 1)
+	auCh <- [][]byte{snapshotLoopTestSPS, snapshotLoopTestPPS, snapshotLoopTestIDR}
+
+	data, err := decodeH264SnapshotLoop(context.Background(), frameDec, &params, auCh, errCh)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
+		t.Fatalf("expected JPEG data starting with SOI marker, got %v", data)
+	}
+}
+
+func TestDecodeH264SnapshotLoop_SkipsAccessUnitsWithoutKeyframe(t *testing.T) {
+	frameDec, err := newH264FrameDecoder()
+	if err != nil {
+		t.Fatalf("newH264FrameDecoder: %v", err)
+	}
+	defer frameDec.close()
+
+	nonIDR := []byte{0x41, 0x9a} // NALU type 1 (non-IDR slice), no params cached yet
+
+	params := newH264ParameterSets(nil, nil)
+	auCh := make(chan [][]byte, 4)
+	errCh := make(chan error, 1)
+	auCh <- [][]byte{nonIDR}
+	auCh <- [][]byte{snapshotLoopTestSPS, snapshotLoopTestPPS, snapshotLoopTestIDR}
+
+	data, err := decodeH264SnapshotLoop(context.Background(), frameDec, &params, auCh, errCh)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("expected non-empty JPEG data")
+	}
+}
+
+func TestDecodeH264SnapshotLoop_DecodeErrorPropagates(t *testing.T) {
+	frameDec, err := newH264FrameDecoder()
+	if err != nil {
+		t.Fatalf("newH264FrameDecoder: %v", err)
+	}
+	defer frameDec.close()
+
+	garbageIDR := []byte{0x65, 0xff, 0x00, 0xde, 0xad, 0xbe, 0xef, 0x13, 0x37, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+
+	params := newH264ParameterSets(snapshotLoopTestSPS, snapshotLoopTestPPS)
+	auCh := make(chan [][]byte, 4)
+	errCh := make(chan error, 1)
+	auCh <- [][]byte{snapshotLoopTestSPS, snapshotLoopTestPPS, garbageIDR}
+
+	_, err = decodeH264SnapshotLoop(context.Background(), frameDec, &params, auCh, errCh)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("expected exit code 1 decode error, got %v", err)
+	}
+}
+
+func TestDecodeH264SnapshotLoop_StreamEndedErrorPropagates(t *testing.T) {
+	frameDec, err := newH264FrameDecoder()
+	if err != nil {
+		t.Fatalf("newH264FrameDecoder: %v", err)
+	}
+	defer frameDec.close()
+
+	params := newH264ParameterSets(nil, nil)
+	auCh := make(chan [][]byte, 4)
+	errCh := make(chan error, 1)
+	errCh <- apperr.Wrap(4, "RTSPS camera stream ended before snapshot", errors.New("EOF"))
+
+	_, err = decodeH264SnapshotLoop(context.Background(), frameDec, &params, auCh, errCh)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Fatalf("expected exit code 4, got %v", err)
+	}
+}
+
+func TestDecodeH264SnapshotLoop_ContextDoneReturnsTimeout(t *testing.T) {
+	frameDec, err := newH264FrameDecoder()
+	if err != nil {
+		t.Fatalf("newH264FrameDecoder: %v", err)
+	}
+	defer frameDec.close()
+
+	params := newH264ParameterSets(nil, nil)
+	auCh := make(chan [][]byte)
+	errCh := make(chan error)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = decodeH264SnapshotLoop(ctx, frameDec, &params, auCh, errCh)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Fatalf("expected exit code 4, got %v", err)
+	}
+}
+
+func TestCloneAU_DeepCopiesEachNALU(t *testing.T) {
+	original := [][]byte{{0x67, 0x01, 0x02}, {0x68, 0x03}}
+	cloned := cloneAU(original)
+
+	if len(cloned) != len(original) {
+		t.Fatalf("len(cloned) = %d, want %d", len(cloned), len(original))
+	}
+	original[0][1] = 0xFF
+	original[1][0] = 0xFF
+	if cloned[0][1] == 0xFF || cloned[1][0] == 0xFF {
+		t.Fatal("cloneAU shares backing storage with the original NALUs")
+	}
+}
