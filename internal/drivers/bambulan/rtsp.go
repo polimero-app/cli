@@ -11,6 +11,7 @@ import (
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/mpegts"
@@ -32,15 +33,26 @@ type rtspStream struct {
 	once   sync.Once
 }
 
-// dialRTSPS connects to a Bambu RTSPS camera endpoint and returns an
-// io.ReadCloser that emits an MPEG-TS stream containing H.264 video.
-func dialRTSPS(tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error) {
+// connectRTSPSH264 dials a Bambu RTSPS camera endpoint, performs DESCRIBE,
+// finds its H.264 track, creates that track's RTP decoder, and performs
+// SETUP — in that order, matching what every caller of this function did
+// before it existed. On success, the caller must close the returned client
+// (directly or via defer) once done, and must register OnPacketRTP before
+// calling client.Play(nil). On error, client is nil and any partially-started
+// connection has already been closed.
+func connectRTSPSH264(tlsCfg *tls.Config, host, accessCode string, timeout time.Duration) (
+	client *gortsplib.Client,
+	medi *description.Media,
+	forma *format.H264,
+	rtpDec *rtph264.Decoder,
+	err error,
+) {
 	rtspURL := fmt.Sprintf("rtsps://%s:%s@%s:%d/streaming/live/1",
 		cameraUsername, accessCode, host, cameraPortH264)
 
 	u, err := base.ParseURL(rtspURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid RTSP URL: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("invalid RTSP URL: %w", err)
 	}
 
 	proto := gortsplib.ProtocolTCP
@@ -50,37 +62,46 @@ func dialRTSPS(tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, erro
 		TLSConfig:    tlsCfg,
 		Protocol:     &proto,
 		UserAgent:    "polimero/1.0",
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		ReadTimeout:  timeout,
+		WriteTimeout: timeout,
 	}
 
 	if err := c.Start(); err != nil {
-		return nil, fmt.Errorf("RTSP connect: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("RTSP connect: %w", err)
 	}
 
 	desc, _, err := c.Describe(u)
 	if err != nil {
 		c.Close()
-		return nil, fmt.Errorf("RTSP DESCRIBE: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("RTSP DESCRIBE: %w", err)
 	}
 
-	var forma *format.H264
-	medi := desc.FindFormat(&forma)
+	medi = desc.FindFormat(&forma)
 	if medi == nil {
 		c.Close()
-		return nil, errors.New("no H.264 track found in RTSP stream")
+		return nil, nil, nil, nil, errors.New("no H.264 track found in RTSP stream")
 	}
 
-	rtpDec, err := forma.CreateDecoder()
+	rtpDec, err = forma.CreateDecoder()
 	if err != nil {
 		c.Close()
-		return nil, fmt.Errorf("create H.264 RTP decoder: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("create H.264 RTP decoder: %w", err)
 	}
 
-	_, err = c.Setup(desc.BaseURL, medi, 0, 0)
-	if err != nil {
+	if _, err := c.Setup(desc.BaseURL, medi, 0, 0); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("RTSP SETUP: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("RTSP SETUP: %w", err)
+	}
+
+	return c, medi, forma, rtpDec, nil
+}
+
+// dialRTSPS connects to a Bambu RTSPS camera endpoint and returns an
+// io.ReadCloser that emits an MPEG-TS stream containing H.264 video.
+func dialRTSPS(tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error) {
+	c, medi, forma, rtpDec, err := connectRTSPSH264(tlsCfg, host, accessCode, 10*time.Second)
+	if err != nil {
+		return nil, err
 	}
 
 	dataCh := make(chan []byte, 256)
