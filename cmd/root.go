@@ -6,8 +6,11 @@ import (
 
 	"github.com/polimero-app/cli/cmd/camera"
 	"github.com/polimero-app/cli/cmd/files"
+	"github.com/polimero-app/cli/cmd/jobs"
+	"github.com/polimero-app/cli/cmd/motion"
 	"github.com/polimero-app/cli/cmd/printer"
 	"github.com/polimero-app/cli/cmd/status"
+	"github.com/polimero-app/cli/cmd/temperature"
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +30,9 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(status.Command())
 	root.AddCommand(camera.Command())
 	root.AddCommand(files.Command())
+	root.AddCommand(temperature.Command())
+	root.AddCommand(motion.Command())
+	root.AddCommand(jobs.Command())
 	return root
 }
 
