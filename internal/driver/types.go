@@ -36,6 +36,7 @@ type Capabilities struct {
 	JobUpload        bool `json:"jobUpload"`
 	JobStart         bool `json:"jobStart"`
 	JobPause         bool `json:"jobPause"`
+	JobResume        bool `json:"jobResume"`
 	JobCancel        bool `json:"jobCancel"`
 	TemperatureRead  bool `json:"temperatureRead"`
 	TemperatureWrite bool `json:"temperatureWrite"`
@@ -219,5 +220,60 @@ type CameraStreamResult struct {
 type CameraSnapshotResult struct {
 	Data         []byte
 	Protocol     string
+	Capabilities Capabilities
+}
+
+// JobStartOptions carries optional parameters for JobDriver.JobStart.
+type JobStartOptions struct {
+	Plate        *int // nil means driver/printer default (e.g. first or only plate)
+	SkipLeveling bool
+}
+
+// JobActionResult is returned by job control operations.
+// State is the confirmed resulting portable state.
+type JobActionResult struct {
+	State        string
+	Warnings     []StatusWarning
+	Capabilities Capabilities
+}
+
+// TemperatureTargets describes the heater targets to set.
+// A nil pointer means "leave that heater unchanged".
+// A value of 0 turns the heater off.
+type TemperatureTargets struct {
+	NozzleCelsius  *float64
+	BedCelsius     *float64
+	ChamberCelsius *float64
+}
+
+// TemperatureResult is returned by TemperatureDriver.TemperatureSet.
+// Targets holds the acknowledged values, as confirmed by the printer.
+type TemperatureResult struct {
+	Targets      TemperatureTargets
+	Warnings     []StatusWarning
+	Capabilities Capabilities
+}
+
+// Axis identifies a printer motion axis.
+type Axis string
+
+const (
+	AxisX Axis = "x"
+	AxisY Axis = "y"
+	AxisZ Axis = "z"
+)
+
+// JogDelta describes a relative motion command.
+// Nil axis fields mean "do not move that axis".
+type JogDelta struct {
+	XMillimeters     *float64
+	YMillimeters     *float64
+	ZMillimeters     *float64
+	FeedrateMmPerMin int
+}
+
+// MotionResult is returned by motion control operations.
+type MotionResult struct {
+	Warnings     []StatusWarning
 	Capabilities Capabilities
 }
