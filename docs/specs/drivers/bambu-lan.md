@@ -32,6 +32,13 @@ Initial command support:
 - `files list`
 - `files download`
 - `files upload`
+- `jobs start`
+- `jobs pause`
+- `jobs resume`
+- `jobs cancel`
+- `temperature set`
+- `motion home`
+- `motion jog`
 
 Out of scope:
 
@@ -39,10 +46,10 @@ Out of scope:
 - Bambu cloud APIs.
 - Authorization bypass.
 - Job upload through printer-control APIs.
-- Job start.
-- Starting a print from an uploaded or selected file.
 - File delete, rename, move, and directory creation.
-- Pause, cancel, movement, heating, or other state-changing commands.
+- AMS-aware job start (`use_ams: true`).
+- Timelapse control during job start.
+- Chamber heater target read-back (M141 is sent; the report omits target).
 
 ## Capability Policy
 
@@ -313,14 +320,14 @@ Map Bambu JSON fields (inside the `print` object of the report message) to porta
 | Bambu field | Portable field | Notes |
 |---|---|---|
 | `print.gcode_state` | `state` | Via state mapping table above |
-| `print.nozzle_temper` | `temperatures.nozzle.currentCelsius` | Float; °C |
-| `print.nozzle_target_temper` | `temperatures.nozzle.targetCelsius` | Float; °C |
-| `print.bed_temper` | `temperatures.bed.currentCelsius` | Float; °C |
-| `print.bed_target_temper` | `temperatures.bed.targetCelsius` | Float; °C |
-| `print.chamber_temper` | `temperatures.chamber.currentCelsius` | Float; °C; no target available |
-| `print.mc_percent` | `progress.percent` | Integer 0–100 |
-| `print.layer_num` | `progress.currentLayer` | Integer |
-| `print.total_layer_num` | `progress.totalLayers` | Integer |
+| `print.nozzle_temper` | `temperatures.nozzle.currentCelsius` | Numeric; °C |
+| `print.nozzle_target_temper` | `temperatures.nozzle.targetCelsius` | Numeric; °C |
+| `print.bed_temper` | `temperatures.bed.currentCelsius` | Numeric; °C |
+| `print.bed_target_temper` | `temperatures.bed.targetCelsius` | Numeric; °C |
+| `print.chamber_temper` | `temperatures.chamber.currentCelsius` | Numeric; °C; no target available |
+| `print.mc_percent` | `progress.percent` | Numeric integer 0–100 |
+| `print.layer_num` | `progress.currentLayer` | Numeric integer |
+| `print.total_layer_num` | `progress.totalLayers` | Numeric integer |
 | `print.subtask_name` | `job.name` | Preferred; use if non-empty |
 | `print.gcode_file` | `job.name` | Fallback when `subtask_name` is empty |
 | `print.mc_print_error_code` | `errors` | Map to error when value is not `"0"` |
@@ -330,6 +337,12 @@ Map Bambu JSON fields (inside the `print` object of the report message) to porta
 `temperatures` fields set to `null` as a group when none of the temperature fields are present. Individual temperature sensors (`chamber`) are omitted from the response when their field is absent from the payload rather than set to `null`.
 
 `progress` is `null` when `mc_percent` is absent.
+
+Numeric Bambu fields consumed by this status mapping may arrive as JSON numbers or numeric strings. The driver must parse both forms for summary fields and detailed fields, including fan speeds, time estimates, speed/stage values, file size, bed type identifiers, g-code line numbers, HMS codes, printer error code zero values, and AMS IDs, humidity, temperature, remaining percentage, and nozzle temperature range fields.
+
+For H-series compatibility, if `print.chamber_temper` is absent, the driver may use an alternate current chamber temperature field such as `print.chamber_temp`, `print.chamber_temperature`, or a nested `print.chamber.temp`/`temperature` value. Target, fan, light, speed, state, and mode fields must not be used as current chamber temperature.
+
+If a consumed field is present with an unsupported JSON shape, return partial status with a sanitized `status_field_type_mismatch` warning instead of silently dropping the field.
 
 Treat absent fields as unavailable, not as zero values. Implementations may also accept `print.mc_layer_num` as a compatibility fallback for `print.layer_num`, but `print.layer_num` takes precedence when both are present.
 
