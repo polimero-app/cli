@@ -82,3 +82,39 @@ func TestCapabilities_DiscoveryTrue(t *testing.T) {
 		t.Error("expected Capabilities().Discovery to be true")
 	}
 }
+
+func TestCapabilities_JobStartTrue(t *testing.T) {
+	if !bambulan.New().Capabilities().JobStart {
+		t.Error("Capabilities().JobStart should be true")
+	}
+}
+
+func TestCapabilities_JobPauseTrue(t *testing.T) {
+	if !bambulan.New().Capabilities().JobPause {
+		t.Error("Capabilities().JobPause should be true")
+	}
+}
+
+func TestCapabilities_JobResumeTrue(t *testing.T) {
+	if !bambulan.New().Capabilities().JobResume {
+		t.Error("Capabilities().JobResume should be true")
+	}
+}
+
+func TestCapabilities_JobCancelTrue(t *testing.T) {
+	if !bambulan.New().Capabilities().JobCancel {
+		t.Error("Capabilities().JobCancel should be true")
+	}
+}
+
+func TestCapabilities_TemperatureWriteTrue(t *testing.T) {
+	if !bambulan.New().Capabilities().TemperatureWrite {
+		t.Error("Capabilities().TemperatureWrite should be true")
+	}
+}
+
+func TestCapabilities_MotionControlTrue(t *testing.T) {
+	if !bambulan.New().Capabilities().MotionControl {
+		t.Error("Capabilities().MotionControl should be true")
+	}
+}

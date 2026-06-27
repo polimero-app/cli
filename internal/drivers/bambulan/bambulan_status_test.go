@@ -589,6 +589,127 @@ func TestParseReport_ExtendedFields_AMS(t *testing.T) {
 	}
 }
 
+func TestParseReport_NumberOrStringProtocolFields(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":"215.5","nozzle_target_temper":"220.0",
+		"bed_temper":"60.0","bed_target_temper":"60",
+		"chamber_temper":"35.0",
+		"subtask_name":"string-fields.3mf",
+		"gcode_file":"string-fields.gcode",
+		"mc_percent":"42.0","layer_num":"10","mc_layer_num":"9","total_layer_num":"50",
+		"mc_print_error_code":"0.0",
+		"hms":[{"attr":"1","code":"2"}],
+		"mc_remaining_time":"90",
+		"spd_lvl":"2",
+		"stg_cur":"2",
+		"file_size":"14893261",
+		"nozzle_diameter":0.4,
+		"bed_type":4.0,
+		"cur_line_num":"48201.0",
+		"total_line_num":112400,
+		"ams":{
+			"ams":[{
+				"id":0,
+				"humidity":3,
+				"temp":28.5,
+				"tray":[
+					{"id":1,"tray_type":"PLA","tray_color":"FF0000","remain":"85.0","nozzle_temp_min":"190","nozzle_temp_max":"230.0"}
+				]
+			}]
+		}
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want []", result.Warnings)
+	}
+	if result.Temperatures == nil || result.Temperatures.Nozzle == nil || result.Temperatures.Bed == nil || result.Temperatures.Chamber == nil {
+		t.Fatalf("missing temperatures: %v", result.Temperatures)
+	}
+	if result.Temperatures.Nozzle.CurrentCelsius != 215.5 {
+		t.Errorf("nozzle temp = %v, want 215.5", result.Temperatures.Nozzle.CurrentCelsius)
+	}
+	if result.Temperatures.Nozzle.TargetCelsius == nil || *result.Temperatures.Nozzle.TargetCelsius != 220.0 {
+		t.Errorf("nozzle target = %v, want 220.0", result.Temperatures.Nozzle.TargetCelsius)
+	}
+	if result.Temperatures.Bed.CurrentCelsius != 60.0 {
+		t.Errorf("bed temp = %v, want 60.0", result.Temperatures.Bed.CurrentCelsius)
+	}
+	if result.Temperatures.Chamber.CurrentCelsius != 35.0 {
+		t.Errorf("chamber temp = %v, want 35.0", result.Temperatures.Chamber.CurrentCelsius)
+	}
+	if result.Progress == nil {
+		t.Fatal("expected progress")
+	}
+	if result.Progress.Percent != 42 {
+		t.Errorf("progress percent = %d, want 42", result.Progress.Percent)
+	}
+	if result.Progress.CurrentLayer == nil || *result.Progress.CurrentLayer != 10 {
+		t.Errorf("current layer = %v, want 10", result.Progress.CurrentLayer)
+	}
+	if result.Progress.TotalLayers == nil || *result.Progress.TotalLayers != 50 {
+		t.Errorf("total layers = %v, want 50", result.Progress.TotalLayers)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].Code != "hms:00000001:00000002" {
+		t.Fatalf("Errors = %v, want HMS error", result.Errors)
+	}
+	if result.TimeEstimates == nil || result.TimeEstimates.RemainingSeconds == nil || *result.TimeEstimates.RemainingSeconds != 5400 {
+		t.Errorf("RemainingSeconds = %v, want 5400", result.TimeEstimates)
+	}
+	if result.SpeedLevel == nil || *result.SpeedLevel != "standard" {
+		t.Errorf("SpeedLevel = %v, want standard", result.SpeedLevel)
+	}
+	if result.Stage == nil || *result.Stage != "heatbed_preheating" {
+		t.Errorf("Stage = %v, want heatbed_preheating", result.Stage)
+	}
+	if result.PrintMeta == nil {
+		t.Fatal("expected print meta")
+	}
+	if result.PrintMeta.FileSize == nil || *result.PrintMeta.FileSize != 14893261 {
+		t.Errorf("FileSize = %v, want 14893261", result.PrintMeta.FileSize)
+	}
+	if result.PrintMeta.NozzleDiameter == nil || *result.PrintMeta.NozzleDiameter != 0.4 {
+		t.Errorf("NozzleDiameter = %v, want 0.4", result.PrintMeta.NozzleDiameter)
+	}
+	if result.PrintMeta.BedType == nil || *result.PrintMeta.BedType != "textured_pei" {
+		t.Errorf("BedType = %v, want textured_pei", result.PrintMeta.BedType)
+	}
+	if result.GcodePosition == nil || result.GcodePosition.CurrentLine != 48201 || result.GcodePosition.TotalLines != 112400 {
+		t.Errorf("GcodePosition = %v, want 48201/112400", result.GcodePosition)
+	}
+	if result.Extensions == nil {
+		t.Fatal("expected extensions")
+	}
+	bambu, ok := result.Extensions["bambu-lan"].(*driver.BambuExtension)
+	if !ok || bambu.AMS == nil || len(bambu.AMS.Units) != 1 || len(bambu.AMS.Units[0].Trays) != 1 {
+		t.Fatalf("AMS extension = %#v, want one unit with one tray", result.Extensions["bambu-lan"])
+	}
+	unit := bambu.AMS.Units[0]
+	if unit.ID != 0 {
+		t.Errorf("AMS unit ID = %d, want 0", unit.ID)
+	}
+	if unit.Temperature == nil || *unit.Temperature != 28.5 {
+		t.Errorf("AMS unit temperature = %v, want 28.5", unit.Temperature)
+	}
+	tray := unit.Trays[0]
+	if tray.Slot != 1 {
+		t.Errorf("tray slot = %d, want 1", tray.Slot)
+	}
+	if tray.RemainingPercent == nil || *tray.RemainingPercent != 85 {
+		t.Errorf("tray remaining = %v, want 85", tray.RemainingPercent)
+	}
+	if tray.NozzleTempMin == nil || *tray.NozzleTempMin != 190 {
+		t.Errorf("tray nozzle min = %v, want 190", tray.NozzleTempMin)
+	}
+	if tray.NozzleTempMax == nil || *tray.NozzleTempMax != 230 {
+		t.Errorf("tray nozzle max = %v, want 230", tray.NozzleTempMax)
+	}
+}
+
 func TestParseReport_ExtendedFields_PrintMeta(t *testing.T) {
 	data := []byte(`{"print":{
 		"gcode_state":"PRINTING",
@@ -678,6 +799,38 @@ func TestParseReport_InvalidJSON(t *testing.T) {
 	var exitErr *apperr.ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
 		t.Errorf("expected exit 4, got %v", err)
+	}
+}
+
+func TestParseReport_TypeMismatchReturnsPartialStatusWithWarning(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"IDLE",
+		"nozzle_temper":24.0,
+		"bed_temper":23.0,
+		"chamber_temper":0,
+		"mc_percent":0,
+		"hms":[],
+		"ipcam_record_timelapse":true
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.State != "idle" {
+		t.Errorf("State = %q, want idle", result.State)
+	}
+	if result.Temperatures == nil || result.Temperatures.Nozzle == nil || result.Temperatures.Bed == nil {
+		t.Fatalf("missing temperatures: %v", result.Temperatures)
+	}
+	if result.Progress == nil || result.Progress.Percent != 0 {
+		t.Fatalf("Progress = %v, want 0 percent", result.Progress)
+	}
+	if len(result.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want one type mismatch warning", result.Warnings)
+	}
+	if result.Warnings[0].Code != "status_field_type_mismatch" {
+		t.Errorf("warning code = %q, want status_field_type_mismatch", result.Warnings[0].Code)
 	}
 }
 
@@ -900,11 +1053,12 @@ func TestIsPushallReport_H2C_StgArray(t *testing.T) {
 }
 
 func TestParseReport_H2C_TypeMismatchFields(t *testing.T) {
-	// H2C payload with stg as array and gcode_file_prepare_percent as string.
+	// H2C payload with stg as array and numeric values sometimes sent as strings.
 	data := []byte(`{"print":{
 		"gcode_state":"IDLE",
 		"nozzle_temper":31.0,"nozzle_target_temper":0.0,
 		"bed_temper":23.0,"bed_target_temper":0.0,
+		"chamber_temper":"32.5",
 		"mc_percent":0,
 		"hms":[],
 		"stg":[],"stg_cur":-1,
@@ -927,6 +1081,14 @@ func TestParseReport_H2C_TypeMismatchFields(t *testing.T) {
 	if result.Temperatures.Nozzle.CurrentCelsius != 31.0 {
 		t.Errorf("nozzle temp = %v, want 31.0", result.Temperatures.Nozzle.CurrentCelsius)
 	}
+	if result.Temperatures.Chamber == nil || result.Temperatures.Chamber.CurrentCelsius != 32.5 {
+		t.Errorf("chamber temp = %v, want 32.5", result.Temperatures.Chamber)
+	}
+	for _, warning := range result.Warnings {
+		if warning.Code == "chamber_temperature_unavailable" {
+			t.Errorf("unexpected chamber unavailable warning: %v", result.Warnings)
+		}
+	}
 	if result.SpeedLevel == nil || *result.SpeedLevel != "standard" {
 		t.Errorf("SpeedLevel = %v, want standard", result.SpeedLevel)
 	}
@@ -943,6 +1105,90 @@ func TestParseReport_H2C_TypeMismatchFields(t *testing.T) {
 	}
 	if result.Lights["chamber_light"] != "off" {
 		t.Errorf("chamber_light = %q, want off", result.Lights["chamber_light"])
+	}
+}
+
+func TestParseReport_H2C_ChamberTemperatureAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want float64
+	}{
+		{
+			name: "chamber_temp",
+			body: `"chamber_temp":"32.5"`,
+			want: 32.5,
+		},
+		{
+			name: "chamber_temperature",
+			body: `"chamber_temperature":33.0`,
+			want: 33.0,
+		},
+		{
+			name: "nested chamber temp",
+			body: `"chamber":{"temp":"34.5"}`,
+			want: 34.5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := []byte(`{"print":{
+				"gcode_state":"IDLE",
+				"nozzle_temper":31.0,
+				"bed_temper":23.0,
+				"mc_percent":0,
+				"hms":[],
+				` + tt.body + `
+			}}`)
+
+			result, err := parseReport(data)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Temperatures == nil || result.Temperatures.Chamber == nil {
+				t.Fatalf("chamber temperature missing: %+v", result.Temperatures)
+			}
+			if result.Temperatures.Chamber.CurrentCelsius != tt.want {
+				t.Errorf("chamber temp = %v, want %v", result.Temperatures.Chamber.CurrentCelsius, tt.want)
+			}
+			for _, warning := range result.Warnings {
+				if warning.Code == "chamber_temperature_unavailable" {
+					t.Errorf("unexpected chamber unavailable warning: %v", result.Warnings)
+				}
+			}
+		})
+	}
+}
+
+func TestParseReport_H2C_ChamberTargetAliasDoesNotBecomeCurrentTemperature(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"IDLE",
+		"nozzle_temper":31.0,
+		"bed_temper":23.0,
+		"mc_percent":0,
+		"hms":[],
+		"chamber_target_temp":45.0
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Temperatures == nil {
+		t.Fatal("expected temperatures")
+	}
+	if result.Temperatures.Chamber != nil {
+		t.Fatalf("chamber target was parsed as current temperature: %+v", result.Temperatures.Chamber)
+	}
+	foundWarning := false
+	for _, warning := range result.Warnings {
+		if warning.Code == "chamber_temperature_unavailable" {
+			foundWarning = true
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("expected chamber unavailable warning, got %v", result.Warnings)
 	}
 }
 

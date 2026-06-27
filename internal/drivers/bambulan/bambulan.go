@@ -121,14 +121,20 @@ func (d *Driver) Name() string { return "bambu-lan" }
 // Capabilities returns the bambu-lan driver's supported operations.
 func (d *Driver) Capabilities() driver.Capabilities {
 	return driver.Capabilities{
-		Status:         true,
-		TLSRefresh:     true,
-		Discovery:      true,
-		CameraStream:   true,
-		CameraSnapshot: true,
-		FileList:       true,
-		FileDownload:   true,
-		FileUpload:     true,
+		Status:           true,
+		TLSRefresh:       true,
+		Discovery:        true,
+		CameraStream:     true,
+		CameraSnapshot:   true,
+		FileList:         true,
+		FileDownload:     true,
+		FileUpload:       true,
+		JobStart:         true,
+		JobPause:         true,
+		JobResume:        true,
+		JobCancel:        true,
+		TemperatureWrite: true,
+		MotionControl:    true,
 	}
 }
 
@@ -404,17 +410,17 @@ type bambuLightReport struct {
 
 type bambuPrint struct {
 	GcodeState         *string         `json:"gcode_state"`
-	NozzleTemper       *float64        `json:"nozzle_temper"`
-	NozzleTargetTemper *float64        `json:"nozzle_target_temper"`
-	BedTemper          *float64        `json:"bed_temper"`
-	BedTargetTemper    *float64        `json:"bed_target_temper"`
-	ChamberTemper      *float64        `json:"chamber_temper"`
+	NozzleTemper       *rawValueString `json:"nozzle_temper"`
+	NozzleTargetTemper *rawValueString `json:"nozzle_target_temper"`
+	BedTemper          *rawValueString `json:"bed_temper"`
+	BedTargetTemper    *rawValueString `json:"bed_target_temper"`
+	ChamberTemper      *rawValueString `json:"chamber_temper"`
 	SubtaskName        *string         `json:"subtask_name"`
 	GcodeFile          *string         `json:"gcode_file"`
-	McPercent          *int            `json:"mc_percent"`
-	LayerNum           *int            `json:"layer_num"`
-	McLayerNum         *int            `json:"mc_layer_num"`
-	TotalLayerNum      *int            `json:"total_layer_num"`
+	McPercent          *rawValueString `json:"mc_percent"`
+	LayerNum           *rawValueString `json:"layer_num"`
+	McLayerNum         *rawValueString `json:"mc_layer_num"`
+	TotalLayerNum      *rawValueString `json:"total_layer_num"`
 	McPrintErrorCode   *rawValueString `json:"mc_print_error_code"`
 	HMS                []bambuHMS      `json:"hms"`
 
@@ -424,33 +430,33 @@ type bambuPrint struct {
 	CoolingFanSpeed   *rawValueString `json:"cooling_fan_speed"`
 	HeatbreakFanSpeed *rawValueString `json:"heatbreak_fan_speed"`
 
-	McRemainingTime         *int            `json:"mc_remaining_time"`
-	PrintedTime             *int            `json:"mc_print_line_number"` // not used; see below
-	SpdLvl                  *int            `json:"spd_lvl"`
-	SpdMag                  *int            `json:"spd_mag"`
+	McRemainingTime         *rawValueString `json:"mc_remaining_time"`
+	PrintedTime             *rawValueString `json:"mc_print_line_number"` // not used; see below
+	SpdLvl                  *rawValueString `json:"spd_lvl"`
+	SpdMag                  *rawValueString `json:"spd_mag"`
 	WifiSignal              *rawValueString `json:"wifi_signal"`
 	GcodeFilePreparePercent *rawValueString `json:"gcode_file_prepare_percent"`
 
 	// Stg type varies across families: int on X1/P1/A1, array on H2C.
 	// Not used in mappings (mapStage uses StgCur); accept any JSON value.
 	Stg    json.RawMessage `json:"stg"`
-	StgCur *int            `json:"stg_cur"`
+	StgCur *rawValueString `json:"stg_cur"`
 
 	NozzleDiameter  *rawValueString `json:"nozzle_diameter"`
-	TotalLayerCount *int            `json:"total_layer_num_bak"` // not used; total_layer_num preferred
-	FileSize        *int            `json:"file_size"`           // not present in all FW; treat as optional
+	TotalLayerCount *rawValueString `json:"total_layer_num_bak"` // not used; total_layer_num preferred
+	FileSize        *rawValueString `json:"file_size"`           // not present in all FW; treat as optional
 
 	TimelapseStat *string `json:"ipcam_record_timelapse"`
 
 	// Time fields.
-	PrintRealTime *int `json:"mc_print_real_time"` // not always present
-	PrepareTime   *int `json:"mc_prepare_time"`    // not always present
+	PrintRealTime *rawValueString `json:"mc_print_real_time"` // not always present
+	PrepareTime   *rawValueString `json:"mc_prepare_time"`    // not always present
 
 	// AMS data (nested inside print in the pushall response).
 	AMS *bambuAMS `json:"ams"`
 
 	// Z position.
-	ZOffset *float64 `json:"z_offset"` // not the current Z; see below
+	ZOffset *rawValueString `json:"z_offset"` // not the current Z; see below
 
 	// G-code line tracking.
 	CurLineNum   *rawValueString `json:"cur_line_num"`
@@ -478,17 +484,17 @@ type bambuAMSUnit struct {
 }
 
 type bambuAMSTray struct {
-	ID            rawValueString `json:"id"`
-	TrayType      *string        `json:"tray_type"`
-	TrayColor     *string        `json:"tray_color"`
-	Remain        *int           `json:"remain"`
-	NozzleTempMin *int           `json:"nozzle_temp_min"`
-	NozzleTempMax *int           `json:"nozzle_temp_max"`
+	ID            rawValueString  `json:"id"`
+	TrayType      *string         `json:"tray_type"`
+	TrayColor     *string         `json:"tray_color"`
+	Remain        *rawValueString `json:"remain"`
+	NozzleTempMin *rawValueString `json:"nozzle_temp_min"`
+	NozzleTempMax *rawValueString `json:"nozzle_temp_max"`
 }
 
 type bambuHMS struct {
-	Attr uint32 `json:"attr"`
-	Code uint32 `json:"code"`
+	Attr rawValueString `json:"attr"`
+	Code rawValueString `json:"code"`
 }
 
 type rawValueString string
@@ -512,18 +518,25 @@ func (v *rawValueString) UnmarshalJSON(data []byte) error {
 // This is a pure function — no network access, safe to unit test with raw bytes.
 //
 // Tolerates json.UnmarshalTypeError from fields whose JSON type varies across
-// printer families (e.g. H2C sends "stg" as an array instead of an int).
+// printer families by returning partial status with a sanitized warning.
 func parseReport(data []byte) (*driver.StatusResult, error) {
 	var rep bambuReport
+	warnings := []driver.StatusWarning{}
 	if err := json.Unmarshal(data, &rep); err != nil {
 		var typeErr *json.UnmarshalTypeError
 		if !errors.As(err, &typeErr) {
 			return nil, apperr.Wrap(4, "invalid status report", err)
 		}
+		warnings = append(warnings, typeMismatchWarning(typeErr))
+	}
+	var rawReport struct {
+		Print json.RawMessage `json:"print"`
+	}
+	if err := json.Unmarshal(data, &rawReport); err == nil {
+		applyRawPrintFallbacks(rep.Print, rawReport.Print)
 	}
 	p := rep.Print
 	state := "unknown"
-	warnings := []driver.StatusWarning{}
 	if p == nil || p.GcodeState == nil || *p.GcodeState == "" {
 		warnings = append(warnings, driver.StatusWarning{
 			Code:    "state_unavailable",
@@ -567,27 +580,132 @@ func parseReport(data []byte) (*driver.StatusResult, error) {
 	return result, nil
 }
 
+func typeMismatchWarning(typeErr *json.UnmarshalTypeError) driver.StatusWarning {
+	field := strings.TrimSpace(typeErr.Field)
+	if field == "" {
+		field = "unknown"
+	}
+	return driver.StatusWarning{
+		Code:    "status_field_type_mismatch",
+		Message: "status field " + field + " has unsupported data type",
+	}
+}
+
+func applyRawPrintFallbacks(p *bambuPrint, rawPrint json.RawMessage) {
+	if p == nil || len(rawPrint) == 0 {
+		return
+	}
+	if p.ChamberTemper == nil {
+		p.ChamberTemper = findChamberTemperature(rawPrint)
+	}
+}
+
+func findChamberTemperature(raw json.RawMessage) *rawValueString {
+	return findChamberTemperatureValue(raw, false)
+}
+
+func findChamberTemperatureValue(raw json.RawMessage, inChamberObject bool) *rawValueString {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil
+	}
+
+	for _, key := range []string{
+		"chamber_temp",
+		"chamber_temperature",
+		"chamber_current_temper",
+		"chamber_current_temp",
+		"chamber_current_temperature",
+		"current_chamber_temper",
+		"current_chamber_temp",
+		"current_chamber_temperature",
+		"chamber_air_temper",
+		"chamber_air_temp",
+		"chamber_air_temperature",
+		"enclosure_temper",
+		"enclosure_temp",
+		"enclosure_temperature",
+		"env_temper",
+		"env_temp",
+	} {
+		if v := rawScalarValue(obj[key]); v != nil {
+			return v
+		}
+	}
+
+	for key, rawValue := range obj {
+		normalized := strings.ToLower(strings.TrimSpace(key))
+		if isCurrentChamberTemperatureKey(normalized, inChamberObject) {
+			if v := rawScalarValue(rawValue); v != nil {
+				return v
+			}
+		}
+		searchNested := inChamberObject || normalized == "chamber" || strings.Contains(normalized, "chamber")
+		if searchNested {
+			if v := findChamberTemperatureValue(rawValue, true); v != nil {
+				return v
+			}
+		}
+	}
+	return nil
+}
+
+func isCurrentChamberTemperatureKey(key string, inChamberObject bool) bool {
+	if key == "" ||
+		strings.Contains(key, "target") ||
+		strings.Contains(key, "fan") ||
+		strings.Contains(key, "light") ||
+		strings.Contains(key, "speed") ||
+		strings.Contains(key, "state") ||
+		strings.Contains(key, "mode") {
+		return false
+	}
+	hasTemperatureName := strings.Contains(key, "temper") || strings.Contains(key, "temp")
+	if !hasTemperatureName {
+		return false
+	}
+	if strings.Contains(key, "chamber") || strings.Contains(key, "enclosure") {
+		return true
+	}
+	return inChamberObject
+}
+
+func rawScalarValue(raw json.RawMessage) *rawValueString {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value rawValueString
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	if rawToFloat(&value) == nil {
+		return nil
+	}
+	return &value
+}
+
 func mapTemperatures(p *bambuPrint) (*driver.Temperatures, []driver.StatusWarning) {
 	if p == nil {
 		return nil, []driver.StatusWarning{{Code: "temperature_data_unavailable", Message: "temperature data unavailable"}}
 	}
 	temps := &driver.Temperatures{}
-	if p.NozzleTemper != nil {
-		temps.Nozzle = &driver.Temperature{CurrentCelsius: *p.NozzleTemper}
-		if p.NozzleTargetTemper != nil && *p.NozzleTargetTemper > 0 {
-			t := *p.NozzleTargetTemper
+	if nozzleTemper := rawToFloat(p.NozzleTemper); nozzleTemper != nil {
+		temps.Nozzle = &driver.Temperature{CurrentCelsius: *nozzleTemper}
+		if nozzleTarget := rawToFloat(p.NozzleTargetTemper); nozzleTarget != nil && *nozzleTarget > 0 {
+			t := *nozzleTarget
 			temps.Nozzle.TargetCelsius = &t
 		}
 	}
-	if p.BedTemper != nil {
-		temps.Bed = &driver.Temperature{CurrentCelsius: *p.BedTemper}
-		if p.BedTargetTemper != nil && *p.BedTargetTemper > 0 {
-			t := *p.BedTargetTemper
+	if bedTemper := rawToFloat(p.BedTemper); bedTemper != nil {
+		temps.Bed = &driver.Temperature{CurrentCelsius: *bedTemper}
+		if bedTarget := rawToFloat(p.BedTargetTemper); bedTarget != nil && *bedTarget > 0 {
+			t := *bedTarget
 			temps.Bed.TargetCelsius = &t
 		}
 	}
-	if p.ChamberTemper != nil && *p.ChamberTemper > 0 {
-		temps.Chamber = &driver.Temperature{CurrentCelsius: *p.ChamberTemper}
+	chamberTemper := rawToFloat(p.ChamberTemper)
+	if chamberTemper != nil && *chamberTemper > 0 {
+		temps.Chamber = &driver.Temperature{CurrentCelsius: *chamberTemper}
 	}
 	if temps.Nozzle == nil && temps.Bed == nil && temps.Chamber == nil {
 		return nil, []driver.StatusWarning{{Code: "temperature_data_unavailable", Message: "temperature data unavailable"}}
@@ -599,26 +717,30 @@ func mapTemperatures(p *bambuPrint) (*driver.Temperatures, []driver.StatusWarnin
 }
 
 func mapProgress(p *bambuPrint) (*driver.Progress, []driver.StatusWarning) {
-	if p == nil || p.McPercent == nil {
+	if p == nil {
 		return nil, []driver.StatusWarning{{Code: "progress_unavailable", Message: "progress unavailable"}}
 	}
-	prog := &driver.Progress{Percent: *p.McPercent}
+	percent := rawToInt(p.McPercent)
+	if percent == nil {
+		return nil, []driver.StatusWarning{{Code: "progress_unavailable", Message: "progress unavailable"}}
+	}
+	prog := &driver.Progress{Percent: *percent}
 	if layer := currentLayer(p); layer != nil {
 		v := *layer
 		prog.CurrentLayer = &v
 	}
-	if p.TotalLayerNum != nil {
-		v := *p.TotalLayerNum
+	if totalLayers := rawToInt(p.TotalLayerNum); totalLayers != nil {
+		v := *totalLayers
 		prog.TotalLayers = &v
 	}
 	return prog, nil
 }
 
 func currentLayer(p *bambuPrint) *int {
-	if p.LayerNum != nil {
-		return p.LayerNum
+	if layer := rawToInt(p.LayerNum); layer != nil {
+		return layer
 	}
-	return p.McLayerNum
+	return rawToInt(p.McLayerNum)
 }
 
 func mapJob(p *bambuPrint) *driver.Job {
@@ -641,7 +763,7 @@ func mapStatusErrors(p *bambuPrint) []driver.StatusError {
 	errs := make([]driver.StatusError, 0, len(p.HMS)+1)
 	if p.McPrintErrorCode != nil {
 		code := strings.TrimSpace(string(*p.McPrintErrorCode))
-		if code != "" && code != "0" {
+		if code != "" && !rawIsZero(p.McPrintErrorCode) {
 			errs = append(errs, driver.StatusError{
 				Code:    "printer_error",
 				Message: "printer error: " + code,
@@ -654,9 +776,18 @@ func mapStatusErrors(p *bambuPrint) []driver.StatusError {
 func mapHMSErrors(p *bambuPrint) []driver.StatusError {
 	errs := make([]driver.StatusError, 0, len(p.HMS))
 	for _, h := range p.HMS {
-		if h.Attr != 0 || h.Code != 0 {
+		attr := rawToUint32(&h.Attr)
+		code := rawToUint32(&h.Code)
+		var attrValue, codeValue uint32
+		if attr != nil {
+			attrValue = *attr
+		}
+		if code != nil {
+			codeValue = *code
+		}
+		if attrValue != 0 || codeValue != 0 {
 			errs = append(errs, driver.StatusError{
-				Code:    fmt.Sprintf("hms:%08x:%08x", h.Attr, h.Code),
+				Code:    fmt.Sprintf("hms:%08x:%08x", attrValue, codeValue),
 				Message: "hardware error",
 			})
 		}
@@ -674,10 +805,37 @@ func rawToInt(v *rawValueString) *int {
 		return nil
 	}
 	n, err := strconv.Atoi(s)
+	if err == nil {
+		return &n
+	}
+	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return nil
 	}
+	const maxInt = int(^uint(0) >> 1)
+	const minInt = -maxInt - 1
+	if f < float64(minInt) || f > float64(maxInt) {
+		return nil
+	}
+	n = int(f)
+	if f != float64(n) {
+		return nil
+	}
 	return &n
+}
+
+// rawToUint32 parses a rawValueString as a uint32, returning nil if empty or unparseable.
+func rawToUint32(v *rawValueString) *uint32 {
+	n := rawToInt(v)
+	if n == nil || *n < 0 {
+		return nil
+	}
+	u := uint64(*n)
+	if u > uint64(^uint32(0)) {
+		return nil
+	}
+	out := uint32(u)
+	return &out
 }
 
 // rawToFloat parses a rawValueString as a float64, returning nil if empty or unparseable.
@@ -694,6 +852,11 @@ func rawToFloat(v *rawValueString) *float64 {
 		return nil
 	}
 	return &f
+}
+
+func rawIsZero(v *rawValueString) bool {
+	f := rawToFloat(v)
+	return f != nil && *f == 0
 }
 
 // fanSpeedPercent converts a Bambu fan speed value (string "0"-"15" or "0"-"100")
@@ -743,11 +906,15 @@ func mapFans(p *bambuPrint) driver.Fans {
 }
 
 func mapTimeEstimates(p *bambuPrint) *driver.TimeEstimates {
-	if p == nil || p.McRemainingTime == nil {
+	if p == nil {
+		return nil
+	}
+	remainingMinutes := rawToInt(p.McRemainingTime)
+	if remainingMinutes == nil {
 		return nil
 	}
 	te := &driver.TimeEstimates{}
-	remaining := *p.McRemainingTime * 60 // minutes → seconds
+	remaining := *remainingMinutes * 60 // minutes -> seconds
 	te.RemainingSeconds = &remaining
 	return te
 }
@@ -760,12 +927,16 @@ var bambuSpeedLevels = map[int]string{
 }
 
 func mapSpeedLevel(p *bambuPrint) *string {
-	if p == nil || p.SpdLvl == nil {
+	if p == nil {
 		return nil
 	}
-	name, ok := bambuSpeedLevels[*p.SpdLvl]
+	level := rawToInt(p.SpdLvl)
+	if level == nil {
+		return nil
+	}
+	name, ok := bambuSpeedLevels[*level]
 	if !ok {
-		s := strconv.Itoa(*p.SpdLvl)
+		s := strconv.Itoa(*level)
 		return &s
 	}
 	return &name
@@ -820,8 +991,8 @@ func mapPrintMeta(p *bambuPrint) *driver.PrintMeta {
 		return nil
 	}
 	meta := &driver.PrintMeta{FileName: fileName}
-	if p.FileSize != nil && *p.FileSize > 0 {
-		v := *p.FileSize
+	if fileSize := rawToInt(p.FileSize); fileSize != nil && *fileSize > 0 {
+		v := *fileSize
 		meta.FileSize = &v
 	}
 	if nd := rawToFloat(p.NozzleDiameter); nd != nil && *nd > 0 {
@@ -841,6 +1012,9 @@ func mapBedType(v *rawValueString) string {
 		return ""
 	}
 	s := strings.TrimSpace(string(*v))
+	if n := rawToInt(v); n != nil {
+		s = strconv.Itoa(*n)
+	}
 	switch s {
 	case "1":
 		return "cool_plate"
@@ -882,12 +1056,16 @@ var bambuStages = map[int]string{
 }
 
 func mapStage(p *bambuPrint) *string {
-	if p == nil || p.StgCur == nil || *p.StgCur < 0 {
+	if p == nil {
 		return nil
 	}
-	name, ok := bambuStages[*p.StgCur]
+	stage := rawToInt(p.StgCur)
+	if stage == nil || *stage < 0 {
+		return nil
+	}
+	name, ok := bambuStages[*stage]
 	if !ok {
-		s := strconv.Itoa(*p.StgCur)
+		s := strconv.Itoa(*stage)
 		return &s
 	}
 	return &name
@@ -936,22 +1114,28 @@ func mapAMS(ams *bambuAMS) *driver.AMSData {
 	}
 	units := make([]driver.AMSUnit, 0, len(ams.AMS))
 	for _, u := range ams.AMS {
-		id, _ := strconv.Atoi(string(u.ID))
+		id := 0
+		if parsedID := rawToInt(&u.ID); parsedID != nil {
+			id = *parsedID
+		}
 		unit := driver.AMSUnit{
 			ID:    id,
 			Trays: make([]driver.AMSTray, 0, len(u.Tray)),
 		}
-		if h, err := strconv.Atoi(string(u.Humidity)); err == nil && h >= 1 && h <= 5 {
-			r := amsHumidityRange(h)
-			l := amsHumidityLevel(h)
+		if humidity := rawToInt(&u.Humidity); humidity != nil && *humidity >= 1 && *humidity <= 5 {
+			r := amsHumidityRange(*humidity)
+			l := amsHumidityLevel(*humidity)
 			unit.HumidityRange = &r
 			unit.HumidityLevel = &l
 		}
-		if t, err := strconv.ParseFloat(string(u.Temp), 64); err == nil && t > 0 {
-			unit.Temperature = &t
+		if temp := rawToFloat(&u.Temp); temp != nil && *temp > 0 {
+			unit.Temperature = temp
 		}
 		for _, tray := range u.Tray {
-			slot, _ := strconv.Atoi(string(tray.ID))
+			slot := 0
+			if parsedSlot := rawToInt(&tray.ID); parsedSlot != nil {
+				slot = *parsedSlot
+			}
 			dt := driver.AMSTray{Slot: slot}
 			if tray.TrayType != nil && *tray.TrayType != "" {
 				dt.FilamentType = tray.TrayType
@@ -959,16 +1143,16 @@ func mapAMS(ams *bambuAMS) *driver.AMSData {
 			if tray.TrayColor != nil && *tray.TrayColor != "" {
 				dt.Color = tray.TrayColor
 			}
-			if tray.Remain != nil {
-				v := *tray.Remain
+			if remain := rawToInt(tray.Remain); remain != nil {
+				v := *remain
 				dt.RemainingPercent = &v
 			}
-			if tray.NozzleTempMin != nil {
-				v := *tray.NozzleTempMin
+			if nozzleTempMin := rawToInt(tray.NozzleTempMin); nozzleTempMin != nil {
+				v := *nozzleTempMin
 				dt.NozzleTempMin = &v
 			}
-			if tray.NozzleTempMax != nil {
-				v := *tray.NozzleTempMax
+			if nozzleTempMax := rawToInt(tray.NozzleTempMax); nozzleTempMax != nil {
+				v := *nozzleTempMax
 				dt.NozzleTempMax = &v
 			}
 			unit.Trays = append(unit.Trays, dt)
