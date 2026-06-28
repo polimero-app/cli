@@ -156,7 +156,42 @@ func writeDetailError(out, errOut io.Writer, format output.Format, cmdName strin
 }
 
 func buildErrorDetail(err error) output.ErrDetail {
-	return output.ErrDetail{Code: errorCode(err), Message: err.Error()}
+	return output.ErrDetail{Code: errorCode(err), Message: errorMessage(err)}
+}
+
+func errorMessage(err error) string {
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch errorCode(err) {
+	case "authentication_failed":
+		switch {
+		case strings.Contains(msg, "MQTT authentication rejected"):
+			return "MQTT authentication rejected"
+		case strings.Contains(msg, "TLS fingerprint mismatch"):
+			return "TLS fingerprint mismatch"
+		default:
+			return "authentication or secret error"
+		}
+	case "secret_not_found":
+		return "secret not found"
+	case "connection_failed":
+		switch {
+		case strings.Contains(lower, "cancelled") || strings.Contains(lower, "canceled"):
+			return "request cancelled"
+		case strings.Contains(msg, "subscription failed"):
+			return "command subscription failed"
+		case strings.Contains(msg, "publish failed"):
+			return "command publish failed"
+		case strings.Contains(msg, "connection failed"):
+			return "connection failed"
+		default:
+			return "command failed"
+		}
+	case "timeout":
+		return "command timed out"
+	default:
+		return msg
+	}
 }
 
 func errorCode(err error) string {
@@ -174,12 +209,27 @@ func errorCode(err error) string {
 		}
 		return "secret_not_found"
 	case 4:
-		return "timeout"
+		if isTimeout(err) {
+			return "timeout"
+		}
+		return "connection_failed"
 	case 5:
 		return "capability_unsupported"
 	default:
 		return "error"
 	}
+}
+
+func isTimeout(err error) bool {
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
 }
 
 // checkStatePrecondition fetches status and verifies it matches one of the required states.
@@ -250,7 +300,7 @@ func writeActionSuccess(w io.Writer, format output.Format, cmdName, profileName,
 	if format == output.FormatJSON {
 		return writeActionJSONSuccess(w, cmdName, profileName, driverName, action, devicePath, plate, result, durationMs)
 	}
-	return writeActionHumanSuccess(w, action)
+	return writeActionHumanSuccess(w, profileName, action)
 }
 
 func writeActionJSONSuccess(w io.Writer, cmdName, profileName, driverName, action, devicePath string, plate *int, result driver.JobActionResult, durationMs int64) error {
@@ -291,7 +341,7 @@ func writeActionJSONSuccess(w io.Writer, cmdName, profileName, driverName, actio
 	})
 }
 
-func writeActionHumanSuccess(w io.Writer, action string) error {
+func writeActionHumanSuccess(w io.Writer, profileName, action string) error {
 	var msg string
 	switch action {
 	case "start":
@@ -304,6 +354,9 @@ func writeActionHumanSuccess(w io.Writer, action string) error {
 		msg = "Job canceled."
 	default:
 		msg = fmt.Sprintf("Job %s.", action)
+	}
+	if _, err := fmt.Fprintf(w, "Printer: %s\n", profileName); err != nil {
+		return err
 	}
 	_, err := fmt.Fprintln(w, msg)
 	return err
