@@ -3,7 +3,6 @@ package devicepath
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/polimero-app/cli/internal/apperr"
 )
@@ -77,7 +76,7 @@ func Parse(raw string) (DevicePath, error) {
 
 	dp := DevicePath{Root: root, Path: normalized}
 
-	if utf8.RuneCountInString(dp.String()) > maxDevicePathBytes {
+	if len(dp.String()) > maxDevicePathBytes {
 		return DevicePath{}, apperr.Newf(2, "device path exceeds maximum length of %d bytes", maxDevicePathBytes)
 	}
 
