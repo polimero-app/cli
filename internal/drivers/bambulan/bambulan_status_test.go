@@ -1129,6 +1129,11 @@ func TestParseReport_H2C_ChamberTemperatureAliases(t *testing.T) {
 			body: `"chamber":{"temp":"34.5"}`,
 			want: 34.5,
 		},
+		{
+			name: "H2C device.ctc.info.temp",
+			body: `"device":{"ctc":{"info":{"temp":27},"state":0},"bed":{"info":{"temp":27},"state":0},"bed_temp":27}`,
+			want: 27.0,
+		},
 	}
 
 	for _, tt := range tests {

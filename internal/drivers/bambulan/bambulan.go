@@ -829,9 +829,13 @@ func findChamberTemperatureValue(raw json.RawMessage, inChamberObject bool) *raw
 				return v
 			}
 		}
-		searchNested := inChamberObject || normalized == "chamber" || strings.Contains(normalized, "chamber")
-		if searchNested {
-			if v := findChamberTemperatureValue(rawValue, true); v != nil {
+		// "ctc" = Chamber Temperature Controller (H2C uses device.ctc.info.temp)
+		isChamberRelated := normalized == "chamber" || strings.Contains(normalized, "chamber") || normalized == "ctc"
+		// "device" is a hardware container that may hold chamber-related subkeys
+		isContainer := normalized == "device"
+		if inChamberObject || isChamberRelated || isContainer {
+			nextInChamber := inChamberObject || isChamberRelated
+			if v := findChamberTemperatureValue(rawValue, nextInChamber); v != nil {
 				return v
 			}
 		}
