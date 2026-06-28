@@ -54,7 +54,7 @@ func (e *fingerprintMismatchError) Error() string {
 type Driver struct {
 	newClient           func(*mqtt.ClientOptions) mqttConn
 	dialTLS             func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)
-	dialRTSPSFn         func(tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error)
+	dialRTSPSFn         func(ctx context.Context, tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error)
 	captureH264Snapshot func(ctx context.Context, tlsCfg *tls.Config, host, accessCode string) ([]byte, error)
 	browse              func(ctx context.Context, service string) (<-chan *mdnsEntry, error)
 	browseSSDP          func(ctx context.Context) (<-chan *mdnsEntry, error)
@@ -533,7 +533,7 @@ func parseReport(data []byte) (*driver.StatusResult, error) {
 		Print json.RawMessage `json:"print"`
 	}
 	if err := json.Unmarshal(data, &rawReport); err == nil {
-		applyRawPrintFallbacks(rep.Print, rawReport.Print)
+		applyRawReportFallbacks(rep.Print, rawReport.Print, data)
 	}
 	p := rep.Print
 	state := "unknown"
@@ -591,12 +591,15 @@ func typeMismatchWarning(typeErr *json.UnmarshalTypeError) driver.StatusWarning 
 	}
 }
 
-func applyRawPrintFallbacks(p *bambuPrint, rawPrint json.RawMessage) {
+func applyRawReportFallbacks(p *bambuPrint, rawPrint, rawReport json.RawMessage) {
 	if p == nil || len(rawPrint) == 0 {
 		return
 	}
 	if p.ChamberTemper == nil {
 		p.ChamberTemper = findChamberTemperature(rawPrint)
+	}
+	if p.ChamberTemper == nil {
+		p.ChamberTemper = findChamberTemperature(rawReport)
 	}
 }
 
@@ -1229,7 +1232,7 @@ func (d *Driver) CameraStream(ctx context.Context, p driver.ProfileInput, s driv
 
 	// Try port 322 (RTSPS / H.264) first.
 	rtspTLS := tlsCfg.Clone()
-	rtspStream, rtspErr := d.dialRTSPSFn(rtspTLS, p.Host, s.AccessCode)
+	rtspStream, rtspErr := d.dialRTSPSFn(ctx, rtspTLS, p.Host, s.AccessCode)
 	if rtspErr == nil {
 		return &driver.CameraStreamResult{
 			Format:       driver.CameraFormatH264,

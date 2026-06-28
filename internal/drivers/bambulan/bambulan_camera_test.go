@@ -94,7 +94,7 @@ func TestCameraStream_MJPEG_HappyPath(t *testing.T) {
 		return tlsClient, nil
 	})
 	// RTSPS fails → falls back to MJPEG.
-	drv.dialRTSPSFn = func(_ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
+	drv.dialRTSPSFn = func(_ context.Context, _ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
 		return nil, errors.New("RTSPS connection refused")
 	}
 
@@ -143,7 +143,7 @@ func TestCameraStream_MJPEG_MultipleFrames(t *testing.T) {
 		}
 		return tlsClient, nil
 	})
-	drv.dialRTSPSFn = func(_ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
+	drv.dialRTSPSFn = func(_ context.Context, _ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
 		return nil, errors.New("RTSPS connection refused")
 	}
 
@@ -202,7 +202,7 @@ func TestCameraStream_AuthPacketFormat(t *testing.T) {
 		}
 		return tlsClient, nil
 	})
-	drv.dialRTSPSFn = func(_ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
+	drv.dialRTSPSFn = func(_ context.Context, _ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
 		return nil, errors.New("RTSPS connection refused")
 	}
 
@@ -242,7 +242,7 @@ func TestCameraStream_FallbackToH264(t *testing.T) {
 	})
 
 	// RTSPS succeeds directly.
-	drv.dialRTSPSFn = func(_ *tls.Config, host, accessCode string) (io.ReadCloser, error) {
+	drv.dialRTSPSFn = func(_ context.Context, _ *tls.Config, host, accessCode string) (io.ReadCloser, error) {
 		if host != "192.0.2.1" {
 			t.Fatalf("unexpected host: %s", host)
 		}
@@ -275,7 +275,7 @@ func TestCameraStream_BothPortsFailed_ExitsCode4(t *testing.T) {
 	drv := newCameraDriver(func(_ context.Context, _ string, _ *tls.Config) (*tls.Conn, error) {
 		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
 	})
-	drv.dialRTSPSFn = func(_ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
+	drv.dialRTSPSFn = func(_ context.Context, _ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
 		return nil, errors.New("RTSPS connection refused")
 	}
 
@@ -317,7 +317,7 @@ func TestCameraStream_Capabilities_Included(t *testing.T) {
 		}
 		return tlsClient, nil
 	})
-	drv.dialRTSPSFn = func(_ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
+	drv.dialRTSPSFn = func(_ context.Context, _ *tls.Config, _ string, _ string) (io.ReadCloser, error) {
 		return nil, errors.New("RTSPS connection refused")
 	}
 
