@@ -634,7 +634,11 @@ type bambuPrint struct {
 
 	TimelapseStat *string `json:"ipcam_record_timelapse"`
 
+	// H2C nests timelapse inside an ipcam object.
+	Ipcam *bambuIpcam `json:"ipcam"`
+
 	// Time fields.
+	RemainTime    *rawValueString `json:"remain_time"`        // H2C uses this instead of mc_remaining_time
 	PrintRealTime *rawValueString `json:"mc_print_real_time"` // not always present
 	PrepareTime   *rawValueString `json:"mc_prepare_time"`    // not always present
 
@@ -681,6 +685,10 @@ type bambuAMSTray struct {
 type bambuHMS struct {
 	Attr rawValueString `json:"attr"`
 	Code rawValueString `json:"code"`
+}
+
+type bambuIpcam struct {
+	Timelapse *string `json:"timelapse"`
 }
 
 type rawValueString string
@@ -1103,6 +1111,10 @@ func mapTimeEstimates(p *bambuPrint) *driver.TimeEstimates {
 		return nil
 	}
 	remainingMinutes := rawToInt(p.McRemainingTime)
+	// H2C uses remain_time instead of mc_remaining_time.
+	if remainingMinutes == nil {
+		remainingMinutes = rawToInt(p.RemainTime)
+	}
 	if remainingMinutes == nil {
 		return nil
 	}
@@ -1253,7 +1265,7 @@ func mapStage(p *bambuPrint) *string {
 		return nil
 	}
 	stage := rawToInt(p.StgCur)
-	if stage == nil || *stage < 0 {
+	if stage == nil || *stage < 0 || *stage == 255 {
 		return nil
 	}
 	name, ok := bambuStages[*stage]
@@ -1265,10 +1277,18 @@ func mapStage(p *bambuPrint) *string {
 }
 
 func mapTimelapse(p *bambuPrint) *driver.Timelapse {
-	if p == nil || p.TimelapseStat == nil {
+	if p == nil {
 		return nil
 	}
-	recording := *p.TimelapseStat == "enable"
+	stat := p.TimelapseStat
+	// H2C nests timelapse inside an ipcam object.
+	if stat == nil && p.Ipcam != nil {
+		stat = p.Ipcam.Timelapse
+	}
+	if stat == nil {
+		return nil
+	}
+	recording := *stat == "enable"
 	return &driver.Timelapse{Recording: recording}
 }
 

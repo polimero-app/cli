@@ -1234,3 +1234,131 @@ func TestMapWifi_DBMSuffix(t *testing.T) {
 		t.Errorf("SignalDbm = %d, want -69", wifi.SignalDbm)
 	}
 }
+
+func TestParseReport_H2C_RemainTimeFallback(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"nozzle_target_temper":220.0,
+		"bed_temper":60.0,"bed_target_temper":60.0,
+		"mc_percent":42,"layer_num":10,"total_layer_num":100,
+		"hms":[],
+		"remain_time":45
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TimeEstimates == nil {
+		t.Fatal("expected time estimates from remain_time")
+	}
+	if result.TimeEstimates.RemainingSeconds == nil || *result.TimeEstimates.RemainingSeconds != 2700 {
+		t.Errorf("RemainingSeconds = %v, want 2700", result.TimeEstimates.RemainingSeconds)
+	}
+}
+
+func TestParseReport_H2C_RemainTimeNotUsedWhenMcPresent(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"nozzle_target_temper":220.0,
+		"bed_temper":60.0,"bed_target_temper":60.0,
+		"mc_percent":50,
+		"hms":[],
+		"mc_remaining_time":90,
+		"remain_time":100
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TimeEstimates == nil {
+		t.Fatal("expected time estimates")
+	}
+	// mc_remaining_time should take priority over remain_time.
+	if result.TimeEstimates.RemainingSeconds == nil || *result.TimeEstimates.RemainingSeconds != 5400 {
+		t.Errorf("RemainingSeconds = %v, want 5400 (mc_remaining_time preferred)", result.TimeEstimates.RemainingSeconds)
+	}
+}
+
+func TestParseReport_H2C_IpcamTimelapse(t *testing.T) {
+	tests := []struct {
+		name      string
+		data      string
+		recording bool
+	}{
+		{
+			name: "ipcam.timelapse enable",
+			data: `{"print":{
+				"gcode_state":"PRINTING",
+				"nozzle_temper":215.0,"bed_temper":60.0,
+				"mc_percent":50,"hms":[],
+				"ipcam":{"timelapse":"enable"}
+			}}`,
+			recording: true,
+		},
+		{
+			name: "ipcam.timelapse disable",
+			data: `{"print":{
+				"gcode_state":"PRINTING",
+				"nozzle_temper":215.0,"bed_temper":60.0,
+				"mc_percent":50,"hms":[],
+				"ipcam":{"timelapse":"disable"}
+			}}`,
+			recording: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseReport([]byte(tt.data))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Timelapse == nil {
+				t.Fatal("expected timelapse data from ipcam.timelapse")
+			}
+			if result.Timelapse.Recording != tt.recording {
+				t.Errorf("Recording = %v, want %v", result.Timelapse.Recording, tt.recording)
+			}
+		})
+	}
+}
+
+func TestParseReport_H2C_TopLevelTimelapsePreferred(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"PRINTING",
+		"nozzle_temper":215.0,"bed_temper":60.0,
+		"mc_percent":50,"hms":[],
+		"ipcam_record_timelapse":"enable",
+		"ipcam":{"timelapse":"disable"}
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Timelapse == nil {
+		t.Fatal("expected timelapse data")
+	}
+	if !result.Timelapse.Recording {
+		t.Error("expected recording=true from ipcam_record_timelapse taking priority")
+	}
+}
+
+func TestParseReport_StgCur255_IsNil(t *testing.T) {
+	data := []byte(`{"print":{
+		"gcode_state":"IDLE",
+		"nozzle_temper":24.0,"bed_temper":23.0,
+		"mc_percent":0,"hms":[],
+		"stg_cur":255
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Stage != nil {
+		t.Errorf("Stage = %q, want nil for stg_cur=255", *result.Stage)
+	}
+}
