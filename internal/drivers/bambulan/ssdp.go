@@ -5,7 +5,20 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"golang.org/x/net/ipv4"
 )
+
+// joinSSDP performs a best-effort join of the SSDP multicast group
+// (239.255.255.250) on the given UDP connection, allowing receipt of
+// unsolicited NOTIFY announcements from printers. Failure is silently
+// ignored — it may require elevated privileges on some systems.
+func joinSSDP(conn *net.UDPConn) {
+	group := net.IPv4(239, 255, 255, 250)
+	p := ipv4.NewPacketConn(conn)
+	// Join on all interfaces (nil = kernel-chosen default).
+	_ = p.JoinGroup(nil, &net.UDPAddr{IP: group})
+}
 
 const (
 	ssdpMulticast    = "239.255.255.250:1900"
@@ -26,6 +39,12 @@ func realBrowseSSDP(ctx context.Context) (<-chan *mdnsEntry, error) {
 		_ = conn.Close()
 		return nil, err
 	}
+
+	// Best-effort join of the SSDP multicast group so we also receive
+	// unsolicited NOTIFY announcements from printers that broadcast on
+	// 239.255.255.250 in addition to the Bambu-specific port 2021.
+	// Failure is non-fatal (may require elevated privileges on some systems).
+	joinSSDP(conn)
 
 	mSearch := "M-SEARCH * HTTP/1.1\r\n" +
 		"HOST: 239.255.255.250:1900\r\n" +
