@@ -64,39 +64,13 @@ func (d *Driver) mqttCommand(
 	opts.SetAutoReconnect(false)
 	opts.SetKeepAlive(60)
 
-	client := d.newClient(opts)
-
-	connectStart := time.Now()
-	if err := waitMQTTToken(ctx, client.Connect()); err != nil {
-		dur := time.Since(connectStart).Milliseconds()
-		trace.Emit(protocoltrace.Event{
-			Timestamp:     time.Now().UTC(),
-			Driver:        "bambu-lan",
-			Operation:     "Command",
-			Phase:         "connect",
-			Transport:     "mqtt",
-			Endpoint:      endpoint,
-			Protocol:      "mqttv3.1.1",
-			DurationMs:    &dur,
-			ErrorCategory: classifyTraceError(err),
-		})
+	client, err := d.connectMQTTWithRetry(ctx, opts, trace, "Command", endpoint)
+	if err != nil {
 		if isContextDoneErr(err) {
-			go client.Disconnect(0)
 			return nil, mqttContextError(err)
 		}
 		return nil, classifyStatusError(err)
 	}
-	connectDur := time.Since(connectStart).Milliseconds()
-	trace.Emit(protocoltrace.Event{
-		Timestamp:  time.Now().UTC(),
-		Driver:     "bambu-lan",
-		Operation:  "Command",
-		Phase:      "connect",
-		Transport:  "mqtt",
-		Endpoint:   endpoint,
-		Protocol:   "mqttv3.1.1",
-		DurationMs: &connectDur,
-	})
 	defer client.Disconnect(250)
 
 	ch := make(chan []byte, 8)

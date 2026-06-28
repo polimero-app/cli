@@ -244,7 +244,11 @@ func (d *Driver) ConnectCheck(ctx context.Context, p driver.ProfileInput, s driv
 			ErrorCategory: classifyTraceError(err),
 		})
 		if isContextDoneErr(err) {
-			go client.Disconnect(0)
+			// Use a short quiesce so the DISCONNECT frame is flushed.
+			// P1-series printers have very few MQTT session slots; a
+			// dropped DISCONNECT leaves a ghost that blocks the next
+			// connect for ~60 s (one keepalive period).
+			go client.Disconnect(150)
 			return "", apperr.New(4, "connection cancelled")
 		}
 		return "", classifyMQTTError(err)
@@ -300,39 +304,13 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 	opts.SetAutoReconnect(false)
 	opts.SetKeepAlive(60)
 
-	client := d.newClient(opts)
-
-	connectStart := time.Now()
-	if err := waitMQTTToken(ctx, client.Connect()); err != nil {
-		dur := time.Since(connectStart).Milliseconds()
-		trace.Emit(protocoltrace.Event{
-			Timestamp:     time.Now().UTC(),
-			Driver:        "bambu-lan",
-			Operation:     "Status",
-			Phase:         "connect",
-			Transport:     "mqtt",
-			Endpoint:      endpoint,
-			Protocol:      "mqttv3.1.1",
-			DurationMs:    &dur,
-			ErrorCategory: classifyTraceError(err),
-		})
+	client, err := d.connectMQTTWithRetry(ctx, opts, trace, "Status", endpoint)
+	if err != nil {
 		if isContextDoneErr(err) {
-			go client.Disconnect(0)
 			return nil, statusContextError(err)
 		}
 		return nil, classifyStatusError(err)
 	}
-	connectDur := time.Since(connectStart).Milliseconds()
-	trace.Emit(protocoltrace.Event{
-		Timestamp:  time.Now().UTC(),
-		Driver:     "bambu-lan",
-		Operation:  "Status",
-		Phase:      "connect",
-		Transport:  "mqtt",
-		Endpoint:   endpoint,
-		Protocol:   "mqttv3.1.1",
-		DurationMs: &connectDur,
-	})
 	defer client.Disconnect(250)
 
 	ch := make(chan []byte, 8)
@@ -524,6 +502,108 @@ func waitMQTTToken(ctx context.Context, token mqtt.Token) error {
 
 func isContextDoneErr(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// isMQTTAuthError reports whether the error is an MQTT authentication refusal
+// (wrong access code or unauthorized). Auth errors must never be retried.
+func isMQTTAuthError(err error) bool {
+	return errors.Is(err, packets.ErrorRefusedBadUsernameOrPassword) ||
+		errors.Is(err, packets.ErrorRefusedNotAuthorised)
+}
+
+// isFingerprintMismatch reports whether the error is a TLS fingerprint mismatch.
+func isFingerprintMismatch(err error) bool {
+	var fpErr *fingerprintMismatchError
+	return errors.As(err, &fpErr)
+}
+
+const (
+	mqttRetryAttempts = 3
+	mqttRetryBaseWait = 500 * time.Millisecond
+)
+
+// connectMQTTWithRetry creates a fresh MQTT client and attempts to connect,
+// retrying transient failures with exponential backoff. P1-series printers
+// can temporarily refuse connections for ~1 s after a prior session
+// disconnects; retrying avoids surfacing this as a user-visible error.
+//
+// Auth errors and TLS fingerprint mismatches are never retried.
+func (d *Driver) connectMQTTWithRetry(
+	ctx context.Context,
+	opts *mqtt.ClientOptions,
+	trace protocoltrace.Sink,
+	operation string,
+	endpoint string,
+) (mqttConn, error) {
+	var lastErr error
+	wait := mqttRetryBaseWait
+
+	for attempt := 1; attempt <= mqttRetryAttempts; attempt++ {
+		client := d.newClient(opts)
+		connectStart := time.Now()
+		err := waitMQTTToken(ctx, client.Connect())
+		dur := time.Since(connectStart).Milliseconds()
+
+		if err == nil {
+			if attempt > 1 {
+				trace.Emit(protocoltrace.Event{
+					Timestamp:  time.Now().UTC(),
+					Driver:     "bambu-lan",
+					Operation:  operation,
+					Phase:      "connect",
+					Transport:  "mqtt",
+					Endpoint:   endpoint,
+					Protocol:   "mqttv3.1.1",
+					DurationMs: &dur,
+					Detail:     map[string]any{"attempt": attempt},
+				})
+			} else {
+				trace.Emit(protocoltrace.Event{
+					Timestamp:  time.Now().UTC(),
+					Driver:     "bambu-lan",
+					Operation:  operation,
+					Phase:      "connect",
+					Transport:  "mqtt",
+					Endpoint:   endpoint,
+					Protocol:   "mqttv3.1.1",
+					DurationMs: &dur,
+				})
+			}
+			return client, nil
+		}
+
+		lastErr = err
+
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     operation,
+			Phase:         "connect",
+			Transport:     "mqtt",
+			Endpoint:      endpoint,
+			Protocol:      "mqttv3.1.1",
+			DurationMs:    &dur,
+			ErrorCategory: classifyTraceError(err),
+		})
+
+		// Never retry context cancellation, auth errors, or TLS mismatches.
+		if isContextDoneErr(err) || isMQTTAuthError(err) || isFingerprintMismatch(err) {
+			go client.Disconnect(150)
+			return nil, err
+		}
+
+		go client.Disconnect(150)
+
+		if attempt < mqttRetryAttempts {
+			select {
+			case <-time.After(wait):
+				wait *= 2
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+	return nil, lastErr
 }
 
 func statusContextError(err error) error {
