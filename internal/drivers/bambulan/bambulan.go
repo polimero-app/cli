@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"sort"
@@ -667,6 +668,21 @@ func mapState(gcodeState string) string {
 type bambuReport struct {
 	Print        *bambuPrint        `json:"print"`
 	LightsReport []bambuLightReport `json:"lights_report"`
+
+	// Some firmware versions include info or upgrade at the top level.
+	Info *bambuInfo `json:"info"`
+}
+
+// bambuInfo holds firmware version data from get_version responses or
+// pushall reports that include info at the top level.
+type bambuInfo struct {
+	Module []bambuModule `json:"module"`
+}
+
+// bambuModule represents a single firmware module in version reports.
+type bambuModule struct {
+	Name    string `json:"name"`
+	Version string `json:"sw_ver"`
 }
 
 type bambuLightReport struct {
@@ -742,6 +758,23 @@ type bambuPrint struct {
 	// LightsReport is nested inside "print" on some families (H2C).
 	// On X1/P1/A1 it appears at the top level of the report instead.
 	LightsReport []bambuLightReport `json:"lights_report"`
+
+	// Job identity fields — used for synthetic ID generation (item #7).
+	// LAN-only prints report these as "0" or empty; cloud prints carry real IDs.
+	TaskID    *string `json:"task_id"`
+	SubtaskID *string `json:"subtask_id"`
+
+	// Capability fields (items #8).
+	// home_flag: bits [8:9] encode SD card state (0=none, 1=normal, 2=abnormal, 3=readonly).
+	// fun2: hex-string capability bitmask; bit 17 = internal storage (eMMC) support.
+	HomeFlag *rawValueString `json:"home_flag"`
+	Fun2     *string         `json:"fun2"`
+
+	// Firmware version (item #4) — not all firmware includes this in pushall.
+	OtaVersion *string `json:"ota_version"`
+
+	// Network fields (item #10) — present in some firmware versions.
+	WifiIP *string `json:"wifi_ip"`
 }
 
 type bambuAMS struct {
@@ -864,6 +897,7 @@ func parseReport(data []byte) (*driver.StatusResult, error) {
 	result.Stage = mapStage(p)
 	result.Timelapse = mapTimelapse(p)
 	result.GcodePosition = mapGcodePosition(p)
+	result.FirmwareVersion = mapFirmwareVersion(p, rep.Info)
 	result.Extensions = mapExtensions(p)
 
 	return result, nil
@@ -1043,13 +1077,52 @@ func mapJob(p *bambuPrint) *driver.Job {
 	if p == nil {
 		return nil
 	}
+	var job *driver.Job
 	if p.SubtaskName != nil && *p.SubtaskName != "" {
-		return &driver.Job{Name: *p.SubtaskName}
+		job = &driver.Job{Name: *p.SubtaskName}
+	} else if p.GcodeFile != nil && *p.GcodeFile != "" {
+		job = &driver.Job{Name: *p.GcodeFile}
 	}
-	if p.GcodeFile != nil && *p.GcodeFile != "" {
-		return &driver.Job{Name: *p.GcodeFile}
+	if job == nil {
+		return nil
 	}
-	return nil
+
+	// Populate job ID from printer-reported values or generate a synthetic one.
+	// LAN-only prints report task_id/subtask_id as "0" or empty.
+	id := nonZeroStr(p.SubtaskID)
+	if id == "" {
+		id = nonZeroStr(p.TaskID)
+	}
+	if id == "" {
+		id = syntheticJobID(job.Name)
+	}
+	if id != "" {
+		job.ID = &id
+	}
+	return job
+}
+
+// nonZeroStr returns the string if non-nil, non-empty, and not "0"; otherwise "".
+func nonZeroStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	v := strings.TrimSpace(*s)
+	if v == "" || v == "0" || v == "-1" {
+		return ""
+	}
+	return v
+}
+
+// syntheticJobID generates a deterministic short ID from a job name using FNV-1a,
+// matching the approach used by open-bamboo-networking for LAN-only prints.
+func syntheticJobID(name string) string {
+	if name == "" {
+		return ""
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(name))
+	return fmt.Sprintf("lan-%x", h.Sum64())
 }
 
 func mapStatusErrors(p *bambuPrint) []driver.StatusError {
@@ -1403,22 +1476,102 @@ func mapGcodePosition(p *bambuPrint) *driver.GcodePosition {
 	}
 }
 
+// mapFirmwareVersion extracts firmware version from the report.
+// Tries ota_version from print block first, then looks for the "ota" module
+// in the info.module array (present in get_version responses and some pushall).
+func mapFirmwareVersion(p *bambuPrint, info *bambuInfo) *string {
+	if p != nil && p.OtaVersion != nil && *p.OtaVersion != "" {
+		return p.OtaVersion
+	}
+	if info != nil {
+		for _, m := range info.Module {
+			if strings.EqualFold(m.Name, "ota") && m.Version != "" {
+				return &m.Version
+			}
+		}
+		// Fall back to first module with a non-empty version.
+		for i := range info.Module {
+			if info.Module[i].Version != "" {
+				return &info.Module[i].Version
+			}
+		}
+	}
+	return nil
+}
+
 func mapExtensions(p *bambuPrint) map[string]any {
 	if p == nil {
 		return nil
 	}
 	amsData := mapAMS(p.AMS)
 	vtUnits := mapVirtualTrays(p)
-	if amsData == nil && len(vtUnits) == 0 {
+
+	ext := &driver.BambuExtension{}
+
+	if amsData != nil || len(vtUnits) > 0 {
+		if amsData == nil {
+			amsData = &driver.AMSData{}
+		}
+		amsData.Units = append(amsData.Units, vtUnits...)
+		ext.AMS = amsData
+	}
+
+	// SD card state from home_flag bits [8:9].
+	if s := sdCardState(p.HomeFlag); s != "" {
+		ext.SDCardState = &s
+	}
+
+	// eMMC support from fun2 capability bitmask bit 17.
+	if v := hasEMMC(p.Fun2); v {
+		ext.EMMCStorage = &v
+	}
+
+	// Printer-reported IP address.
+	if p.WifiIP != nil && *p.WifiIP != "" {
+		ext.ReportedIP = p.WifiIP
+	}
+
+	// Only emit the extension if it carries at least one field.
+	if ext.AMS == nil && ext.SDCardState == nil && ext.EMMCStorage == nil && ext.ReportedIP == nil {
 		return nil
 	}
-	if amsData == nil {
-		amsData = &driver.AMSData{}
-	}
-	amsData.Units = append(amsData.Units, vtUnits...)
 	return map[string]any{
-		"bambu-lan": &driver.BambuExtension{AMS: amsData},
+		"bambu-lan": ext,
 	}
+}
+
+// sdCardState interprets home_flag bits [8:9] to determine SD card state.
+// Returns "" if home_flag is not available.
+func sdCardState(homeFlag *rawValueString) string {
+	v := rawToInt(homeFlag)
+	if v == nil {
+		return ""
+	}
+	bits := (*v >> 8) & 0x3
+	switch bits {
+	case 0:
+		return "none"
+	case 1:
+		return "normal"
+	case 2:
+		return "abnormal"
+	case 3:
+		return "readonly"
+	default:
+		return ""
+	}
+}
+
+// hasEMMC checks fun2 capability bitmask for bit 17 (internal eMMC storage).
+func hasEMMC(fun2 *string) bool {
+	if fun2 == nil || *fun2 == "" {
+		return false
+	}
+	bits, err := strconv.ParseUint(*fun2, 16, 64)
+	if err != nil {
+		return false
+	}
+	return bits&(1<<17) != 0
 }
 
 func mapAMS(ams *bambuAMS) *driver.AMSData {

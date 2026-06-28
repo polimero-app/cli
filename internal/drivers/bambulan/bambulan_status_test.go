@@ -13,6 +13,7 @@ import (
 	"errors"
 	"log/slog"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -1696,5 +1697,187 @@ func TestParseReport_VirSlot_Empty_NotIncluded(t *testing.T) {
 	}
 	if result.Extensions != nil {
 		t.Errorf("expected nil extensions for empty vir_slot, got %+v", result.Extensions)
+	}
+}
+
+func TestParseReport_SyntheticJobID(t *testing.T) {
+	// LAN-only print: task_id and subtask_id are "0".
+	data := []byte(`{"print":{"gcode_state":"PRINTING","subtask_name":"my_model.3mf","task_id":"0","subtask_id":"0","nozzle_temper":200,"bed_temper":60}}`)
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Job == nil {
+		t.Fatal("expected job")
+	}
+	if result.Job.Name != "my_model.3mf" {
+		t.Errorf("Job.Name = %q, want %q", result.Job.Name, "my_model.3mf")
+	}
+	if result.Job.ID == nil {
+		t.Fatal("expected synthetic job ID")
+	}
+	if !strings.HasPrefix(*result.Job.ID, "lan-") {
+		t.Errorf("Job.ID = %q, want lan- prefix", *result.Job.ID)
+	}
+
+	// Same name should produce the same synthetic ID (deterministic).
+	result2, _ := parseReport(data)
+	if *result.Job.ID != *result2.Job.ID {
+		t.Errorf("synthetic IDs differ for same input: %q vs %q", *result.Job.ID, *result2.Job.ID)
+	}
+}
+
+func TestParseReport_RealJobID(t *testing.T) {
+	// Cloud print: subtask_id is a real value.
+	data := []byte(`{"print":{"gcode_state":"PRINTING","subtask_name":"cube.3mf","task_id":"12345","subtask_id":"893120535","nozzle_temper":200,"bed_temper":60}}`)
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Job == nil || result.Job.ID == nil {
+		t.Fatal("expected job with ID")
+	}
+	if *result.Job.ID != "893120535" {
+		t.Errorf("Job.ID = %q, want %q", *result.Job.ID, "893120535")
+	}
+}
+
+func TestSDCardState(t *testing.T) {
+	tests := []struct {
+		name     string
+		homeFlag *rawValueString
+		want     string
+	}{
+		{"nil", nil, ""},
+		{"no sd card (bits 00)", rawPtr("256"), "normal"},  // 256 = 1 << 8 = bits[8:9]=01
+		{"has sd card normal", rawPtr("256"), "normal"},
+		{"no sd card", rawPtr("0"), "none"},
+		{"abnormal", rawPtr("512"), "abnormal"},   // 512 = 2 << 8
+		{"readonly", rawPtr("768"), "readonly"},   // 768 = 3 << 8
+		{"with other bits set", rawPtr("1280"), "normal"}, // 1280 = 0x500 = bits[8:9]=01, bit 10 set
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sdCardState(tt.homeFlag)
+			if got != tt.want {
+				t.Errorf("sdCardState(%v) = %q, want %q", tt.homeFlag, got, tt.want)
+			}
+		})
+	}
+}
+
+func rawPtr(s string) *rawValueString {
+	v := rawValueString(s)
+	return &v
+}
+
+func TestHasEMMC(t *testing.T) {
+	tests := []struct {
+		name string
+		fun2 *string
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty", strPtr(""), false},
+		{"no emmc", strPtr("0"), false},
+		{"has emmc (bit 17)", strPtr("20000"), true},   // 0x20000 = 1 << 17
+		{"has emmc with other bits", strPtr("3e0000"), true}, // bit 17 set among others
+		{"just below bit 17", strPtr("1ffff"), false},
+		{"invalid hex", strPtr("xyz"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasEMMC(tt.fun2)
+			if got != tt.want {
+				t.Errorf("hasEMMC(%v) = %v, want %v", tt.fun2, got, tt.want)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+func TestParseReport_HomeFlag_SDCardState(t *testing.T) {
+	data := []byte(`{"print":{"gcode_state":"IDLE","home_flag":"256","nozzle_temper":24}}`)
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ext, ok := result.Extensions["bambu-lan"]
+	if !ok {
+		t.Fatal("expected bambu-lan extension")
+	}
+	bambu, ok := ext.(*driver.BambuExtension)
+	if !ok {
+		t.Fatal("expected *driver.BambuExtension")
+	}
+	if bambu.SDCardState == nil || *bambu.SDCardState != "normal" {
+		t.Errorf("SDCardState = %v, want 'normal'", bambu.SDCardState)
+	}
+}
+
+func TestParseReport_Fun2_EMMCStorage(t *testing.T) {
+	data := []byte(`{"print":{"gcode_state":"IDLE","fun2":"20000","nozzle_temper":24}}`)
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ext, ok := result.Extensions["bambu-lan"]
+	if !ok {
+		t.Fatal("expected bambu-lan extension")
+	}
+	bambu, ok := ext.(*driver.BambuExtension)
+	if !ok {
+		t.Fatal("expected *driver.BambuExtension")
+	}
+	if bambu.EMMCStorage == nil || !*bambu.EMMCStorage {
+		t.Error("expected EMMCStorage = true")
+	}
+}
+
+func TestParseReport_FirmwareVersion_OtaVersion(t *testing.T) {
+	data := []byte(`{"print":{"gcode_state":"IDLE","ota_version":"01.08.00.00","nozzle_temper":24}}`)
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FirmwareVersion == nil {
+		t.Fatal("expected firmware version")
+	}
+	if *result.FirmwareVersion != "01.08.00.00" {
+		t.Errorf("FirmwareVersion = %q, want %q", *result.FirmwareVersion, "01.08.00.00")
+	}
+}
+
+func TestParseReport_FirmwareVersion_InfoModule(t *testing.T) {
+	data := []byte(`{"print":{"gcode_state":"IDLE","nozzle_temper":24},"info":{"module":[{"name":"ota","sw_ver":"01.07.02.00"},{"name":"ams","sw_ver":"00.00.06.32"}]}}`)
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FirmwareVersion == nil {
+		t.Fatal("expected firmware version from info.module")
+	}
+	if *result.FirmwareVersion != "01.07.02.00" {
+		t.Errorf("FirmwareVersion = %q, want %q", *result.FirmwareVersion, "01.07.02.00")
+	}
+}
+
+func TestParseReport_WifiIP(t *testing.T) {
+	data := []byte(`{"print":{"gcode_state":"IDLE","nozzle_temper":24,"wifi_ip":"192.168.1.50"}}`)
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ext, ok := result.Extensions["bambu-lan"]
+	if !ok {
+		t.Fatal("expected bambu-lan extension")
+	}
+	bambu, ok := ext.(*driver.BambuExtension)
+	if !ok {
+		t.Fatal("expected *driver.BambuExtension")
+	}
+	if bambu.ReportedIP == nil || *bambu.ReportedIP != "192.168.1.50" {
+		t.Errorf("ReportedIP = %v, want '192.168.1.50'", bambu.ReportedIP)
 	}
 }

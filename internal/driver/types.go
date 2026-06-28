@@ -75,7 +75,8 @@ type Temperatures struct {
 
 // Job describes the currently active print job.
 type Job struct {
-	Name string `json:"name"`
+	Name string  `json:"name"`
+	ID   *string `json:"id,omitempty"` // printer-assigned or synthetic ID
 }
 
 // Progress describes how far through a print job the printer is.
@@ -174,7 +175,10 @@ type AMSData struct {
 
 // BambuExtension holds Bambu-specific extension data.
 type BambuExtension struct {
-	AMS *AMSData `json:"ams,omitempty"`
+	AMS         *AMSData `json:"ams,omitempty"`
+	SDCardState *string  `json:"sdCardState,omitempty"` // "none", "normal", "abnormal", "readonly"
+	EMMCStorage *bool    `json:"emmcStorage,omitempty"` // true if internal eMMC is supported
+	ReportedIP  *string  `json:"reportedIP,omitempty"`  // printer-reported IP (may differ from connection IP)
 }
 
 // StatusResult is the portable representation of printer state returned by Driver.Status.
@@ -189,16 +193,17 @@ type StatusResult struct {
 	Capabilities Capabilities    `json:"capabilities"`
 
 	// Extended fields (populated when detailed status is requested).
-	Fans          Fans           `json:"fans,omitempty"`
-	TimeEstimates *TimeEstimates `json:"timeEstimates,omitempty"`
-	SpeedLevel    *string        `json:"speedLevel,omitempty"`
-	Wifi          *Wifi          `json:"wifi,omitempty"`
-	Lights        Lights         `json:"lights,omitempty"`
-	PrintMeta     *PrintMeta     `json:"printMeta,omitempty"`
-	Stage         *string        `json:"stage,omitempty"`
-	Timelapse     *Timelapse     `json:"timelapse,omitempty"`
-	GcodePosition *GcodePosition `json:"gcodePosition,omitempty"`
-	Extensions    map[string]any `json:"extensions,omitempty"`
+	Fans            Fans           `json:"fans,omitempty"`
+	TimeEstimates   *TimeEstimates `json:"timeEstimates,omitempty"`
+	SpeedLevel      *string        `json:"speedLevel,omitempty"`
+	Wifi            *Wifi          `json:"wifi,omitempty"`
+	Lights          Lights         `json:"lights,omitempty"`
+	PrintMeta       *PrintMeta     `json:"printMeta,omitempty"`
+	Stage           *string        `json:"stage,omitempty"`
+	Timelapse       *Timelapse     `json:"timelapse,omitempty"`
+	GcodePosition   *GcodePosition `json:"gcodePosition,omitempty"`
+	FirmwareVersion *string        `json:"firmwareVersion,omitempty"`
+	Extensions      map[string]any `json:"extensions,omitempty"`
 }
 
 // CameraFormat identifies the video encoding of a camera stream.
