@@ -390,17 +390,28 @@ type JogDelta struct {
 }
 
 type MotionResult struct {
+    State        MotionState // "accepted" or "complete"
     Warnings     []StatusWarning
     Capabilities Capabilities
 }
+
+type MotionState string
+
+const (
+    MotionStateAccepted MotionState = "accepted"
+    MotionStateComplete MotionState = "complete"
+)
 ```
 
 Contract:
 
 - The command layer enforces the `idle`-state precondition and the generic jog distance bound (±10mm per axis per call) before calling either method. Drivers do not re-derive these checks.
 - `MotionHome` with an empty `axes` slice homes all axes.
-- The driver blocks, bounded by `ctx`, until it can confirm the requested motion (homing or jog) has physically finished, not merely that the command was sent.
-- Return `timeout` if no motion-finished confirmation arrives before the context deadline.
+- The driver blocks, bounded by `ctx`, until it can return a truthful result state:
+  - `complete`: the driver confirmed the requested motion has physically finished.
+  - `accepted`: the driver confirmed the motion command was accepted by the printer and a fresh status channel is alive, but the protocol does not expose a reliable physical completion signal.
+- Drivers must not return `complete` from send-only or generic status-echo acknowledgments.
+- Return `timeout` if no result-state confirmation arrives before the context deadline.
 - Return `unsupported_capability` when the driver does not support the requested axis or motion type.
 - Sanitize transport and protocol errors before returning them.
 

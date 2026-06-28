@@ -76,7 +76,7 @@ The command must not prompt for new secrets.
 4. Query current status via the driver-neutral status operation.
 5. Check the state precondition: current state must be `idle`. Fail with exit code `2` and error code `invalid_printer_state` otherwise.
 6. Prompt for confirmation unless `--yes` is set.
-7. Dispatch the motion command to the driver. The driver blocks (bounded by `--timeout`) until it confirms the motion finished.
+7. Dispatch the motion command to the driver. The driver blocks (bounded by `--timeout`) until it returns a truthful result state: `accepted` or `complete`.
 8. Close the trace file if one was opened, then render the result.
 
 ## Safety Bounds
@@ -102,8 +102,11 @@ Homing and jogging are state-changing and physically move the toolhead or bed; b
 - `motion home` with no `--axis` given homes all three axes in one call.
 - `motion jog` moves relative to the printer's current position; it does not accept absolute coordinates.
 - `motion jog` covers X/Y/Z only; the extruder (E) axis is out of scope for this command.
-- The command waits for the driver to confirm the requested motion (homing or jog) has physically finished before reporting success.
-- If no motion-finished confirmation arrives before the timeout, the command fails with exit code `4` and error code `timeout`.
+- The command reports the driver result state:
+  - `accepted`: the printer accepted the command and a fresh status channel was observed, but physical completion was not confirmed.
+  - `complete`: the driver confirmed the requested motion physically finished.
+- The command must not render `accepted` as completion.
+- If no accepted-or-complete confirmation arrives before the timeout, the command fails with exit code `4` and error code `timeout`.
 - Unsupported driver capabilities fail with exit code `5`.
 - If the protocol trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
 
@@ -114,6 +117,7 @@ Motion result fields:
 - `profile`: profile name.
 - `driver`: driver name.
 - `action`: `home` or `jog`.
+- `state`: `accepted` or `complete`.
 - `axes`: array of homed axes, e.g. `["x","y","z"]` (present only for `home`).
 - `delta`: object with `xMillimeters`, `yMillimeters`, `zMillimeters`, `feedrateMmPerMin` (present only for `jog`). Axis fields are `null` when not requested.
 - `warnings`: non-fatal warnings. Always an array; empty when none.
@@ -126,7 +130,7 @@ Human home example:
 ```text
 Printer: garage-x1c
 Homing x, y, z...
-Homing complete.
+Homing command accepted.
 ```
 
 Human jog example:
@@ -134,7 +138,7 @@ Human jog example:
 ```text
 Printer: garage-x1c
 Jogging x+5.0mm at 1500mm/min...
-Jog complete.
+Jog command accepted.
 ```
 
 Human confirmation prompt (interactive, no `--yes`):
@@ -143,7 +147,7 @@ Human confirmation prompt (interactive, no `--yes`):
 Home x, y, z on garage-x1c? Type 'yes' to continue: yes
 Printer: garage-x1c
 Homing x, y, z...
-Homing complete.
+Homing command accepted.
 ```
 
 JSON home success example:
@@ -155,6 +159,7 @@ JSON home success example:
     "profile": "garage-x1c",
     "driver": "bambu-lan",
     "action": "home",
+    "state": "accepted",
     "axes": ["x", "y", "z"],
     "warnings": [],
     "capabilities": {
@@ -180,6 +185,7 @@ JSON jog success example:
     "profile": "garage-x1c",
     "driver": "bambu-lan",
     "action": "jog",
+    "state": "accepted",
     "delta": {
       "xMillimeters": 5.0,
       "yMillimeters": null,
@@ -244,7 +250,7 @@ JSON precondition error example:
 
 ## Exit Codes
 
-- `0`: motion completed and confirmed.
+- `0`: motion accepted or completed according to `data.state`.
 - `1`: general failure, including trace write or close failure after protocol work starts.
 - `2`: usage, profile, config, bounds, precondition, confirmation error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: auth or secret error.
@@ -270,7 +276,7 @@ JSON precondition error example:
 - TLS fingerprint mismatch (TOFU violation).
 - Authentication failed.
 - Connection failed.
-- Timeout waiting for motion-finished confirmation.
+- Timeout waiting for accepted-or-complete confirmation.
 - Driver does not support motion control.
 
 ## Security Requirements

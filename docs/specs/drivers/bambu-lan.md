@@ -6,7 +6,7 @@ Accepted
 
 ## Purpose
 
-Define the Bambu LAN driver slice for printer discovery, TLS refresh, status, camera streaming, camera snapshots, and file management.
+Define the Bambu LAN driver slice for printer discovery, TLS refresh, status, camera streaming, camera snapshots, file management, and accepted MQTT/FTPS control operations.
 
 ## Scope
 
@@ -46,6 +46,8 @@ Out of scope:
 - Bambu cloud APIs.
 - Authorization bypass.
 - Job upload through printer-control APIs.
+- Upload-and-start workflows; an integration layer may compose `files upload` and `jobs start`, but the driver keeps them separate.
+- BambuTunnelLocal / port `6000` upload or print-start flows.
 - File delete, rename, move, and directory creation.
 - AMS-aware job start (`use_ams: true`).
 - Timelapse control during job start.
@@ -129,6 +131,100 @@ The `pushall` payload:
   }
 }
 ```
+
+### MQTT Control Commands
+
+Implementation status: experimental for control operations. The driver sends MQTT commands to `device/{serial}/request`, then publishes `pushall` and waits for a matching status/report message on `device/{serial}/report`.
+
+Control command payloads use dynamic decimal `sequence_id` values. The driver must not log raw command payloads or access codes.
+
+#### Job Control
+
+`jobs pause`, `jobs resume`, and `jobs cancel` publish:
+
+```json
+{
+  "print": {
+    "sequence_id": "<decimal>",
+    "command": "pause"
+  }
+}
+```
+
+Command names:
+
+| Polimero command | Bambu `print.command` | Expected portable state |
+|---|---|---|
+| `jobs pause` | `pause` | `paused` |
+| `jobs resume` | `resume` | `printing` |
+| `jobs cancel` | `stop` | `idle` |
+
+The driver waits for a full status report whose `print.gcode_state` maps to the expected portable state.
+
+#### Job Start From Existing Printer File
+
+`jobs start` remains strictly "file already on printer". It must not upload a local file, probe local paths, or compose an upload/start workflow inside the driver.
+
+For `.3mf` device paths, publish a `project_file` command using a plain `file://` URL accepted by Developer Mode printers:
+
+```json
+{
+  "print": {
+    "sequence_id": "<decimal>",
+    "command": "project_file",
+    "param": "Metadata/plate_1.gcode",
+    "project_id": "0",
+    "profile_id": "0",
+    "task_id": "0",
+    "subtask_id": "0",
+    "subtask_name": "cube.3mf",
+    "file": "models/cube.3mf",
+    "url": "file:///models/cube.3mf",
+    "md5": "",
+    "bed_type": "auto",
+    "bed_leveling": true,
+    "flow_cali": false,
+    "vibration_cali": false,
+    "layer_inspect": false,
+    "timelapse": false,
+    "use_ams": false,
+    "ams_mapping": [],
+    "ams_mapping2": [],
+    "auto_bed_leveling": 0,
+    "nozzle_offset_cali": 0,
+    "cfg": "0",
+    "extrude_cali_flag": 0
+  }
+}
+```
+
+`--plate <n>` selects `Metadata/plate_<n>.gcode`; when omitted or non-positive, use plate `1`. `--skip-leveling` sets `bed_leveling` to `false`.
+
+For raw `.gcode` device paths, publish `gcode_file` with the normalized printer path in `param`. This path is less Studio-like than `.3mf` `project_file` and remains covered by hardware validation.
+
+The driver waits for `print.gcode_state` in `PRINTING`, `PREPARE`, `RUNNING`, or `SLICING`.
+
+#### Temperature Set
+
+`temperature set` publishes `print.command: "gcode_line"` with one or more heater commands:
+
+| Target | G-code |
+|---|---|
+| Nozzle | `M104 S<n>` |
+| Bed | `M140 S<n>` |
+| Chamber | `M141 S<n>` |
+
+The driver waits for a full status report. Nozzle and bed targets must echo the requested target value, including `0` for heater off. Chamber target read-back is not exposed in known Bambu status reports; when a chamber target is requested, the driver reports the sent target only after a fresh full status report is observed.
+
+#### Motion
+
+`motion home` publishes `print.command: "gcode_line"` with `G28` and optional axis letters. `motion jog` publishes `G91`, one `G1` relative move, and `G90`.
+
+Bambu LAN MQTT status does not expose a reliable motion-finished acknowledgment for these G-code lines. The driver therefore returns `MotionResult.State = "accepted"` after the command publish succeeds and a fresh full status report is observed. It must never report this as `complete`.
+
+#### Unsigned Command Rejection
+
+Firmware with command-signature enforcement may reject unsigned `print` commands with `err_code` `84033543` or a reason equivalent to `MQTT Command verification failed`. The driver maps this to an auth/authorization failure with a sanitized message. It must not attempt certificate extraction, signature bypass, cloud credential use, or other authorization bypass behavior.
 
 ### Push Behavior by Family
 

@@ -46,15 +46,15 @@ Each command validates the printer's current state (via the driver-neutral statu
 
 Precondition checks happen before the confirmation prompt, so an invalid request fails fast without asking the operator to confirm an action that cannot succeed.
 
-### Confirmed completion
+### Confirmed effect
 
 Each command waits (bounded by the command timeout) for the driver to confirm the action actually took effect, not merely that it was sent:
 
 - Job actions wait for the expected resulting state (`paused`, `printing`, or `idle`). If the confirmed end-state contradicts the expected transition (e.g. `cancel` results in `error` instead of `idle`), the command fails with `job_action_failed` rather than reporting a false success.
 - `temperature set` waits for the printer to acknowledge the new target value(s), not for the temperature to physically reach target.
-- `motion home`/`motion jog` wait for a driver-confirmed motion-finished signal.
+- `motion home`/`motion jog` report a result state. Drivers that expose a reliable motion-finished signal return `complete`; drivers that can only prove the command was accepted and a fresh status channel is alive return `accepted`. Commands must not render `accepted` as physical completion.
 
-This is the same pattern by which `files upload`/`files download` report bytes transferred, extended to require confirmation of effect rather than just transmission.
+This is the same pattern by which `files upload`/`files download` report bytes transferred, extended to require confirmation of effect or explicit acceptance rather than just transmission.
 
 ### Input bounds
 
@@ -74,8 +74,8 @@ This ADR and its command specs define the driver-neutral contract only. Mapping 
 ## Consequences
 
 - `jobs`, `temperature`, and `motion` join `status`, `camera`, and `files` as top-level action groups; `printer` remains pure profile CRUD.
-- The driver contract gains `JobResume`, plus new operations for job control, temperature control, and motion control, each returning a confirmed result rather than a fire-and-forget acknowledgment.
+- The driver contract gains `JobResume`, plus new operations for job control, temperature control, and motion control. Job and temperature operations return confirmed resulting state or targets. Motion operations return either confirmed completion or explicit accepted state, depending on driver protocol support.
 - New error codes (`invalid_printer_state`, `job_action_failed`, `unsafe_value`) join the existing driver-contract error mapping table.
-- No driver currently implements these operations; all commands return exit code `5` (`capability_unsupported`) until a driver spec is updated and an implementation lands.
+- Drivers implement these operations only when their accepted driver spec defines the protocol mapping. Unsupported drivers return exit code `5` (`capability_unsupported`).
 - Job start remains decoupled from file upload, preserving ADR 0009's principle that upload must not implicitly start a print.
 - Future extensions (absolute motion, extruder jog, additional heater targets, automation-friendly batch sequencing) require their own ADR or spec update.
