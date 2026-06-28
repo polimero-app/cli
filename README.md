@@ -8,7 +8,7 @@ The project is intentionally ADR and spec driven. Initial commands are implement
 
 This repository contains the ADR/spec foundation plus the first implemented printer-management and read-command slices.
 
-Implemented commands currently include `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, top-level `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, and `files upload`.
+Implemented commands currently include `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, top-level `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, `files upload`, `jobs start`, `jobs pause`, `jobs resume`, `jobs cancel`, `temperature set`, `motion home`, and `motion jog`.
 
 ## Key Decisions
 
