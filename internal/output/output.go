@@ -55,9 +55,11 @@ func (e ErrDetail) MarshalJSON() ([]byte, error) {
 
 // Meta carries metadata about the command invocation.
 // DurationMs is only set for commands that make network calls.
+// ProtocolTracePath is only set when --protocol-trace is active and --output json.
 type Meta struct {
-	Command    string `json:"command"`
-	DurationMs *int64 `json:"durationMs,omitempty"`
+	Command           string  `json:"command"`
+	DurationMs        *int64  `json:"durationMs,omitempty"`
+	ProtocolTracePath *string `json:"protocolTracePath,omitempty"`
 }
 
 // WriteEnvelope encodes env as indented JSON followed by a newline to w.
