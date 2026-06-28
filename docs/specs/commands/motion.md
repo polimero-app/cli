@@ -15,8 +15,8 @@ This command is covered by ADR 0008 for top-level action command placement and A
 ## Syntax
 
 ```text
-polimero motion home <printer> [--axis <list>] [--yes] [--timeout <duration>] [--insecure] [--output <format>]
-polimero motion jog <printer> [--x <mm>] [--y <mm>] [--z <mm>] [--feedrate <mm/min>] [--yes] [--timeout <duration>] [--insecure] [--output <format>]
+polimero motion home <printer> [--axis <list>] [--yes] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
+polimero motion jog <printer> [--x <mm>] [--y <mm>] [--z <mm>] [--feedrate <mm/min>] [--yes] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -34,6 +34,7 @@ polimero motion jog <printer> [--x <mm>] [--y <mm>] [--z <mm>] [--feedrate <mm/m
 - `--yes`: optional. Skips the interactive confirmation prompt. Required in non-interactive sessions (no controlling TTY).
 - `--timeout <duration>`: optional. Overrides profile/default timeout for the status check and the motion operation.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include status precheck phases, motion action phase names, capability decisions, selected portable states, motion-finished acknowledgment categories, byte counts, durations, parser warnings, and sanitized error categories. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -71,11 +72,12 @@ The command must not prompt for new secrets.
 
 1. Resolve profile and load secrets.
 2. Validate input: `--axis` values are a subset of `x,y,z` (home); at least one of `--x`/`--y`/`--z` is given and each is within ±10mm (jog). Exit code `2`, error code `unsafe_value` for out-of-range jog distances, before any network call.
-3. Query current status via the driver-neutral status operation.
-4. Check the state precondition: current state must be `idle`. Fail with exit code `2` and error code `invalid_printer_state` otherwise.
-5. Prompt for confirmation unless `--yes` is set.
-6. Dispatch the motion command to the driver. The driver blocks (bounded by `--timeout`) until it confirms the motion finished.
-7. Render the result.
+3. If `--protocol-trace` is set, create the trace file before any protocol work.
+4. Query current status via the driver-neutral status operation.
+5. Check the state precondition: current state must be `idle`. Fail with exit code `2` and error code `invalid_printer_state` otherwise.
+6. Prompt for confirmation unless `--yes` is set.
+7. Dispatch the motion command to the driver. The driver blocks (bounded by `--timeout`) until it confirms the motion finished.
+8. Close the trace file if one was opened, then render the result.
 
 ## Safety Bounds
 
@@ -103,6 +105,7 @@ Homing and jogging are state-changing and physically move the toolhead or bed; b
 - The command waits for the driver to confirm the requested motion (homing or jog) has physically finished before reporting success.
 - If no motion-finished confirmation arrives before the timeout, the command fails with exit code `4` and error code `timeout`.
 - Unsupported driver capabilities fail with exit code `5`.
+- If the protocol trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
 
 ## Data Contracts
 
@@ -165,6 +168,8 @@ JSON home success example:
   }
 }
 ```
+
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
 
 JSON jog success example:
 
@@ -240,8 +245,8 @@ JSON precondition error example:
 ## Exit Codes
 
 - `0`: motion completed and confirmed.
-- `1`: general failure.
-- `2`: usage, profile, config, bounds, precondition, or confirmation error.
+- `1`: general failure, including trace write or close failure after protocol work starts.
+- `2`: usage, profile, config, bounds, precondition, confirmation error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: auth or secret error.
 - `4`: network or timeout error.
 - `5`: unsupported capability.
@@ -258,6 +263,7 @@ JSON precondition error example:
 - State precondition not met (printer not idle).
 - Confirmation declined.
 - Non-interactive session without `--yes`.
+- Protocol trace path already exists or cannot be created.
 - Access code not found in keychain.
 - TLS fingerprint not found in keychain (secure profile).
 - TLS fingerprint invalid in keychain (secure profile).
@@ -274,6 +280,7 @@ JSON precondition error example:
 - `--yes` only skips the interactive prompt; it does not skip the bounds or precondition checks.
 - Sanitize authentication, transport, and secret-store errors.
 - Sanitize protocol parser errors and do not expose raw protocol payloads.
+- Protocol trace output must contain sanitized motion-control summaries only. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
 - Do not perform discovery or scanning.
 
 ## Test Scenarios
@@ -301,6 +308,10 @@ JSON precondition error example:
 - Fails with unsupported capability for a driver that does not support motion control.
 - Uses command timeout override for the status check and the motion operation.
 - Emits stable JSON envelope.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before protocol work when the protocol trace file cannot be created.
+- Does not leak access code, raw auth payloads, raw MQTT payloads, raw command payloads, or TLS material in protocol trace output.
 - Does not leak secrets in output or logs.
 
 ## Non-goals

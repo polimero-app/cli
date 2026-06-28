@@ -15,10 +15,10 @@ This command is covered by ADR 0008 for top-level action command placement and A
 ## Syntax
 
 ```text
-polimero files roots <printer> [--timeout <duration>] [--insecure] [--output <format>]
-polimero files list <printer> [<device-path>...] [--recursive] [--timeout <duration>] [--insecure] [--output <format>]
-polimero files download <printer> <device-path> [--to <local-path>] [--overwrite] [--timeout <duration>] [--insecure] [--output <format>]
-polimero files upload <printer> <local-path> <device-path> [--overwrite] [--timeout <duration>] [--insecure] [--output <format>]
+polimero files roots <printer> [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
+polimero files list <printer> [<device-path>...] [--recursive] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
+polimero files download <printer> <device-path> [--to <local-path>] [--overwrite] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
+polimero files upload <printer> <local-path> <device-path> [--overwrite] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -34,6 +34,7 @@ polimero files upload <printer> <local-path> <device-path> [--overwrite] [--time
 - `--overwrite`: optional for `files download` and `files upload`. Allows replacing an existing destination file.
 - `--timeout <duration>`: optional. Overrides profile/default timeout for each device operation.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include FTPS connection phases, TLS fingerprint verification status, operation category, root name, normalized device path, listing entry counts, transfer byte counts, durations, parser warnings, and sanitized FTP status categories. It must not include access codes, FTP passwords, raw FTP command streams, transferred file contents, TLS private material, or unsanitized transport errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -107,6 +108,7 @@ Common behavior:
 - Human output sanitizes control characters in device and local paths.
 - JSON output uses the stable envelope and normal JSON string escaping.
 - File names and paths may appear in output and logs, but secrets must never appear.
+- When `--protocol-trace` is set, the trace file is created before connecting to printer storage and closed before command exit. If the trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
 
 `files roots` behavior:
 
@@ -245,6 +247,8 @@ JSON roots success example:
 }
 ```
 
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
+
 JSON list success example:
 
 ```json
@@ -366,8 +370,8 @@ JSON error example:
 ## Exit Codes
 
 - `0`: operation completed.
-- `1`: general failure, including local filesystem I/O errors.
-- `2`: usage, profile, config, path, destination-exists, or validation error.
+- `1`: general failure, including local filesystem I/O errors or trace write/close failure after protocol work starts.
+- `2`: usage, profile, config, path, destination-exists, validation error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: auth or secret error.
 - `4`: network or timeout error.
 - `5`: unsupported capability.
@@ -387,6 +391,7 @@ JSON error example:
 - Local source path is not a regular file.
 - Local destination exists without `--overwrite`.
 - Local destination directory is not writable.
+- Protocol trace path already exists or cannot be created.
 - Access code not found in keychain.
 - TLS fingerprint not found in keychain (secure profile).
 - TLS fingerprint invalid in keychain (secure profile).
@@ -409,6 +414,7 @@ JSON error example:
 - Do not delete, rename, move, or create directories.
 - Sanitize authentication, transport, path, and secret-store errors.
 - Sanitize protocol parser errors and do not expose raw protocol payloads.
+- Protocol trace output must contain sanitized file-operation summaries only. It must not include access codes, FTP passwords, raw auth payloads, raw FTP command streams, transferred file contents, TLS private material, or unsanitized transport errors.
 - Sanitize device and local paths before human terminal output.
 - Do not silently downgrade transport security.
 - Local download destinations must not overwrite files unless `--overwrite` is set.
@@ -447,6 +453,10 @@ JSON error example:
 - Fails with unsupported capability.
 - Uses command timeout override for keychain reads and file operations.
 - Emits stable JSON envelope.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before connecting when the protocol trace file cannot be created.
+- Does not leak access code, raw auth payloads, raw FTP command streams, transferred file contents, or TLS material in protocol trace output.
 - Does not leak secrets in output or logs.
 - Upload does not start a print.
 

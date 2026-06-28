@@ -15,7 +15,7 @@ Extended read-only telemetry is available via `--detailed`, following ADR 0011.
 ## Syntax
 
 ```text
-polimero status <name> [--detailed] [--timeout <duration>] [--insecure] [--output <format>]
+polimero status <name> [--detailed] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -27,6 +27,7 @@ polimero status <name> [--detailed] [--timeout <duration>] [--insecure] [--outpu
 - `--detailed`: optional. Includes extended telemetry (fans, time estimates, speed, Wi-Fi, lights, print metadata, stage, timelapse, g-code position, and brand-specific extensions such as AMS). Without this flag, only summary fields are returned.
 - `--timeout <duration>`: optional. Overrides profile/default timeout for this command.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include protocol phases, response key inventories, parser fallback decisions, safe scalar summaries, byte counts, and parser warnings. It must not include access codes, TLS private material, raw auth payloads, raw MQTT payloads, or unsanitized protocol errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -67,6 +68,7 @@ If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowe
 - Unsupported driver capabilities fail with exit code `5`.
 - `--detailed` does not change network behavior. The same pushall request and timeout apply. The flag controls parsing and output scope only.
 - Both human and JSON output respect `--detailed`: without it, only summary fields are returned.
+- When `--protocol-trace` is set, the trace file is created before connecting to the printer and closed before command exit. If the trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
 
 ## Status Data Contract
 
@@ -203,6 +205,8 @@ JSON success example:
   }
 }
 ```
+
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
 
 ### Detailed output (`--detailed`)
 
@@ -386,8 +390,8 @@ JSON timeout example:
 ## Exit Codes
 
 - `0`: status retrieved, including partial status with warnings.
-- `1`: general failure.
-- `2`: usage, profile, config, or validation error.
+- `1`: general failure, including trace write or close failure after protocol work starts.
+- `2`: usage, profile, config, validation error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: auth or secret error.
 - `4`: network or timeout error.
 - `5`: unsupported capability.
@@ -412,6 +416,7 @@ JSON timeout example:
 
 - Do not print or log access codes.
 - Do not include protocol payloads in debug logs unless redacted.
+- Protocol trace output must contain sanitized event summaries only. It must not include access codes, raw auth payloads, raw MQTT payloads, TLS private material, or unsanitized parser/transport errors.
 - Do not perform discovery or scanning.
 - Do not send state-changing commands.
 - Sanitize authentication and transport errors.
@@ -434,6 +439,10 @@ JSON timeout example:
 - Fails with unsupported capability.
 - Uses command timeout override.
 - Emits stable JSON envelope.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before connecting when the protocol trace file cannot be created.
+- Does not leak access codes, raw auth payloads, raw MQTT payloads, or TLS material in protocol trace output.
 - Does not leak secrets in output or logs.
 - Does not include extended fields without `--detailed`.
 

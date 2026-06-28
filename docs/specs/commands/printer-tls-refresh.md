@@ -11,7 +11,7 @@ Re-pin the TLS certificate fingerprint for a configured printer profile without 
 ## Syntax
 
 ```text
-polimero printer tls refresh <name> [--timeout <duration>] [--insecure] [--yes] [--output <format>]
+polimero printer tls refresh <name> [--timeout <duration>] [--insecure] [--yes] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -23,6 +23,7 @@ polimero printer tls refresh <name> [--timeout <duration>] [--insecure] [--yes] 
 - `--timeout <duration>`: optional. Overrides the profile/default timeout for this connection.
 - `--insecure`: skip TLS verification for this connection. Updates the profile to `insecure: true` and removes the stored fingerprint from the keychain.
 - `--yes`: bypass interactive confirmation.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include connection phase, SNI presence, captured fingerprint format status, durations, and sanitized TLS error categories. It must not include TLS private material, raw certificate data, access codes, keychain backend errors, or unsanitized TLS errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -70,6 +71,7 @@ In non-interactive mode, `--yes` is required. Without it, the command fails with
 - The command does not use the stored access code for the TLS handshake; only a TLS connection is needed to capture the leaf certificate fingerprint.
 - Default timeout is `10s`.
 - No retry.
+- When `--protocol-trace` is set, the trace file is created before the TLS connection or insecure-skip decision and closed before command exit. If the trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred. With `--insecure`, the trace may record that fingerprint capture was skipped.
 
 ## Output
 
@@ -104,6 +106,8 @@ JSON success example:
   }
 }
 ```
+
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
 
 JSON insecure example:
 
@@ -144,8 +148,8 @@ JSON error example:
 ## Exit Codes
 
 - `0`: fingerprint updated or insecure mode set.
-- `1`: general failure.
-- `2`: usage, confirmation, config, or missing profile error.
+- `1`: general failure, including trace write or close failure after protocol work starts.
+- `2`: usage, confirmation, config, missing profile error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: secret-store error.
 - `4`: connection or TLS error.
 
@@ -158,6 +162,7 @@ JSON error example:
 - Connection failed.
 - Timeout.
 - Invalid captured fingerprint.
+- Protocol trace path already exists or cannot be created.
 - Secret-store unavailable.
 - Fingerprint write fails.
 - Fingerprint removal fails when switching to insecure mode.
@@ -169,6 +174,7 @@ JSON error example:
 - Do not send state-changing commands to the printer.
 - Use a bounded network timeout.
 - Use bounded keychain operations.
+- Protocol trace output must contain sanitized TLS summaries only. It must not include TLS private material, raw certificate data, access codes, keychain backend errors, or unsanitized TLS errors.
 - Sanitize TLS, connection, and secret-store errors before output.
 
 ## Test Scenarios
@@ -183,6 +189,10 @@ JSON error example:
 - Fails with connection error.
 - Fails with timeout.
 - Emits stable JSON envelope for success and failure.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before connecting when the protocol trace file cannot be created.
+- Does not leak TLS private material, raw certificate data, access codes, or keychain backend details in protocol trace output.
 - Shows warning in human output when switching to insecure mode.
 - Does not touch the access code keychain entry.
 

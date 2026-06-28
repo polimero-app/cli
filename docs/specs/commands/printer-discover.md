@@ -11,13 +11,14 @@ Scan the local network using driver-supported local discovery protocols to find 
 ## Syntax
 
 ```text
-polimero printer discover [--driver <driver>] [--timeout <duration>] [--output <format>]
+polimero printer discover [--driver <driver>] [--timeout <duration>] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Flags
 
 - `--driver <driver>`: optional. Restrict discovery to a single driver. If omitted, all registered drivers that declare `Discovery: true` are queried. Returns exit code `5` when the named driver does not support discovery.
 - `--timeout <duration>`: optional. How long to wait for discovery results across the enabled protocols. Default: `5s`. Must parse as a Go duration and be greater than zero.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include enabled discovery protocols, listener/probe start results, result counts, deduplication decisions, sanitized record key inventories, durations, and sanitized error categories. It must not include raw mDNS packets, raw SSDP responses, raw UDP broadcast payloads, TLS material, secrets, or unsanitized transport errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Behavior
@@ -29,6 +30,7 @@ polimero printer discover [--driver <driver>] [--timeout <duration>] [--output <
 - If `--driver` is given and the driver does not support discovery, fails with exit code `5`.
 - If `--driver` names an unknown driver, fails with exit code `2`.
 - Does not connect to printers during discovery. No TLS, MQTT, or access-code use.
+- When `--protocol-trace` is set, the trace file is created before discovery listeners or probes are started and closed before command exit. If the trace file cannot be created, the command fails before discovery work with exit code `2`. If trace writing or closing fails after discovery work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
 
 ## Output
 
@@ -82,6 +84,8 @@ JSON success:
 }
 ```
 
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
+
 JSON success (none found):
 
 ```json
@@ -118,8 +122,8 @@ JSON error:
 ## Exit Codes
 
 - `0`: scan complete (including zero results).
-- `1`: general failure.
-- `2`: usage or config error (invalid timeout, unknown driver, config load failure).
+- `1`: general failure, including trace write or close failure after discovery work starts.
+- `2`: usage or config error (invalid timeout, unknown driver, config load failure, invalid/uncreatable protocol trace path before discovery work starts).
 - `4`: network error (discovery listeners or probes cannot be started).
 - `5`: named driver does not support discovery.
 
@@ -130,12 +134,14 @@ JSON error:
 - Invalid `--timeout` format.
 - Zero or negative `--timeout`.
 - Config directory or file unreadable.
+- Protocol trace path already exists or cannot be created.
 - Discovery listeners or probes cannot be started.
 
 ## Security Requirements
 
 - Do not connect to discovered printers.
 - Do not capture or log TLS data, access codes, or any secrets.
+- Protocol trace output must contain sanitized discovery summaries only. It must not include raw mDNS packets, raw SSDP responses, raw UDP broadcast payloads, TLS material, secrets, or unsanitized transport errors.
 - Human-readable output must sanitize control characters from unauthenticated discovery fields before writing to a terminal.
 - Discovery transport errors must be sanitized before human or JSON output.
 - Sanitize all network and discovery errors before display.
@@ -153,6 +159,10 @@ JSON error:
 - Emits stable JSON envelope for success and failure.
 - `printers` serializes as `[]` (not `null`) when empty.
 - JSON meta includes `durationMs`.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before starting discovery when the protocol trace file cannot be created.
+- Does not leak raw discovery packets or unsanitized transport errors in protocol trace output.
 
 ## Non-goals
 

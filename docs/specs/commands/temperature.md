@@ -17,7 +17,7 @@ Reading current temperatures is already covered by `status`; this command only s
 ## Syntax
 
 ```text
-polimero temperature set <printer> [--nozzle <celsius>] [--bed <celsius>] [--chamber <celsius>] [--yes] [--timeout <duration>] [--insecure] [--output <format>]
+polimero temperature set <printer> [--nozzle <celsius>] [--bed <celsius>] [--chamber <celsius>] [--yes] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -33,6 +33,7 @@ polimero temperature set <printer> [--nozzle <celsius>] [--bed <celsius>] [--cha
 - `--yes`: optional. Skips the interactive confirmation prompt. Required in non-interactive sessions (no controlling TTY).
 - `--timeout <duration>`: optional. Overrides profile/default timeout for the status check and the temperature operation.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include status precheck phases, temperature action phase names, capability decisions, selected portable states, acknowledged target categories, byte counts, durations, parser warnings, and sanitized error categories. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -70,11 +71,12 @@ The command must not prompt for new secrets.
 
 1. Resolve profile and load secrets.
 2. Validate that at least one target flag was given and that each given value is within its safety bound (exit code `2`, error code `unsafe_value`, on failure; no network call).
-3. Query current status via the driver-neutral status operation.
-4. Check the state precondition: current state must be `idle`. Fail with exit code `2` and error code `invalid_printer_state` otherwise.
-5. Prompt for confirmation unless `--yes` is set.
-6. Dispatch the temperature targets to the driver. The driver blocks (bounded by `--timeout`) until it confirms the printer acknowledged the new target value(s).
-7. Render the result.
+3. If `--protocol-trace` is set, create the trace file before any protocol work.
+4. Query current status via the driver-neutral status operation.
+5. Check the state precondition: current state must be `idle`. Fail with exit code `2` and error code `invalid_printer_state` otherwise.
+6. Prompt for confirmation unless `--yes` is set.
+7. Dispatch the temperature targets to the driver. The driver blocks (bounded by `--timeout`) until it confirms the printer acknowledged the new target value(s).
+8. Close the trace file if one was opened, then render the result.
 
 ## Safety Bounds
 
@@ -105,6 +107,7 @@ Setting a temperature target is state-changing and requires confirmation by defa
 - `TemperatureWrite: true` indicates the driver supports setting temperatures generally. If the connected model lacks a specific heater (most commonly chamber), the command fails with exit code `5` for that target even though the driver advertises `TemperatureWrite: true`.
 - If no acknowledgment arrives before the timeout, the command fails with exit code `4` and error code `timeout`.
 - Unsupported driver capabilities fail with exit code `5`.
+- If the protocol trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
 
 ## Data Contracts
 
@@ -161,6 +164,8 @@ JSON success example:
 }
 ```
 
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
+
 JSON bounds error example:
 
 ```json
@@ -207,8 +212,8 @@ JSON precondition error example:
 ## Exit Codes
 
 - `0`: temperature targets acknowledged.
-- `1`: general failure.
-- `2`: usage, profile, config, bounds, precondition, or confirmation error.
+- `1`: general failure, including trace write or close failure after protocol work starts.
+- `2`: usage, profile, config, bounds, precondition, confirmation error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: auth or secret error.
 - `4`: network or timeout error.
 - `5`: unsupported capability, including a target unsupported by the connected model.
@@ -224,6 +229,7 @@ JSON precondition error example:
 - State precondition not met (printer not idle).
 - Confirmation declined.
 - Non-interactive session without `--yes`.
+- Protocol trace path already exists or cannot be created.
 - Access code not found in keychain.
 - TLS fingerprint not found in keychain (secure profile).
 - TLS fingerprint invalid in keychain (secure profile).
@@ -241,6 +247,7 @@ JSON precondition error example:
 - `--yes` only skips the interactive prompt; it does not skip the bounds or precondition checks.
 - Sanitize authentication, transport, and secret-store errors.
 - Sanitize protocol parser errors and do not expose raw protocol payloads.
+- Protocol trace output must contain sanitized temperature-control summaries only. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
 - Do not perform discovery or scanning.
 
 ## Test Scenarios
@@ -269,6 +276,10 @@ JSON precondition error example:
 - Fails with unsupported capability for a driver that does not support temperature control.
 - Uses command timeout override for the status check and the temperature operation.
 - Emits stable JSON envelope.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before protocol work when the protocol trace file cannot be created.
+- Does not leak access code, raw auth payloads, raw MQTT payloads, raw command payloads, or TLS material in protocol trace output.
 - Does not leak secrets in output or logs.
 
 ## Non-goals

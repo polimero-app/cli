@@ -11,7 +11,7 @@ Start a local HTTP server that proxies the printer's camera feed and print the U
 ## Syntax
 
 ```text
-polimero camera stream <name> [--port <port>] [--timeout <duration>] [--insecure] [--output <format>]
+polimero camera stream <name> [--port <port>] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -23,6 +23,7 @@ polimero camera stream <name> [--port <port>] [--timeout <duration>] [--insecure
 - `--port <port>`: local HTTP server port. Default: `8080`. Must be a valid port number (1–65535). Fails with exit code `2` if the port is already in use.
 - `--timeout <duration>`: auto-stop after this duration. Optional. No default (runs until Ctrl+C). Must parse as a Go duration and be greater than zero.
 - `--insecure`: skip TLS verification for the camera endpoint for this invocation, regardless of the profile `insecure` setting.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include camera endpoint probes, selected protocol (`mjpeg` or `h264`), TLS fingerprint verification status, byte counts, durations, and sanitized stream error categories. It must not include access codes, TLS private material, raw camera frames, H.264 access units, MJPEG frame bytes, decoded images, or unsanitized camera protocol errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -60,6 +61,7 @@ If the TLS fingerprint is missing for a secure profile, the command fails with e
 - The HTTP server runs until Ctrl+C is received or `--timeout` elapses (exit code `0`).
 - If the stream errors after serving has started, the command exits with code `1`.
 - Default timeout used for the initial camera connection is the profile or command `--timeout` value.
+- When `--protocol-trace` is set, the trace file is created before connecting to the camera endpoint and closed before command exit. If the trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
 
 ## Protocol Details (Bambu LAN)
 
@@ -126,6 +128,8 @@ JSON output (printed once when server is ready, then blocks):
 }
 ```
 
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
+
 JSON error example:
 
 ```json
@@ -145,8 +149,8 @@ JSON error example:
 ## Exit Codes
 
 - `0`: clean exit (Ctrl+C or `--timeout` elapsed).
-- `1`: stream error after serving started.
-- `2`: usage, profile, config, or validation error.
+- `1`: stream error after serving started, including trace write or close failure after protocol work starts.
+- `2`: usage, profile, config, validation error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: auth or secret error.
 - `4`: network error (camera endpoint unreachable, both ports failed).
 - `5`: driver does not support `CameraStream`.
@@ -162,6 +166,7 @@ JSON error example:
 - TLS fingerprint mismatch (TOFU violation).
 - `--port` out of range or already in use.
 - `--timeout` invalid or zero.
+- Protocol trace path already exists or cannot be created.
 - Camera endpoint unreachable (both ports refused or timed out).
 - Driver does not support `CameraStream`.
 
@@ -171,6 +176,7 @@ JSON error example:
 - HTTP `/stream` is the only served path; all others return `404`.
 - Do not print or log access codes.
 - Do not include camera payloads or TLS material in debug logs unless redacted.
+- Protocol trace output must contain sanitized camera summaries only. It must not include access codes, raw auth payloads, TLS private material, raw camera frames, H.264 access units, MJPEG frame bytes, decoded images, or unsanitized camera protocol errors.
 - Sanitize authentication, transport, and camera protocol errors before CLI output.
 - Sanitize secret-store backend errors.
 - TLS fingerprint pinning follows ADR 0007 and applies to the camera endpoint.
@@ -193,6 +199,10 @@ JSON error example:
 - HTTP `/stream` serves correct `Content-Type` per format.
 - HTTP server returns `404` for all paths other than `/stream`.
 - Emits stable JSON envelope when `--output json`.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before connecting when the protocol trace file cannot be created.
+- Does not leak access code, raw auth payloads, camera payloads, decoded images, or TLS material in protocol trace output.
 - Does not leak access code or TLS material in output or logs.
 
 ## Non-goals

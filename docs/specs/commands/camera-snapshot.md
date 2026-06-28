@@ -13,7 +13,7 @@ This is a subcommand of the `camera` top-level action group, which consumes prin
 ## Syntax
 
 ```text
-polimero camera snapshot <name> [--to <path>] [--overwrite] [--timeout <duration>] [--insecure] [--output <format>]
+polimero camera snapshot <name> [--to <path>] [--overwrite] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -26,6 +26,7 @@ polimero camera snapshot <name> [--to <path>] [--overwrite] [--timeout <duration
 - `--overwrite`: optional. Allows replacing an existing destination file.
 - `--timeout <duration>`: optional. Overrides profile/default timeout for the camera connection and frame capture.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include camera endpoint probes, selected protocol (`mjpeg` or `h264`), TLS fingerprint verification status, capture/decode phase names, byte counts, durations, and sanitized error categories. It must not include access codes, TLS private material, raw camera frames, H.264 access units, MJPEG frame bytes, decoded images, JPEG output bytes, or unsanitized camera protocol errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Auto-Generated File Name
@@ -75,6 +76,7 @@ If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowe
 - Default timeout is `10s`.
 - No retry is performed by default.
 - No discovery or scanning is performed.
+- When `--protocol-trace` is set, the trace file is created before connecting to the camera endpoint and closed before command exit. If the trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
 
 ### Frame Capture by Protocol
 
@@ -127,6 +129,8 @@ JSON success example:
 }
 ```
 
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
+
 JSON error example:
 
 ```json
@@ -146,8 +150,8 @@ JSON error example:
 ## Exit Codes
 
 - `0`: snapshot captured and saved.
-- `1`: general failure, including local filesystem I/O errors or frame decode errors.
-- `2`: usage, profile, config, path, destination-exists, or validation error.
+- `1`: general failure, including local filesystem I/O errors, frame decode errors, or trace write/close failure after protocol work starts.
+- `2`: usage, profile, config, path, destination-exists, validation error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: auth or secret error.
 - `4`: network or timeout error (camera endpoint unreachable, frame capture timed out).
 - `5`: driver does not support `CameraSnapshot`.
@@ -169,6 +173,7 @@ JSON error example:
 - Destination file exists without `--overwrite`.
 - Destination directory is not writable.
 - Destination path is invalid.
+- Protocol trace path already exists or cannot be created.
 - Driver does not support `CameraSnapshot`.
 
 ## Security Requirements
@@ -176,6 +181,7 @@ JSON error example:
 - The HTTP server is not used; no network listener is started.
 - Do not print or log access codes.
 - Do not include camera payloads or TLS material in debug logs unless redacted.
+- Protocol trace output must contain sanitized camera summaries only. It must not include access codes, raw auth payloads, TLS private material, raw camera frames, H.264 access units, MJPEG frame bytes, decoded images, JPEG output bytes, or unsanitized camera protocol errors.
 - Sanitize authentication, transport, and camera protocol errors before CLI output.
 - Sanitize secret-store backend errors.
 - TLS fingerprint pinning follows ADR 0007 and applies to the camera endpoint.
@@ -235,6 +241,10 @@ Contract:
 - Emits stable JSON envelope when `--output json`.
 - JSON `data.sizeBytes` matches actual written file size.
 - JSON `data.protocol` reflects the source protocol used.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before connecting when the protocol trace file cannot be created.
+- Does not leak access code, raw auth payloads, camera payloads, decoded images, JPEG output bytes, or TLS material in protocol trace output.
 - Does not leak access code or TLS material in output or logs.
 
 ## Non-goals

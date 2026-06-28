@@ -15,10 +15,10 @@ This command is covered by ADR 0008 for top-level action command placement and A
 ## Syntax
 
 ```text
-polimero jobs start <printer> <device-path> [--plate <n>] [--skip-leveling] [--yes] [--timeout <duration>] [--insecure] [--output <format>]
-polimero jobs pause <printer> [--yes] [--timeout <duration>] [--insecure] [--output <format>]
-polimero jobs resume <printer> [--yes] [--timeout <duration>] [--insecure] [--output <format>]
-polimero jobs cancel <printer> [--yes] [--timeout <duration>] [--insecure] [--output <format>]
+polimero jobs start <printer> <device-path> [--plate <n>] [--skip-leveling] [--yes] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
+polimero jobs pause <printer> [--yes] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
+polimero jobs resume <printer> [--yes] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
+polimero jobs cancel <printer> [--yes] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -33,6 +33,7 @@ polimero jobs cancel <printer> [--yes] [--timeout <duration>] [--insecure] [--ou
 - `--yes`: optional. Skips the interactive confirmation prompt. Required in non-interactive sessions (no controlling TTY).
 - `--timeout <duration>`: optional. Overrides profile/default timeout for the status check and the job action.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include status precheck phases, job action phase names, capability decisions, selected portable states, acknowledgment state, byte counts, durations, parser warnings, and sanitized error categories. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -72,11 +73,12 @@ Every subcommand follows this sequence:
 
 1. Resolve profile and load secrets.
 2. Validate `<device-path>` format for `jobs start` (exit code `2` on malformed input; no network call).
-3. Query current status via the driver-neutral status operation.
-4. Check the state precondition for the subcommand (see below). Fail with exit code `2` and error code `invalid_printer_state` if not met.
-5. Prompt for confirmation unless `--yes` is set.
-6. Dispatch the job action to the driver. The driver blocks (bounded by `--timeout`) until it confirms the resulting state.
-7. Render the result.
+3. If `--protocol-trace` is set, create the trace file before any protocol work.
+4. Query current status via the driver-neutral status operation.
+5. Check the state precondition for the subcommand (see below). Fail with exit code `2` and error code `invalid_printer_state` if not met.
+6. Prompt for confirmation unless `--yes` is set.
+7. Dispatch the job action to the driver. The driver blocks (bounded by `--timeout`) until it confirms the resulting state.
+8. Close the trace file if one was opened, then render the result.
 
 ## State Preconditions
 
@@ -109,6 +111,7 @@ All four subcommands are state-changing and require confirmation by default:
 - If the confirmed resulting state contradicts the expected transition, the command fails with exit code `1` and error code `job_action_failed`, reporting the unexpected state in `error.details`.
 - If no confirming state update arrives before the timeout, the command fails with exit code `4` and error code `timeout`.
 - Unsupported driver capabilities fail with exit code `5`.
+- If the protocol trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
 
 ## Data Contracts
 
@@ -171,6 +174,8 @@ JSON success example:
 }
 ```
 
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
+
 JSON precondition error example:
 
 ```json
@@ -217,8 +222,8 @@ JSON action-failed error example:
 ## Exit Codes
 
 - `0`: job action completed and confirmed.
-- `1`: general failure, including `job_action_failed`.
-- `2`: usage, profile, config, device-path, precondition, or confirmation error.
+- `1`: general failure, including `job_action_failed` or trace write/close failure after protocol work starts.
+- `2`: usage, profile, config, device-path, precondition, confirmation error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: auth or secret error.
 - `4`: network or timeout error.
 - `5`: unsupported capability.
@@ -235,6 +240,7 @@ JSON action-failed error example:
 - State precondition not met for the requested action.
 - Confirmation declined.
 - Non-interactive session without `--yes`.
+- Protocol trace path already exists or cannot be created.
 - Access code not found in keychain.
 - TLS fingerprint not found in keychain (secure profile).
 - TLS fingerprint invalid in keychain (secure profile).
@@ -253,6 +259,7 @@ JSON action-failed error example:
 - `jobs start` must not upload a file; it only starts a print from an existing device path.
 - Sanitize authentication, transport, and secret-store errors.
 - Sanitize protocol parser errors and do not expose raw protocol payloads.
+- Protocol trace output must contain sanitized job-control summaries only. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
 - Do not perform discovery or scanning.
 
 ## Test Scenarios
@@ -278,6 +285,10 @@ JSON action-failed error example:
 - Skips TLS fingerprint check when `--insecure` flag is passed.
 - Fails with unsupported capability for a driver that does not support the requested action.
 - Uses command timeout override for the status check and the job action.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before protocol work when the protocol trace file cannot be created.
+- Does not leak access code, raw auth payloads, raw MQTT payloads, raw command payloads, or TLS material in protocol trace output.
 - Emits stable JSON envelope.
 - Does not leak secrets in output or logs.
 

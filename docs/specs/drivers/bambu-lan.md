@@ -340,11 +340,29 @@ Map Bambu JSON fields (inside the `print` object of the report message) to porta
 
 Numeric Bambu fields consumed by this status mapping may arrive as JSON numbers or numeric strings. The driver must parse both forms for summary fields and detailed fields, including fan speeds, time estimates, speed/stage values, file size, bed type identifiers, g-code line numbers, HMS codes, printer error code zero values, and AMS IDs, humidity, temperature, remaining percentage, and nozzle temperature range fields.
 
-For H-series compatibility, if `print.chamber_temper` is absent, the driver may use an alternate current chamber temperature field such as `print.chamber_temp`, `print.chamber_temperature`, or a nested `print.chamber.temp`/`temperature` value. Target, fan, light, speed, state, and mode fields must not be used as current chamber temperature.
+For H-series compatibility, if `print.chamber_temper` is absent, the driver may use an alternate current chamber temperature field such as `print.chamber_temp`, `print.chamber_temperature`, a nested `print.chamber.temp`/`temperature` value, or an equivalent top-level chamber temperature field. Target, fan, light, speed, state, and mode fields must not be used as current chamber temperature.
 
 If a consumed field is present with an unsupported JSON shape, return partial status with a sanitized `status_field_type_mismatch` warning instead of silently dropping the field.
 
 Treat absent fields as unavailable, not as zero values. Implementations may also accept `print.mc_layer_num` as a compatibility fallback for `print.layer_num`, but `print.layer_num` takes precedence when both are present.
+
+## Protocol Trace Diagnostics
+
+When a protocol trace sink is present in `context.Context`, the Bambu LAN driver emits sanitized events for protocol phases and parser decisions.
+
+Allowed trace data:
+
+- MQTT status and control phases: connect, TLS fingerprint verification result, subscribe topic template, publish command name, report byte count, response key inventory, selected `gcode_state`, parser fallback decisions, parser warnings, action acknowledgment state, and sanitized error categories.
+- FTPS file phases: control/data connection phases, TLS fingerprint verification result, command category (`list`, `download`, `upload`), root name, normalized driver-neutral device path, transfer byte counts, listing entry counts, parser warnings, and sanitized FTP status categories.
+- Camera phases: probed endpoint kind (`mjpeg` or `h264`), selected protocol, TLS fingerprint verification result, frame/stream byte counts, decode phase names, timeout categories, and sanitized codec or camera protocol errors.
+- Discovery phases: enabled protocols, listener/probe start results, result counts, deduplication decisions, and sanitized record key inventories.
+- TLS refresh phases: connection attempt, SNI presence, captured fingerprint format status, and sanitized TLS error categories.
+
+Forbidden trace data:
+
+- LAN access code, FTP password, MQTT password, raw MQTT CONNECT payloads, raw MQTT report payloads, raw outgoing MQTT command payloads, raw FTP command streams, raw FTP file contents, raw camera frames, decoded images, TLS private material, private keys, certificates beyond fingerprint metadata, and unsanitized transport or parser errors.
+
+Trace output may include printer serial numbers, configured host names or addresses, file names, job names, and operational metadata because those values already appear in command output or profile data. It must still sanitize terminal control characters and JSON strings normally.
 
 ### Error Code Mapping
 

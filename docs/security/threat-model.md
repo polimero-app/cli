@@ -17,6 +17,7 @@ Cloud service integrations are out of scope for the first implementation.
 - User trust in command output.
 - Local config integrity.
 - Local logs.
+- Protocol trace files.
 
 ## Trust Boundaries
 
@@ -129,6 +130,24 @@ Controls:
 - Download does not overwrite local files unless `--overwrite` is set.
 - Upload stores files only and must not start prints.
 - Access codes and transferred file contents are never logged.
+
+### Protocol Trace Disclosure
+
+Risks:
+
+- Trace files may aggregate printer host names, serial numbers, job names, file names, paths, parser warnings, and protocol-phase metadata.
+- A trace implementation could accidentally capture raw MQTT, FTP, discovery, camera, or authentication payloads.
+- A trace path could overwrite an existing local file if opened unsafely.
+- Automation might publish trace files to issue trackers without realizing they contain operational metadata.
+
+Controls:
+
+- Protocol tracing is opt-in through `--protocol-trace <file>` on commands that perform printer protocol work.
+- Trace files are created as new files only and must not overwrite existing paths.
+- POSIX-like implementations create trace files with owner-only read/write permissions (`0600`).
+- Trace events contain sanitized summaries, parser decisions, response key inventories, byte counts, and error categories, not raw protocol payloads.
+- Access codes, passwords, raw auth payloads, TLS private material, transferred file contents, and camera frames are forbidden in trace files.
+- Trace contents are never embedded in human output, JSON output, logs, or errors.
 
 ### Supply Chain Risk
 

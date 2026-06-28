@@ -11,7 +11,7 @@ Create a named printer profile and store any required printer secret in the OS k
 ## Syntax
 
 ```text
-polimero printer add <name> --driver <driver> --host <host> [--serial <serial>] [--timeout <duration>] [--access-code-file <path>] [--insecure] [--output <format>]
+polimero printer add <name> --driver <driver> --host <host> [--serial <serial>] [--timeout <duration>] [--access-code-file <path>] [--insecure] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -35,6 +35,7 @@ Profile names must:
 - `--timeout <duration>`: optional. Default: `10s`. Must parse as a Go duration and be greater than zero.
 - `--access-code-file <path>`: optional. Reads a secret from a file.
 - `--insecure`: optional. Skips TLS verification and MQTT auth check. Profile is stored with `insecure: true`. No TLS fingerprint is stored. Human output includes a warning.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include TLS/MQTT connectivity phases, fingerprint capture status, auth result category, byte counts, durations, and sanitized error categories. It must not include the access code, raw MQTT auth payloads, TLS private material, keychain backend errors, or unsanitized transport errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 The command must not provide a `--access-code` flag.
@@ -101,6 +102,8 @@ The command performs a driver-defined connectivity check before storing the prof
 For `--driver bambu-lan` (non-insecure): establishes a full MQTT connection over TLS to the printer. During the TLS handshake, the leaf certificate fingerprint is captured (Trust On First Use per ADR 0007). The MQTT CONNECT packet is sent with username `bblp` and the supplied access code as password. A non-zero CONNACK return code is treated as an authentication failure (exit code `3`). The `--insecure` flag skips TLS verification and the MQTT auth check entirely; the profile is stored without a fingerprint.
 
 Other drivers define their own connectivity check and transport security requirements in their driver spec.
+
+When `--protocol-trace` is set, the trace file is created before the connectivity check or insecure-skip decision and closed before command exit. If the trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred. With `--insecure`, the trace may record that the connectivity check was skipped, but it must not record the access code source contents or keychain backend details.
 
 Execution order for `bambu-lan` (non-insecure):
 
@@ -172,6 +175,8 @@ JSON success example:
 }
 ```
 
+When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
+
 JSON insecure example:
 
 ```json
@@ -217,8 +222,8 @@ JSON error example:
 ## Exit Codes
 
 - `0`: profile and secret stored.
-- `1`: general failure.
-- `2`: usage, validation, config, or duplicate profile error.
+- `1`: general failure, including trace write or close failure after protocol work starts.
+- `2`: usage, validation, config, duplicate profile error, or invalid/uncreatable protocol trace path before protocol work starts.
 - `3`: authentication failure (MQTT auth rejected) or secret-store error.
 - `4`: network or TLS connection failure.
 
@@ -236,6 +241,7 @@ JSON error example:
 - Missing access code in non-interactive mode.
 - Empty access code.
 - Access-code file is missing, not regular, too large, or too broadly permissioned.
+- Protocol trace path already exists or cannot be created.
 - TLS or network connection failed (without `--insecure`).
 - MQTT authentication rejected (bad access code).
 - OS keychain unavailable.
@@ -250,6 +256,7 @@ JSON error example:
 - Avoid command-line secret flags.
 - Fail closed when the keychain is unavailable.
 - Sanitize authentication, transport, and secret-store errors.
+- Protocol trace output must contain sanitized event summaries only. It must not include the access code, raw auth payloads, TLS private material, raw MQTT payloads, keychain backend errors, or unsanitized transport errors.
 - Use TOFU TLS per ADR 0007 unless `--insecure` is explicitly passed.
 - Warn in human output when `--insecure` is used.
 - Use atomic config writes where practical.
@@ -271,6 +278,10 @@ JSON error example:
 - Fails closed when keychain is unavailable.
 - Does not write access code or TLS fingerprint into YAML config.
 - Emits stable JSON envelope for success and failure.
+- Writes sanitized protocol trace events when `--protocol-trace` is set.
+- Refuses to overwrite an existing protocol trace file.
+- Fails before connecting when the protocol trace file cannot be created.
+- Does not leak access code, raw auth payloads, raw MQTT payloads, TLS material, or keychain backend details in protocol trace output.
 - Emits `insecure: false`, `tlsFingerprint`, and `serial` in JSON on secure success.
 - Emits `insecure: true`, `tlsFingerprint: null`, and `serial` in JSON on insecure success.
 - Rolls back access code keychain entry if TLS fingerprint write fails.

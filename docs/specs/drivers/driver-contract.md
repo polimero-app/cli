@@ -93,6 +93,28 @@ Drivers must not:
 - Persist secrets.
 - Return secrets in errors.
 
+## Protocol Trace Diagnostics
+
+Commands may attach an optional protocol trace sink to `context.Context` when the user passes `--protocol-trace <file>`.
+
+Drivers must:
+
+- Treat an absent trace sink as a no-op.
+- Emit only sanitized JSON-serializable event fields.
+- Use stable event names for protocol phases, parser decisions, fallback decisions, warnings, and sanitized errors.
+- Include enough safe metadata for debugging: driver name, operation, phase, transport, duration, byte counts, selected protocol, capability decisions, response key inventories, and safe scalar summaries.
+- Respect context cancellation; trace emission must not keep protocol operations alive after cancellation.
+
+Drivers must not:
+
+- Change operation method signatures only to pass trace state.
+- Require a trace sink for normal operation.
+- Emit access codes, passwords, tokens, private keys, TLS private material, raw authentication payloads, raw protocol payloads, raw file contents, or raw camera frames.
+- Emit unsanitized backend, parser, TLS, FTP, MQTT, RTSP, discovery, or secret-store errors.
+- Treat trace emission failure as recoverable inside the driver; write and close failures are owned by the command layer.
+
+Trace events are diagnostics, not driver results. A driver must still return typed results, typed errors, and partial-data warnings through the normal operation contract.
+
 ## Status Operation
 
 The driver-neutral status operation returns:
