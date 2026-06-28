@@ -1111,43 +1111,76 @@ func TestParseReport_H2C_TypeMismatchFields(t *testing.T) {
 func TestParseReport_H2C_ChamberTemperatureAliases(t *testing.T) {
 	tests := []struct {
 		name string
-		body string
+		data string
 		want float64
 	}{
 		{
 			name: "chamber_temp",
-			body: `"chamber_temp":"32.5"`,
+			data: `{"print":{
+				"gcode_state":"IDLE",
+				"nozzle_temper":31.0,
+				"bed_temper":23.0,
+				"mc_percent":0,
+				"hms":[],
+				"chamber_temp":"32.5"
+			}}`,
 			want: 32.5,
 		},
 		{
 			name: "chamber_temperature",
-			body: `"chamber_temperature":33.0`,
+			data: `{"print":{
+				"gcode_state":"IDLE",
+				"nozzle_temper":31.0,
+				"bed_temper":23.0,
+				"mc_percent":0,
+				"hms":[],
+				"chamber_temperature":33.0
+			}}`,
 			want: 33.0,
 		},
 		{
 			name: "nested chamber temp",
-			body: `"chamber":{"temp":"34.5"}`,
+			data: `{"print":{
+				"gcode_state":"IDLE",
+				"nozzle_temper":31.0,
+				"bed_temper":23.0,
+				"mc_percent":0,
+				"hms":[],
+				"chamber":{"temp":"34.5"}
+			}}`,
 			want: 34.5,
 		},
 		{
+			name: "top-level chamber temp",
+			data: `{
+				"print":{
+					"gcode_state":"IDLE",
+					"nozzle_temper":31.0,
+					"bed_temper":23.0,
+					"mc_percent":0,
+					"hms":[]
+				},
+				"chamber_temp":"35.5"
+			}`,
+			want: 35.5,
+		},
+		{
 			name: "H2C device.ctc.info.temp",
-			body: `"device":{"ctc":{"info":{"temp":27},"state":0},"bed":{"info":{"temp":27},"state":0},"bed_temp":27}`,
+			data: `{"print":{
+				"gcode_state":"IDLE",
+				"nozzle_temper":34.0,
+				"bed_temper":27.0,
+				"mc_percent":100,
+				"hms":[],
+				"device":{"ctc":{"info":{"temp":27},"state":0},"bed":{"info":{"temp":27},"state":0},"bed_temp":27}
+			}}`,
 			want: 27.0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			data := []byte(`{"print":{
-				"gcode_state":"IDLE",
-				"nozzle_temper":31.0,
-				"bed_temper":23.0,
-				"mc_percent":0,
-				"hms":[],
-				` + tt.body + `
-			}}`)
-
-			result, err := parseReport(data)
+			result, err := parseReport([]byte(tt.data))
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -1326,6 +1359,8 @@ func TestParseReport_H2C_IpcamTimelapse(t *testing.T) {
 }
 
 func TestParseReport_H2C_TopLevelTimelapsePreferred(t *testing.T) {
+	// When both ipcam_record_timelapse and ipcam.timelapse are present,
+	// the top-level field takes priority.
 	data := []byte(`{"print":{
 		"gcode_state":"PRINTING",
 		"nozzle_temper":215.0,"bed_temper":60.0,
@@ -1346,6 +1381,266 @@ func TestParseReport_H2C_TopLevelTimelapsePreferred(t *testing.T) {
 	}
 }
 
+func TestParseReport_A1Mini_FullPayload(t *testing.T) {
+	// Real A1 Mini (Georgia) payload structure.
+	data := []byte(`{"print":{"nozzle_temper":24.375,"nozzle_target_temper":0,"bed_temper":24.90625,"bed_target_temper":0,"chamber_temper":5,"mc_print_stage":"1","heatbreak_fan_speed":"0","cooling_fan_speed":"0","big_fan1_speed":"0","big_fan2_speed":"0","mc_percent":100,"mc_remaining_time":0,"spd_mag":100,"spd_lvl":2,"gcode_state":"FINISH","gcode_file_prepare_percent":"100","subtask_name":"Silksong_Cog_Fly_-_Articulated_Wings_+_Head.gcode.3mf","gcode_file":"","stg":[],"stg_cur":255,"print_type":"idle","layer_num":168,"total_layer_num":168,"nozzle_diameter":"0.4","nozzle_type":"stainless_steel","wifi_signal":"-57dBm","ipcam":{"ipcam_dev":"1","ipcam_record":"enable","timelapse":"disable","resolution":"1080p","tutk_server":"disable","mode_bits":3},"hms":[],"ams":{"ams":[],"ams_exist_bits":"0","tray_exist_bits":"0","tray_is_bbl_bits":"0","tray_tar":"255","tray_now":"254","tray_pre":"254","tray_read_done_bits":"0","tray_reading_bits":"0","version":4,"insert_flag":true,"power_on_flag":false},"vt_tray":{"id":"254","tag_uid":"0000000000000000","tray_id_name":"","tray_info_idx":"GFL99","tray_type":"PLA","tray_sub_brands":"","tray_color":"5A657BFF","tray_weight":"0","tray_diameter":"0.00","tray_temp":"0","tray_time":"0","bed_temp_type":"0","bed_temp":"0","nozzle_temp_max":"240","nozzle_temp_min":"190","xcam_info":"000000000000000000000000","tray_uuid":"00000000000000000000000000000000","remain":0,"k":0.019999999552965164,"n":1,"cali_idx":-1},"lights_report":[{"node":"chamber_light","mode":"off"}],"command":"push_status","msg":0,"sequence_id":"3582"}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// State.
+	if result.State != "idle" {
+		t.Errorf("State = %q, want idle", result.State)
+	}
+
+	// Temperatures.
+	if result.Temperatures == nil {
+		t.Fatal("expected temperatures")
+	}
+	if result.Temperatures.Nozzle == nil || result.Temperatures.Nozzle.CurrentCelsius != 24.375 {
+		t.Errorf("Nozzle = %+v, want 24.375", result.Temperatures.Nozzle)
+	}
+	if result.Temperatures.Bed == nil || result.Temperatures.Bed.CurrentCelsius != 24.90625 {
+		t.Errorf("Bed = %+v, want 24.90625", result.Temperatures.Bed)
+	}
+	if result.Temperatures.Chamber == nil || result.Temperatures.Chamber.CurrentCelsius != 5 {
+		t.Errorf("Chamber = %+v, want 5", result.Temperatures.Chamber)
+	}
+
+	// Progress.
+	if result.Progress == nil {
+		t.Fatal("expected progress")
+	}
+	if result.Progress.Percent != 100 {
+		t.Errorf("Percent = %d, want 100", result.Progress.Percent)
+	}
+	if result.Progress.CurrentLayer == nil || *result.Progress.CurrentLayer != 168 {
+		t.Errorf("CurrentLayer = %v, want 168", result.Progress.CurrentLayer)
+	}
+
+	// Speed level.
+	if result.SpeedLevel == nil || *result.SpeedLevel != "standard" {
+		t.Errorf("SpeedLevel = %v, want standard", result.SpeedLevel)
+	}
+
+	// Stage: stg_cur=255 should be nil (no active stage).
+	if result.Stage != nil {
+		t.Errorf("Stage = %v, want nil for stg_cur=255", *result.Stage)
+	}
+
+	// Wi-Fi.
+	if result.Wifi == nil || result.Wifi.SignalDbm != -57 {
+		t.Errorf("Wifi = %+v, want -57 dBm", result.Wifi)
+	}
+
+	// Lights.
+	if result.Lights == nil || result.Lights["chamber_light"] != "off" {
+		t.Errorf("Lights = %+v, want chamber_light=off", result.Lights)
+	}
+
+	// Timelapse from nested ipcam.
+	if result.Timelapse == nil {
+		t.Fatal("expected timelapse from ipcam.timelapse")
+	}
+	if result.Timelapse.Recording {
+		t.Error("expected timelapse recording=false")
+	}
+
+	// PrintMeta: nozzle diameter should be present.
+	if result.PrintMeta == nil {
+		t.Fatal("expected print meta")
+	}
+	if result.PrintMeta.NozzleDiameter == nil || *result.PrintMeta.NozzleDiameter != 0.4 {
+		t.Errorf("NozzleDiameter = %v, want 0.4", result.PrintMeta.NozzleDiameter)
+	}
+
+	// Extensions: vt_tray should produce an AMS unit with PLA filament.
+	if result.Extensions == nil {
+		t.Fatal("expected extensions from vt_tray")
+	}
+	ext, ok := result.Extensions["bambu-lan"]
+	if !ok {
+		t.Fatal("expected bambu-lan extension")
+	}
+	bambuExt, ok := ext.(*driver.BambuExtension)
+	if !ok || bambuExt.AMS == nil {
+		t.Fatal("expected AMS data from vt_tray")
+	}
+	if len(bambuExt.AMS.Units) != 1 {
+		t.Fatalf("AMS units = %d, want 1 (external spool)", len(bambuExt.AMS.Units))
+	}
+	vtUnit := bambuExt.AMS.Units[0]
+	if vtUnit.ID != 254 {
+		t.Errorf("vt_tray unit ID = %d, want 254", vtUnit.ID)
+	}
+	if len(vtUnit.Trays) != 1 {
+		t.Fatalf("vt_tray trays = %d, want 1", len(vtUnit.Trays))
+	}
+	if vtUnit.Trays[0].FilamentType == nil || *vtUnit.Trays[0].FilamentType != "PLA" {
+		t.Errorf("vt_tray filament = %v, want PLA", vtUnit.Trays[0].FilamentType)
+	}
+	if vtUnit.Trays[0].Color == nil || *vtUnit.Trays[0].Color != "5A657BFF" {
+		t.Errorf("vt_tray color = %v, want 5A657BFF", vtUnit.Trays[0].Color)
+	}
+	if vtUnit.Trays[0].NozzleTempMin == nil || *vtUnit.Trays[0].NozzleTempMin != 190 {
+		t.Errorf("vt_tray nozzle min = %v, want 190", vtUnit.Trays[0].NozzleTempMin)
+	}
+	if vtUnit.Trays[0].NozzleTempMax == nil || *vtUnit.Trays[0].NozzleTempMax != 240 {
+		t.Errorf("vt_tray nozzle max = %v, want 240", vtUnit.Trays[0].NozzleTempMax)
+	}
+
+	// No warnings about chamber temperature (it's present with value 5).
+	for _, w := range result.Warnings {
+		if w.Code == "chamber_temperature_unavailable" {
+			t.Errorf("unexpected chamber_temperature_unavailable warning")
+		}
+	}
+}
+
+func TestParseReport_H2C_FullPayload(t *testing.T) {
+	// Real H2C (Dakota) payload structure.
+	data := []byte(`{"print":{"gcode_state":"FINISH","nozzle_temper":34.0,"nozzle_target_temper":0.0,"bed_temper":27.0,"bed_target_temper":0.0,"mc_percent":100,"mc_remaining_time":0,"hms":[],"subtask_name":"Chaveiro_Flex_AstroBot","gcode_file":"/data/Metadata/plate_1.gcode","layer_num":18,"total_layer_num":18,"heatbreak_fan_speed":"0","cooling_fan_speed":"0","big_fan1_speed":"0","big_fan2_speed":"0","spd_lvl":2,"spd_mag":100,"wifi_signal":"-67dBm","nozzle_diameter":"0.4","nozzle_type":"HS01-0.4","stg":[79,29,13,74,72,4,54,39,8,14,1,3],"stg_cur":-1,"remain_time":0,"ipcam":{"agora_service":"disable","brtc_service":"enable","ipcam_dev":"1","ipcam_record":"enable","resolution":"1080p","rtsp_url":"rtsps://10.20.20.10:322/streaming/live/1","timelapse":"disable","tutk_server":"disable"},"lights_report":[{"mode":"off","node":"chamber_light"},{"mode":"flashing","node":"work_light"},{"mode":"off","node":"chamber_light2"}],"device":{"ctc":{"info":{"temp":27},"state":0},"bed":{"info":{"temp":27},"state":0},"bed_temp":27,"extruder":{"info":[{"id":0,"temp":34},{"id":1,"temp":30}],"state":33042},"nozzle":{"info":[{"color_m":"46A8F9FF","diameter":0.4,"fila_id":"GFL96","id":16,"p_t":1716,"sn":"20D06A5A2424071","stat":0,"tm":350,"type":"HS01","wear":128.0}],"src_id":17,"state":0,"tar_id":17},"plate":{"base":6,"cur_id":"P0102","mat":1,"tar_id":""}},"ams":{"ams":[{"humidity":"2","humidity_raw":"32","id":"0","temp":"28.4","tray":[{"id":"0","state":10},{"id":"1","state":10},{"id":"2","state":10},{"id":"3","state":10}]},{"humidity":"2","humidity_raw":"33","id":"1","temp":"26.2","tray":[{"id":"0","state":0},{"id":"1","state":0},{"id":"2","state":10},{"id":"3","state":10}]},{"humidity":"1","humidity_raw":"50","id":"128","temp":"24.9","tray":[{"id":"0","state":10}]}],"ams_exist_bits":"13","tray_now":"255","tray_pre":"255","tray_tar":"255","version":9101},"vir_slot":[{"id":"254","tray_color":"00000000","tray_type":"","nozzle_temp_max":"0","nozzle_temp_min":"0","remain":0},{"id":"255","tray_color":"00000000","tray_type":"","nozzle_temp_max":"0","nozzle_temp_min":"0","remain":0}],"mc_print_error_code":"0"}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// State.
+	if result.State != "idle" {
+		t.Errorf("State = %q, want idle", result.State)
+	}
+
+	// Temperatures.
+	if result.Temperatures == nil {
+		t.Fatal("expected temperatures")
+	}
+	if result.Temperatures.Nozzle == nil || result.Temperatures.Nozzle.CurrentCelsius != 34.0 {
+		t.Errorf("Nozzle = %+v, want 34.0", result.Temperatures.Nozzle)
+	}
+	if result.Temperatures.Bed == nil || result.Temperatures.Bed.CurrentCelsius != 27.0 {
+		t.Errorf("Bed = %+v, want 27.0", result.Temperatures.Bed)
+	}
+	// Chamber temp from device.ctc.info.temp.
+	if result.Temperatures.Chamber == nil {
+		t.Fatal("expected chamber temperature from device.ctc.info.temp")
+	}
+	if result.Temperatures.Chamber.CurrentCelsius != 27.0 {
+		t.Errorf("Chamber = %v, want 27.0", result.Temperatures.Chamber.CurrentCelsius)
+	}
+
+	// Progress.
+	if result.Progress == nil {
+		t.Fatal("expected progress")
+	}
+	if result.Progress.Percent != 100 {
+		t.Errorf("Percent = %d, want 100", result.Progress.Percent)
+	}
+	if result.Progress.CurrentLayer == nil || *result.Progress.CurrentLayer != 18 {
+		t.Errorf("CurrentLayer = %v, want 18", result.Progress.CurrentLayer)
+	}
+	if result.Progress.TotalLayers == nil || *result.Progress.TotalLayers != 18 {
+		t.Errorf("TotalLayers = %v, want 18", result.Progress.TotalLayers)
+	}
+
+	// Job.
+	if result.Job == nil || result.Job.Name != "Chaveiro_Flex_AstroBot" {
+		t.Errorf("Job = %+v, want Chaveiro_Flex_AstroBot", result.Job)
+	}
+
+	// Speed level.
+	if result.SpeedLevel == nil || *result.SpeedLevel != "standard" {
+		t.Errorf("SpeedLevel = %v, want standard", result.SpeedLevel)
+	}
+
+	// Stage: stg_cur=-1 should be nil.
+	if result.Stage != nil {
+		t.Errorf("Stage = %v, want nil for stg_cur=-1", *result.Stage)
+	}
+
+	// Wi-Fi.
+	if result.Wifi == nil || result.Wifi.SignalDbm != -67 {
+		t.Errorf("Wifi = %+v, want -67 dBm", result.Wifi)
+	}
+
+	// Lights: H2C has 3 light nodes.
+	if result.Lights == nil {
+		t.Fatal("expected lights")
+	}
+	if result.Lights["chamber_light"] != "off" {
+		t.Errorf("chamber_light = %q, want off", result.Lights["chamber_light"])
+	}
+	if result.Lights["work_light"] != "flashing" {
+		t.Errorf("work_light = %q, want flashing", result.Lights["work_light"])
+	}
+	if result.Lights["chamber_light2"] != "off" {
+		t.Errorf("chamber_light2 = %q, want off", result.Lights["chamber_light2"])
+	}
+
+	// Timelapse from nested ipcam.
+	if result.Timelapse == nil {
+		t.Fatal("expected timelapse from ipcam.timelapse")
+	}
+	if result.Timelapse.Recording {
+		t.Error("expected timelapse recording=false")
+	}
+
+	// PrintMeta.
+	if result.PrintMeta == nil {
+		t.Fatal("expected print meta")
+	}
+	if result.PrintMeta.FileName != "/data/Metadata/plate_1.gcode" {
+		t.Errorf("FileName = %q, want /data/Metadata/plate_1.gcode", result.PrintMeta.FileName)
+	}
+	if result.PrintMeta.NozzleDiameter == nil || *result.PrintMeta.NozzleDiameter != 0.4 {
+		t.Errorf("NozzleDiameter = %v, want 0.4", result.PrintMeta.NozzleDiameter)
+	}
+
+	// AMS: 3 units (IDs 0, 1, 128) from real AMS data.
+	if result.Extensions == nil {
+		t.Fatal("expected extensions")
+	}
+	ext, ok := result.Extensions["bambu-lan"]
+	if !ok {
+		t.Fatal("expected bambu-lan extension")
+	}
+	bambuExt, ok := ext.(*driver.BambuExtension)
+	if !ok || bambuExt.AMS == nil {
+		t.Fatal("expected AMS data")
+	}
+	// 3 AMS units, vir_slot entries are empty so should be excluded.
+	if len(bambuExt.AMS.Units) != 3 {
+		t.Errorf("AMS units = %d, want 3", len(bambuExt.AMS.Units))
+	}
+
+	// Verify AMS unit IDs.
+	unitIDs := make(map[int]bool)
+	for _, u := range bambuExt.AMS.Units {
+		unitIDs[u.ID] = true
+	}
+	if !unitIDs[0] || !unitIDs[1] || !unitIDs[128] {
+		t.Errorf("expected AMS unit IDs {0, 1, 128}, got %v", unitIDs)
+	}
+
+	// Verify humidity and temperature on first unit.
+	unit0 := bambuExt.AMS.Units[0]
+	if unit0.HumidityLevel == nil || *unit0.HumidityLevel != "dry" {
+		t.Errorf("unit0 humidity level = %v, want dry", unit0.HumidityLevel)
+	}
+	if unit0.Temperature == nil || *unit0.Temperature != 28.4 {
+		t.Errorf("unit0 temperature = %v, want 28.4", unit0.Temperature)
+	}
+
+	// No chamber_temperature_unavailable warning.
+	for _, w := range result.Warnings {
+		if w.Code == "chamber_temperature_unavailable" {
+			t.Error("unexpected chamber_temperature_unavailable warning")
+		}
+	}
+}
+
 func TestParseReport_StgCur255_IsNil(t *testing.T) {
 	data := []byte(`{"print":{
 		"gcode_state":"IDLE",
@@ -1360,5 +1655,44 @@ func TestParseReport_StgCur255_IsNil(t *testing.T) {
 	}
 	if result.Stage != nil {
 		t.Errorf("Stage = %q, want nil for stg_cur=255", *result.Stage)
+	}
+}
+
+func TestParseReport_VtTray_Empty_NotIncluded(t *testing.T) {
+	// Empty vt_tray (no filament) should not create an AMS extension entry.
+	data := []byte(`{"print":{
+		"gcode_state":"IDLE",
+		"nozzle_temper":24.0,"bed_temper":23.0,
+		"mc_percent":0,"hms":[],
+		"vt_tray":{"id":"254","tray_type":"","tray_color":"00000000","remain":0,"nozzle_temp_min":"0","nozzle_temp_max":"0"}
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Extensions != nil {
+		t.Errorf("expected nil extensions for empty vt_tray, got %+v", result.Extensions)
+	}
+}
+
+func TestParseReport_VirSlot_Empty_NotIncluded(t *testing.T) {
+	// Empty vir_slot entries should not create AMS extension entries.
+	data := []byte(`{"print":{
+		"gcode_state":"IDLE",
+		"nozzle_temper":24.0,"bed_temper":23.0,
+		"mc_percent":0,"hms":[],
+		"vir_slot":[
+			{"id":"254","tray_color":"00000000","tray_type":"","nozzle_temp_max":"0","nozzle_temp_min":"0","remain":0},
+			{"id":"255","tray_color":"00000000","tray_type":"","nozzle_temp_max":"0","nozzle_temp_min":"0","remain":0}
+		]
+	}}`)
+
+	result, err := parseReport(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Extensions != nil {
+		t.Errorf("expected nil extensions for empty vir_slot, got %+v", result.Extensions)
 	}
 }

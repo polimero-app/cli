@@ -645,6 +645,10 @@ type bambuPrint struct {
 	// AMS data (nested inside print in the pushall response).
 	AMS *bambuAMS `json:"ams"`
 
+	// External spool holder (A1 Mini uses vt_tray, H2C uses vir_slot).
+	VtTray  *bambuVtTray   `json:"vt_tray"`
+	VirSlot []bambuVtTray  `json:"vir_slot"`
+
 	// Z position.
 	ZOffset *rawValueString `json:"z_offset"` // not the current Z; see below
 
@@ -685,6 +689,17 @@ type bambuAMSTray struct {
 type bambuHMS struct {
 	Attr rawValueString `json:"attr"`
 	Code rawValueString `json:"code"`
+}
+
+// bambuVtTray represents an external spool holder (vt_tray on A1 Mini)
+// or a virtual filament slot (vir_slot on H2C).
+type bambuVtTray struct {
+	ID            rawValueString  `json:"id"`
+	TrayType      *string         `json:"tray_type"`
+	TrayColor     *string         `json:"tray_color"`
+	Remain        *rawValueString `json:"remain"`
+	NozzleTempMin *rawValueString `json:"nozzle_temp_min"`
+	NozzleTempMax *rawValueString `json:"nozzle_temp_max"`
 }
 
 type bambuIpcam struct {
@@ -1309,13 +1324,18 @@ func mapGcodePosition(p *bambuPrint) *driver.GcodePosition {
 }
 
 func mapExtensions(p *bambuPrint) map[string]any {
-	if p == nil || p.AMS == nil {
+	if p == nil {
 		return nil
 	}
 	amsData := mapAMS(p.AMS)
-	if amsData == nil {
+	vtUnits := mapVirtualTrays(p)
+	if amsData == nil && len(vtUnits) == 0 {
 		return nil
 	}
+	if amsData == nil {
+		amsData = &driver.AMSData{}
+	}
+	amsData.Units = append(amsData.Units, vtUnits...)
 	return map[string]any{
 		"bambu-lan": &driver.BambuExtension{AMS: amsData},
 	}
@@ -1376,6 +1396,62 @@ func mapAMS(ams *bambuAMS) *driver.AMSData {
 		return nil
 	}
 	return &driver.AMSData{Units: units}
+}
+
+// mapVirtualTrays converts vt_tray (A1 Mini external spool) and vir_slot
+// (H2C virtual slots) into AMSUnit entries. Only non-empty trays (those with
+// filament type or color) are included.
+func mapVirtualTrays(p *bambuPrint) []driver.AMSUnit {
+	var trays []bambuVtTray
+	if p.VtTray != nil {
+		trays = append(trays, *p.VtTray)
+	}
+	trays = append(trays, p.VirSlot...)
+
+	var units []driver.AMSUnit
+	for _, vt := range trays {
+		if !vtTrayHasFilament(&vt) {
+			continue
+		}
+		id := 254
+		if parsedID := rawToInt(&vt.ID); parsedID != nil {
+			id = *parsedID
+		}
+		dt := driver.AMSTray{Slot: 0}
+		if vt.TrayType != nil && *vt.TrayType != "" {
+			dt.FilamentType = vt.TrayType
+		}
+		if vt.TrayColor != nil && *vt.TrayColor != "" && *vt.TrayColor != "00000000" {
+			dt.Color = vt.TrayColor
+		}
+		if remain := rawToInt(vt.Remain); remain != nil && *remain > 0 {
+			v := *remain
+			dt.RemainingPercent = &v
+		}
+		if nozzleTempMin := rawToInt(vt.NozzleTempMin); nozzleTempMin != nil && *nozzleTempMin > 0 {
+			v := *nozzleTempMin
+			dt.NozzleTempMin = &v
+		}
+		if nozzleTempMax := rawToInt(vt.NozzleTempMax); nozzleTempMax != nil && *nozzleTempMax > 0 {
+			v := *nozzleTempMax
+			dt.NozzleTempMax = &v
+		}
+		units = append(units, driver.AMSUnit{
+			ID:    id,
+			Trays: []driver.AMSTray{dt},
+		})
+	}
+	return units
+}
+
+func vtTrayHasFilament(vt *bambuVtTray) bool {
+	if vt.TrayType != nil && *vt.TrayType != "" {
+		return true
+	}
+	if vt.TrayColor != nil && *vt.TrayColor != "" && *vt.TrayColor != "00000000" {
+		return true
+	}
+	return false
 }
 
 // amsHumidityRange maps a Bambu humidity index (1-5) to a human-readable range.
