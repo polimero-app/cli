@@ -190,7 +190,7 @@ func (d *Driver) FileList(
 	defer func() { _ = conn.Quit() }()
 
 	if recursive {
-		return d.listRecursive(conn, root, remotePath, log)
+		return d.listRecursive(ctx, conn, root, remotePath, log)
 	}
 
 	entries, err := d.listDir(conn, root, remotePath, log)
@@ -226,7 +226,7 @@ func (d *Driver) listDir(conn ftpConn, root, remotePath string, log *slog.Logger
 	return entries, nil
 }
 
-func (d *Driver) listRecursive(conn ftpConn, root, remotePath string, log *slog.Logger) (*driver.FileListResult, error) {
+func (d *Driver) listRecursive(ctx context.Context, conn ftpConn, root, remotePath string, log *slog.Logger) (*driver.FileListResult, error) {
 	var allEntries []driver.FileEntry
 
 	type queueItem struct {
@@ -235,6 +235,12 @@ func (d *Driver) listRecursive(conn ftpConn, root, remotePath string, log *slog.
 	queue := []queueItem{{path: remotePath}}
 
 	for len(queue) > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, apperr.Newf(4, "directory listing cancelled")
+		default:
+		}
+
 		item := queue[0]
 		queue = queue[1:]
 
@@ -287,8 +293,11 @@ func (d *Driver) FileDownload(
 	}
 	defer func() { _ = resp.Close() }()
 
-	n, err := io.Copy(dst, resp)
+	n, err := io.Copy(dst, &contextReader{ctx: ctx, r: resp})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, apperr.Newf(4, "download cancelled")
+		}
 		return nil, apperr.Newf(4, "download stream interrupted")
 	}
 
@@ -333,9 +342,12 @@ func (d *Driver) FileUpload(
 
 	log.Debug("uploading file via FTP", "path", ftpPath)
 
-	// Wrap reader to count bytes.
-	cr := &countingReader{r: src}
+	// Wrap reader to count bytes and check context cancellation.
+	cr := &countingReader{r: &contextReader{ctx: ctx, r: src}}
 	if err := conn.Stor(ftpPath, cr); err != nil {
+		if ctx.Err() != nil {
+			return nil, apperr.Newf(4, "upload cancelled")
+		}
 		return nil, mapFTPError(err, remotePath)
 	}
 
@@ -353,6 +365,22 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 	n, err := cr.r.Read(p)
 	cr.n += int64(n)
 	return n, err
+}
+
+// contextReader wraps an io.Reader and checks for context cancellation
+// before each read, allowing long transfers to be interrupted.
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (cr *contextReader) Read(p []byte) (int, error) {
+	select {
+	case <-cr.ctx.Done():
+		return 0, cr.ctx.Err()
+	default:
+		return cr.r.Read(p)
+	}
 }
 
 // mapToFTPPath converts a normalized device path to an FTP path.
