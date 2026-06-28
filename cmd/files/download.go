@@ -12,15 +12,17 @@ import (
 	"github.com/polimero-app/cli/internal/devicepath"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
 func downloadCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		timeout   string
-		insecure  bool
-		to        string
-		overwrite bool
+		timeout       string
+		insecure      bool
+		to            string
+		overwrite     bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -36,22 +38,29 @@ func downloadCommandWithDeps(deps Deps) *cobra.Command {
 			if len(args) > 2 {
 				return writeUsageError(cmd, "files download", fmt.Sprintf("expected exactly two arguments, got %d", len(args)))
 			}
-			return runDownload(cmd, args[0], args[1], flags.to, flags.timeout, flags.insecure, flags.overwrite, deps)
+			return runDownload(cmd, args[0], args[1], flags.to, flags.timeout, flags.insecure, flags.overwrite, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
 	cmd.Flags().StringVar(&flags.to, "to", "", "destination file or directory path")
 	cmd.Flags().BoolVar(&flags.overwrite, "overwrite", false, "allow overwriting existing destination file")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
-func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag string, insecureFlag, overwriteFlag bool, deps Deps) error {
+func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag string, insecureFlag, overwriteFlag bool, protocolTrace string, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
 		return writeUsageError(cmd, "files download", fmtErr.Error())
 	}
+
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files download", traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
 
 	dp, err := devicepath.Parse(pathArg)
 	if err != nil {
@@ -63,7 +72,7 @@ func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag strin
 			apperr.New(2, "cannot download a directory; specify a file path"))
 	}
 
-	rp, err := resolveProfile(cmd.Context(), cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := resolveProfile(traceCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files download", err)
 	}
@@ -87,7 +96,7 @@ func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag strin
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
 	defer cancel()
 
 	// Write to temp file then rename for atomic write.
@@ -116,7 +125,11 @@ func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag strin
 			apperr.Newf(1, "cannot move downloaded file to destination: %s", err))
 	}
 
-	return writeDownloadSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, dp.String(), localPath, result, durationMs, rp.driver.Capabilities())
+	var tracePath *string
+	if protocolTrace != "" {
+		tracePath = &protocolTrace
+	}
+	return writeDownloadSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, dp.String(), localPath, result, durationMs, rp.driver.Capabilities(), tracePath)
 }
 
 func resolveDownloadDest(toFlag, baseName string) (string, error) {
@@ -138,14 +151,14 @@ func resolveDownloadDest(toFlag, baseName string) (string, error) {
 	return toFlag, nil
 }
 
-func writeDownloadSuccess(w io.Writer, format output.Format, name, driverName, source, dest string, result *driver.FileTransferResult, durationMs int64, caps driver.Capabilities) error {
+func writeDownloadSuccess(w io.Writer, format output.Format, name, driverName, source, dest string, result *driver.FileTransferResult, durationMs int64, caps driver.Capabilities, tracePath *string) error {
 	if format == output.FormatJSON {
-		return writeDownloadJSON(w, name, driverName, source, dest, result, durationMs, caps)
+		return writeDownloadJSON(w, name, driverName, source, dest, result, durationMs, caps, tracePath)
 	}
 	return writeDownloadHuman(w, source, dest, result)
 }
 
-func writeDownloadJSON(w io.Writer, name, driverName, source, dest string, result *driver.FileTransferResult, durationMs int64, caps driver.Capabilities) error {
+func writeDownloadJSON(w io.Writer, name, driverName, source, dest string, result *driver.FileTransferResult, durationMs int64, caps driver.Capabilities, tracePath *string) error {
 	dm := durationMs
 	type downloadData struct {
 		Profile          string   `json:"profile"`
@@ -168,7 +181,7 @@ func writeDownloadJSON(w io.Writer, name, driverName, source, dest string, resul
 			Capabilities:     fileCaps{FileDownload: caps.FileDownload},
 		},
 		Error: nil,
-		Meta:  output.Meta{Command: "files download", DurationMs: &dm},
+		Meta:  output.Meta{Command: "files download", DurationMs: &dm, ProtocolTracePath: tracePath},
 	})
 }
 

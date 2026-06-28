@@ -10,6 +10,7 @@ import (
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
@@ -27,15 +28,16 @@ const (
 
 func setCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		nozzle   float64
-		bed      float64
-		chamber  float64
-		hasNozzle  bool
-		hasBed     bool
-		hasChamber bool
-		yes      bool
-		timeout  string
-		insecure bool
+		nozzle        float64
+		bed           float64
+		chamber       float64
+		hasNozzle     bool
+		hasBed        bool
+		hasChamber    bool
+		yes           bool
+		timeout       string
+		insecure      bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -53,7 +55,7 @@ func setCommandWithDeps(deps Deps) *cobra.Command {
 			flags.hasChamber = cmd.Flags().Changed("chamber")
 			return runSet(cmd, args[0], flags.nozzle, flags.bed, flags.chamber,
 				flags.hasNozzle, flags.hasBed, flags.hasChamber,
-				flags.yes, flags.timeout, flags.insecure, deps)
+				flags.yes, flags.timeout, flags.insecure, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().Float64Var(&flags.nozzle, "nozzle", 0, "nozzle target temperature in Celsius (0 turns off)")
@@ -62,6 +64,7 @@ func setCommandWithDeps(deps Deps) *cobra.Command {
 	cmd.Flags().BoolVar(&flags.yes, "yes", false, "skip interactive confirmation")
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
@@ -78,7 +81,7 @@ func writeUsageError(cmd *cobra.Command, message string) error {
 func runSet(cmd *cobra.Command, nameArg string,
 	nozzle, bed, chamber float64,
 	hasNozzle, hasBed, hasChamber bool,
-	yes bool, timeoutFlag string, insecureFlag bool,
+	yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string,
 	deps Deps,
 ) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
@@ -87,6 +90,12 @@ func runSet(cmd *cobra.Command, nameArg string,
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
 		return apperr.New(2, "")
 	}
+
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
 
 	// Step 2: validate that at least one target was given and bounds are safe.
 	if !hasNozzle && !hasBed && !hasChamber {
@@ -110,7 +119,7 @@ func runSet(cmd *cobra.Command, nameArg string,
 	}
 
 	// Step 1: resolve profile and secrets.
-	rp, err := resolveProfile(cmd.Context(), nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
 	}
@@ -121,7 +130,7 @@ func runSet(cmd *cobra.Command, nameArg string,
 			apperr.Newf(5, "driver %q does not support temperature control", rp.pi.Driver))
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
 	defer cancel()
 
 	// Step 3: query current status for precondition check.
@@ -187,7 +196,7 @@ func runSet(cmd *cobra.Command, nameArg string,
 	}
 	durationMs := time.Since(start).Milliseconds()
 
-	return writeSetSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, result, durationMs)
+	return writeSetSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, result, durationMs, protocolTrace)
 }
 
 func checkBound(out, errOut io.Writer, format output.Format, target string, value, min, max float64) error {
@@ -218,14 +227,18 @@ func targetSummary(nozzle, bed, chamber float64, hasNozzle, hasBed, hasChamber b
 	return strings.Join(parts, ", ")
 }
 
-func writeSetSuccess(w io.Writer, format output.Format, name, driverName string, result driver.TemperatureResult, durationMs int64) error {
+func writeSetSuccess(w io.Writer, format output.Format, name, driverName string, result driver.TemperatureResult, durationMs int64, protocolTrace string) error {
 	if format == output.FormatJSON {
-		return writeSetJSONSuccess(w, name, driverName, result, durationMs)
+		var tracePath *string
+		if protocolTrace != "" {
+			tracePath = &protocolTrace
+		}
+		return writeSetJSONSuccess(w, name, driverName, result, durationMs, tracePath)
 	}
 	return writeSetHumanSuccess(w, name, result)
 }
 
-func writeSetJSONSuccess(w io.Writer, name, driverName string, result driver.TemperatureResult, durationMs int64) error {
+func writeSetJSONSuccess(w io.Writer, name, driverName string, result driver.TemperatureResult, durationMs int64, tracePath *string) error {
 	dm := durationMs
 	type targetsJSON struct {
 		NozzleCelsius  *float64 `json:"nozzleCelsius"`
@@ -257,7 +270,7 @@ func writeSetJSONSuccess(w io.Writer, name, driverName string, result driver.Tem
 			Capabilities: result.Capabilities,
 		},
 		Error: nil,
-		Meta:  output.Meta{Command: commandSet, DurationMs: &dm},
+		Meta:  output.Meta{Command: commandSet, DurationMs: &dm, ProtocolTracePath: tracePath},
 	})
 }
 

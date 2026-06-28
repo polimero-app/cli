@@ -9,13 +9,15 @@ import (
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
 func rootsCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		timeout  string
-		insecure bool
+		timeout       string
+		insecure      bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -28,22 +30,29 @@ func rootsCommandWithDeps(deps Deps) *cobra.Command {
 			if len(args) > 1 {
 				return writeUsageError(cmd, "files roots", fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
-			return runRoots(cmd, args[0], flags.timeout, flags.insecure, deps)
+			return runRoots(cmd, args[0], flags.timeout, flags.insecure, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
-func runRoots(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) error {
+func runRoots(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
 		return writeUsageError(cmd, "files roots", fmtErr.Error())
 	}
 
-	rp, err := resolveProfile(cmd.Context(), cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files roots", traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
+
+	rp, err := resolveProfile(traceCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files roots", err)
 	}
@@ -53,7 +62,7 @@ func runRoots(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool
 			apperr.Newf(5, "driver %q does not support file listing", rp.pi.Driver))
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
 	defer cancel()
 
 	start := time.Now()
@@ -63,17 +72,21 @@ func runRoots(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files roots", err)
 	}
 
-	return writeRootsSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, roots, durationMs, rp.driver.Capabilities())
+	var tracePath *string
+	if protocolTrace != "" {
+		tracePath = &protocolTrace
+	}
+	return writeRootsSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, roots, durationMs, rp.driver.Capabilities(), tracePath)
 }
 
-func writeRootsSuccess(w io.Writer, format output.Format, name, driverName string, roots []driver.FileRoot, durationMs int64, caps driver.Capabilities) error {
+func writeRootsSuccess(w io.Writer, format output.Format, name, driverName string, roots []driver.FileRoot, durationMs int64, caps driver.Capabilities, tracePath *string) error {
 	if format == output.FormatJSON {
-		return writeRootsJSON(w, name, driverName, roots, durationMs, caps)
+		return writeRootsJSON(w, name, driverName, roots, durationMs, caps, tracePath)
 	}
 	return writeRootsHuman(w, name, roots)
 }
 
-func writeRootsJSON(w io.Writer, name, driverName string, roots []driver.FileRoot, durationMs int64, caps driver.Capabilities) error {
+func writeRootsJSON(w io.Writer, name, driverName string, roots []driver.FileRoot, durationMs int64, caps driver.Capabilities, tracePath *string) error {
 	dm := durationMs
 	type rootsData struct {
 		Profile      string              `json:"profile"`
@@ -92,7 +105,7 @@ func writeRootsJSON(w io.Writer, name, driverName string, roots []driver.FileRoo
 			Capabilities: makeFileCaps(caps),
 		},
 		Error: nil,
-		Meta:  output.Meta{Command: "files roots", DurationMs: &dm},
+		Meta:  output.Meta{Command: "files roots", DurationMs: &dm, ProtocolTracePath: tracePath},
 	})
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/drivers"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
@@ -33,29 +34,37 @@ func discoverCommand() *cobra.Command {
 // DiscoverCommandWithDeps constructs the "discover" cobra command with injected dependencies.
 func DiscoverCommandWithDeps(deps DiscoverDeps) *cobra.Command {
 	var flags struct {
-		driverName string
-		timeout    string
+		driverName    string
+		timeout       string
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
 		Use:   "discover",
 		Short: "Scan the local network for printers (mDNS, SSDP, UDP broadcast)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDiscover(cmd, flags.driverName, flags.timeout, deps)
+			return runDiscover(cmd, flags.driverName, flags.timeout, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().StringVar(&flags.driverName, "driver", "", "restrict discovery to a specific driver")
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "5s", "scan duration (default 5s)")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
-func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag string, deps DiscoverDeps) error {
+func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag, protocolTrace string, deps DiscoverDeps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
 		return apperr.New(2, "")
 	}
+
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeDiscoverError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
 
 	timeout, err := time.ParseDuration(timeoutFlag)
 	if err != nil {
@@ -86,7 +95,7 @@ func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag string, deps Discov
 			apperr.Newf(2, "cannot load config: %s", err))
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, timeout)
 	defer cancel()
 
 	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Scanning local network for printers (timeout: %s)...", timeout))

@@ -14,6 +14,7 @@ import (
 	"github.com/polimero-app/cli/internal/drivers"
 	"github.com/polimero-app/cli/internal/keychain"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/polimero-app/cli/internal/tty"
 	"github.com/spf13/cobra"
 )
@@ -36,9 +37,10 @@ func tlsRefreshCommand() *cobra.Command {
 // TlsRefreshCommandWithDeps constructs the "tls refresh" cobra command with injected dependencies.
 func TlsRefreshCommandWithDeps(deps TlsRefreshDeps) *cobra.Command {
 	var flags struct {
-		timeout  string
-		insecure bool
-		yes      bool
+		timeout       string
+		insecure      bool
+		yes           bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -51,12 +53,13 @@ func TlsRefreshCommandWithDeps(deps TlsRefreshDeps) *cobra.Command {
 			if len(args) > 1 {
 				return writeTlsRefreshUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
-			return runTlsRefresh(cmd, args[0], flags.timeout, flags.insecure, flags.yes, deps)
+			return runTlsRefresh(cmd, args[0], flags.timeout, flags.insecure, flags.yes, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "disable TLS verification for this profile")
 	cmd.Flags().BoolVar(&flags.yes, "yes", false, "skip interactive confirmation")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
@@ -70,7 +73,7 @@ func writeTlsRefreshUsageError(cmd *cobra.Command, message string) error {
 	return writeTlsRefreshError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), "")
 }
 
-func runTlsRefresh(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, yes bool, deps TlsRefreshDeps) error {
+func runTlsRefresh(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, yes bool, protocolTrace string, deps TlsRefreshDeps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -78,20 +81,26 @@ func runTlsRefresh(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag
 		return apperr.New(2, "")
 	}
 
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeTlsRefreshError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, traceErr, "")
+	}
+	defer func() { _ = traceCleanup() }()
+
 	verboseFlag, _ := cmd.Root().PersistentFlags().GetBool("verbose")
 	verbose := verboseFlag && format == output.FormatHuman
 
 	name := strings.ToLower(nameArg)
-	fp, durationMs, errName, err := doTlsRefresh(cmd, name, timeoutFlag, insecureFlag, yes, verbose, deps)
+	fp, durationMs, errName, err := doTlsRefresh(cmd, traceCtx, name, timeoutFlag, insecureFlag, yes, verbose, deps)
 	if err != nil {
 		return writeTlsRefreshError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err, errName)
 	}
-	return writeTlsRefreshSuccess(cmd.OutOrStdout(), format, name, fp, insecureFlag, durationMs)
+	return writeTlsRefreshSuccess(cmd.OutOrStdout(), format, name, fp, insecureFlag, durationMs, protocolTrace)
 }
 
 // doTlsRefresh executes the core logic. Returns (fingerprint, durationMs, profileName, error).
 // profileName is used for error details; it is empty when the error occurs before name is known.
-func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, yes, verbose bool, deps TlsRefreshDeps) (string, int64, string, error) {
+func doTlsRefresh(cmd *cobra.Command, ctx context.Context, name, timeoutFlag string, insecureFlag, yes, verbose bool, deps TlsRefreshDeps) (string, int64, string, error) {
 	if err := validateProfileName(name); err != nil {
 		return "", 0, "", err
 	}
@@ -148,7 +157,7 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 	}
 
 	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	if insecureFlag {
@@ -201,11 +210,15 @@ func doTlsRefresh(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, ye
 	return fp, durationMs, "", nil
 }
 
-func writeTlsRefreshSuccess(w io.Writer, format output.Format, name, fp string, insecure bool, durationMs int64) error {
+func writeTlsRefreshSuccess(w io.Writer, format output.Format, name, fp string, insecure bool, durationMs int64, tracePath string) error {
 	if format == output.FormatJSON {
 		var fpVal any
 		if fp != "" {
 			fpVal = fp
+		}
+		meta := output.Meta{Command: "printer tls refresh"}
+		if tracePath != "" {
+			meta.ProtocolTracePath = &tracePath
 		}
 		env := output.Envelope{
 			OK: true,
@@ -215,7 +228,7 @@ func writeTlsRefreshSuccess(w io.Writer, format output.Format, name, fp string, 
 				"insecure":    insecure,
 			},
 			Error: nil,
-			Meta:  output.Meta{Command: "printer tls refresh"},
+			Meta:  meta,
 		}
 		if !insecure {
 			dm := durationMs

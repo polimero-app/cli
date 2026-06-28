@@ -16,6 +16,7 @@ import (
 	"github.com/polimero-app/cli/internal/keychain"
 	"github.com/polimero-app/cli/internal/output"
 	"github.com/polimero-app/cli/internal/profile"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
@@ -38,9 +39,10 @@ func Command() *cobra.Command {
 // CommandWithDeps constructs the "status" cobra command with injected dependencies.
 func CommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		timeout  string
-		insecure bool
-		detailed bool
+		timeout       string
+		insecure      bool
+		detailed      bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -53,12 +55,13 @@ func CommandWithDeps(deps Deps) *cobra.Command {
 			if len(args) > 1 {
 				return writeUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
-			return runStatus(cmd, args[0], flags.timeout, flags.insecure, flags.detailed, deps)
+			return runStatus(cmd, args[0], flags.timeout, flags.insecure, flags.detailed, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
 	cmd.Flags().BoolVar(&flags.detailed, "detailed", false, "include extended telemetry (fans, time, speed, AMS, etc.)")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
@@ -72,7 +75,7 @@ func writeUsageError(cmd *cobra.Command, message string) error {
 	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), errorContext{})
 }
 
-func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, detailed bool, deps Deps) error {
+func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, detailed bool, protocolTrace string, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -80,14 +83,30 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, de
 		return apperr.New(2, "")
 	}
 
+	ctx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, traceErr, errorContext{})
+	}
+	defer func() {
+		if err := traceCleanup(); err != nil {
+			// Trace close failure after protocol work: exit 1 unless earlier error.
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to close protocol trace: %s\n", err)
+		}
+	}()
+
 	name := strings.ToLower(nameArg)
 	verboseFlag, _ := cmd.Root().PersistentFlags().GetBool("verbose")
 	verbose := verboseFlag && format == output.FormatHuman
-	result, durationMs, driverName, errCtx, err := doStatus(cmd, name, timeoutFlag, insecureFlag, verbose, deps)
+	result, durationMs, driverName, errCtx, err := doStatus(cmd, ctx, name, timeoutFlag, insecureFlag, verbose, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err, errCtx)
 	}
-	return writeSuccess(cmd.OutOrStdout(), format, name, driverName, result, durationMs, detailed)
+
+	var tracePath *string
+	if protocolTrace != "" {
+		tracePath = &protocolTrace
+	}
+	return writeSuccess(cmd.OutOrStdout(), format, name, driverName, result, durationMs, detailed, tracePath)
 }
 
 type errorContext struct {
@@ -95,7 +114,7 @@ type errorContext struct {
 	timeout string
 }
 
-func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbose bool, deps Deps) (*driver.StatusResult, int64, string, errorContext, error) {
+func doStatus(cmd *cobra.Command, ctx context.Context, name, timeoutFlag string, insecureFlag, verbose bool, deps Deps) (*driver.StatusResult, int64, string, errorContext, error) {
 	if err := profile.ValidateName(name); err != nil {
 		return nil, 0, "", errorContext{}, err
 	}
@@ -128,7 +147,7 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbos
 		return nil, 0, "", errorContext{profile: name, timeout: timeoutStr}, apperr.Newf(2, "--timeout must be greater than zero")
 	}
 	errCtx := errorContext{profile: name, timeout: timeout.String()}
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	insecure := p.Insecure || insecureFlag
@@ -189,17 +208,17 @@ func doStatus(cmd *cobra.Command, name, timeoutFlag string, insecureFlag, verbos
 	return result, durationMs, p.Driver, errorContext{}, nil
 }
 
-func writeSuccess(w io.Writer, format output.Format, name, driverName string, result *driver.StatusResult, durationMs int64, detailed bool) error {
+func writeSuccess(w io.Writer, format output.Format, name, driverName string, result *driver.StatusResult, durationMs int64, detailed bool, tracePath *string) error {
 	if result == nil {
 		return fmt.Errorf("driver returned nil status result")
 	}
 	if format == output.FormatJSON {
-		return writeJSONSuccess(w, name, driverName, result, durationMs, detailed)
+		return writeJSONSuccess(w, name, driverName, result, durationMs, detailed, tracePath)
 	}
 	return writeHumanSuccess(w, name, result, detailed)
 }
 
-func writeJSONSuccess(w io.Writer, name, driverName string, result *driver.StatusResult, durationMs int64, detailed bool) error {
+func writeJSONSuccess(w io.Writer, name, driverName string, result *driver.StatusResult, durationMs int64, detailed bool, tracePath *string) error {
 	dm := durationMs
 	type statusData struct {
 		Profile       string              `json:"profile"`
@@ -249,7 +268,7 @@ func writeJSONSuccess(w io.Writer, name, driverName string, result *driver.Statu
 		OK:    true,
 		Data:  data,
 		Error: nil,
-		Meta:  output.Meta{Command: "status", DurationMs: &dm},
+		Meta:  output.Meta{Command: "status", DurationMs: &dm, ProtocolTracePath: tracePath},
 	})
 }
 

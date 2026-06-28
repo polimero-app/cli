@@ -10,6 +10,7 @@ import (
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
@@ -22,11 +23,12 @@ const (
 
 func jogCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		x, y, z  float64
-		feedrate  int
-		yes       bool
-		timeout   string
-		insecure  bool
+		x, y, z       float64
+		feedrate      int
+		yes           bool
+		timeout       string
+		insecure      bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -43,7 +45,7 @@ func jogCommandWithDeps(deps Deps) *cobra.Command {
 			hasY := cmd.Flags().Changed("y")
 			hasZ := cmd.Flags().Changed("z")
 			return runJog(cmd, args[0], flags.x, flags.y, flags.z, hasX, hasY, hasZ,
-				flags.feedrate, flags.yes, flags.timeout, flags.insecure, deps)
+				flags.feedrate, flags.yes, flags.timeout, flags.insecure, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().Float64Var(&flags.x, "x", 0, "relative X-axis move in mm (range: -10 to 10)")
@@ -53,12 +55,13 @@ func jogCommandWithDeps(deps Deps) *cobra.Command {
 	cmd.Flags().BoolVar(&flags.yes, "yes", false, "skip interactive confirmation")
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
 func runJog(cmd *cobra.Command, nameArg string,
 	x, y, z float64, hasX, hasY, hasZ bool,
-	feedrate int, yes bool, timeoutFlag string, insecureFlag bool,
+	feedrate int, yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string,
 	deps Deps,
 ) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
@@ -67,6 +70,12 @@ func runJog(cmd *cobra.Command, nameArg string,
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
 		return apperr.New(2, "")
 	}
+
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
 
 	// Validate at least one axis given.
 	if !hasX && !hasY && !hasZ {
@@ -91,7 +100,7 @@ func runJog(cmd *cobra.Command, nameArg string,
 		}
 	}
 
-	rp, err := resolveProfile(cmd.Context(), nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, err)
 	}
@@ -101,7 +110,7 @@ func runJog(cmd *cobra.Command, nameArg string,
 			apperr.Newf(5, "driver %q does not support motion control", rp.pi.Driver))
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
 	defer cancel()
 
 	if _, err := checkIdlePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, rp.name, "move", rp, deps, ctx); err != nil {
@@ -146,7 +155,11 @@ func runJog(cmd *cobra.Command, nameArg string,
 	}
 	durationMs := time.Since(start).Milliseconds()
 
-	return writeJogSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, delta, result, durationMs)
+	var tracePath *string
+	if protocolTrace != "" {
+		tracePath = &protocolTrace
+	}
+	return writeJogSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, delta, result, durationMs, tracePath)
 }
 
 func checkJogBound(out, errOut io.Writer, format output.Format, axis string, value float64) error {
@@ -177,14 +190,14 @@ func jogSummary(x, y, z float64, hasX, hasY, hasZ bool, feedrate int) string {
 	return fmt.Sprintf("%s at %dmm/min", strings.Join(parts, " "), feedrate)
 }
 
-func writeJogSuccess(w io.Writer, format output.Format, name, driverName string, delta driver.JogDelta, result driver.MotionResult, durationMs int64) error {
+func writeJogSuccess(w io.Writer, format output.Format, name, driverName string, delta driver.JogDelta, result driver.MotionResult, durationMs int64, tracePath *string) error {
 	if format == output.FormatJSON {
-		return writeJogJSONSuccess(w, name, driverName, delta, result, durationMs)
+		return writeJogJSONSuccess(w, name, driverName, delta, result, durationMs, tracePath)
 	}
 	return writeJogHumanSuccess(w, name, delta)
 }
 
-func writeJogJSONSuccess(w io.Writer, name, driverName string, delta driver.JogDelta, result driver.MotionResult, durationMs int64) error {
+func writeJogJSONSuccess(w io.Writer, name, driverName string, delta driver.JogDelta, result driver.MotionResult, durationMs int64, tracePath *string) error {
 	dm := durationMs
 	type deltaJSON struct {
 		XMillimeters     *float64 `json:"xMillimeters"`
@@ -220,7 +233,7 @@ func writeJogJSONSuccess(w io.Writer, name, driverName string, delta driver.JogD
 			Capabilities: result.Capabilities,
 		},
 		Error: nil,
-		Meta:  output.Meta{Command: commandJog, DurationMs: &dm},
+		Meta:  output.Meta{Command: commandJog, DurationMs: &dm, ProtocolTracePath: tracePath},
 	})
 }
 

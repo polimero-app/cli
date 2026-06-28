@@ -12,14 +12,16 @@ import (
 	"github.com/polimero-app/cli/internal/devicepath"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
 func uploadCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		timeout   string
-		insecure  bool
-		overwrite bool
+		timeout       string
+		insecure      bool
+		overwrite     bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -38,21 +40,28 @@ func uploadCommandWithDeps(deps Deps) *cobra.Command {
 			if len(args) > 3 {
 				return writeUsageError(cmd, "files upload", fmt.Sprintf("expected exactly three arguments, got %d", len(args)))
 			}
-			return runUpload(cmd, args[0], args[1], args[2], flags.timeout, flags.insecure, flags.overwrite, deps)
+			return runUpload(cmd, args[0], args[1], args[2], flags.timeout, flags.insecure, flags.overwrite, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
 	cmd.Flags().BoolVar(&flags.overwrite, "overwrite", false, "allow overwriting existing device file")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
-func runUpload(cmd *cobra.Command, nameArg, localPathArg, devicePathArg, timeoutFlag string, insecureFlag, overwriteFlag bool, deps Deps) error {
+func runUpload(cmd *cobra.Command, nameArg, localPathArg, devicePathArg, timeoutFlag string, insecureFlag, overwriteFlag bool, protocolTrace string, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
 		return writeUsageError(cmd, "files upload", fmtErr.Error())
 	}
+
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files upload", traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
 
 	// Validate local path.
 	info, err := os.Stat(localPathArg)
@@ -86,7 +95,7 @@ func runUpload(cmd *cobra.Command, nameArg, localPathArg, devicePathArg, timeout
 		}
 	}
 
-	rp, err := resolveProfile(cmd.Context(), cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := resolveProfile(traceCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files upload", err)
 	}
@@ -104,7 +113,7 @@ func runUpload(cmd *cobra.Command, nameArg, localPathArg, devicePathArg, timeout
 	}
 	defer func() { _ = f.Close() }()
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
 	defer cancel()
 
 	start := time.Now()
@@ -114,18 +123,22 @@ func runUpload(cmd *cobra.Command, nameArg, localPathArg, devicePathArg, timeout
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files upload", err)
 	}
 
+	var tracePath *string
+	if protocolTrace != "" {
+		tracePath = &protocolTrace
+	}
 	destDevicePath := dp.Root + ":" + destPath
-	return writeUploadSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, localPathArg, destDevicePath, result, durationMs, rp.driver.Capabilities())
+	return writeUploadSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, localPathArg, destDevicePath, result, durationMs, rp.driver.Capabilities(), tracePath)
 }
 
-func writeUploadSuccess(w io.Writer, format output.Format, name, driverName, source, dest string, result *driver.FileTransferResult, durationMs int64, caps driver.Capabilities) error {
+func writeUploadSuccess(w io.Writer, format output.Format, name, driverName, source, dest string, result *driver.FileTransferResult, durationMs int64, caps driver.Capabilities, tracePath *string) error {
 	if format == output.FormatJSON {
-		return writeUploadJSON(w, name, driverName, source, dest, result, durationMs, caps)
+		return writeUploadJSON(w, name, driverName, source, dest, result, durationMs, caps, tracePath)
 	}
 	return writeUploadHuman(w, source, dest, result)
 }
 
-func writeUploadJSON(w io.Writer, name, driverName, source, dest string, result *driver.FileTransferResult, durationMs int64, caps driver.Capabilities) error {
+func writeUploadJSON(w io.Writer, name, driverName, source, dest string, result *driver.FileTransferResult, durationMs int64, caps driver.Capabilities, tracePath *string) error {
 	dm := durationMs
 	type uploadData struct {
 		Profile          string   `json:"profile"`
@@ -148,7 +161,7 @@ func writeUploadJSON(w io.Writer, name, driverName, source, dest string, result 
 			Capabilities:     fileCaps{FileUpload: caps.FileUpload},
 		},
 		Error: nil,
-		Meta:  output.Meta{Command: "files upload", DurationMs: &dm},
+		Meta:  output.Meta{Command: "files upload", DurationMs: &dm, ProtocolTracePath: tracePath},
 	})
 }
 

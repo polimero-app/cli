@@ -7,6 +7,7 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
@@ -14,9 +15,10 @@ const commandResume = "jobs resume"
 
 func resumeCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		yes      bool
-		timeout  string
-		insecure bool
+		yes           bool
+		timeout       string
+		insecure      bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -29,16 +31,17 @@ func resumeCommandWithDeps(deps Deps) *cobra.Command {
 			if len(args) > 1 {
 				return writeUsageError(cmd, commandResume, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
-			return runResume(cmd, args[0], flags.yes, flags.timeout, flags.insecure, deps)
+			return runResume(cmd, args[0], flags.yes, flags.timeout, flags.insecure, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().BoolVar(&flags.yes, "yes", false, "skip interactive confirmation")
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
-func runResume(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string, insecureFlag bool, deps Deps) error {
+func runResume(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -46,7 +49,13 @@ func runResume(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string,
 		return apperr.New(2, "")
 	}
 
-	rp, err := resolveProfile(cmd.Context(), nameArg, timeoutFlag, insecureFlag, deps)
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
+
+	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, err)
 	}
@@ -56,7 +65,7 @@ func runResume(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string,
 			apperr.Newf(5, "driver %q does not support job resume", rp.pi.Driver))
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
 	defer cancel()
 
 	if _, err := checkStatePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume,
@@ -81,6 +90,10 @@ func runResume(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string,
 		return err
 	}
 
+	var tracePath *string
+	if protocolTrace != "" {
+		tracePath = &protocolTrace
+	}
 	return writeActionSuccess(cmd.OutOrStdout(), format, commandResume, rp.name, rp.pi.Driver,
-		"resume", "", nil, result, durationMs)
+		"resume", "", nil, result, durationMs, tracePath)
 }

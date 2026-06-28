@@ -10,14 +10,16 @@ import (
 	"github.com/polimero-app/cli/internal/devicepath"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
 func listCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		timeout   string
-		insecure  bool
-		recursive bool
+		timeout       string
+		insecure      bool
+		recursive     bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -27,23 +29,30 @@ func listCommandWithDeps(deps Deps) *cobra.Command {
 			if len(args) == 0 {
 				return cmd.Help()
 			}
-			return runList(cmd, args[0], args[1:], flags.timeout, flags.insecure, flags.recursive, deps)
+			return runList(cmd, args[0], args[1:], flags.timeout, flags.insecure, flags.recursive, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
 	cmd.Flags().BoolVar(&flags.recursive, "recursive", false, "recursively list directory contents")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
-func runList(cmd *cobra.Command, nameArg string, pathArgs []string, timeoutFlag string, insecureFlag, recursive bool, deps Deps) error {
+func runList(cmd *cobra.Command, nameArg string, pathArgs []string, timeoutFlag string, insecureFlag, recursive bool, protocolTrace string, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
 		return writeUsageError(cmd, "files list", fmtErr.Error())
 	}
 
-	rp, err := resolveProfile(cmd.Context(), cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files list", traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
+
+	rp, err := resolveProfile(traceCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files list", err)
 	}
@@ -53,12 +62,17 @@ func runList(cmd *cobra.Command, nameArg string, pathArgs []string, timeoutFlag 
 			apperr.Newf(5, "driver %q does not support file listing", rp.pi.Driver))
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
 	defer cancel()
+
+	var tracePath *string
+	if protocolTrace != "" {
+		tracePath = &protocolTrace
+	}
 
 	// If no paths given, list roots or default root.
 	if len(pathArgs) == 0 {
-		return listDefaultPaths(cmd, ctx, format, rp, recursive, deps)
+		return listDefaultPaths(cmd, ctx, format, rp, recursive, tracePath, deps)
 	}
 
 	// Parse and validate all device paths.
@@ -82,10 +96,10 @@ func runList(cmd *cobra.Command, nameArg string, pathArgs []string, timeoutFlag 
 	}
 	durationMs := time.Since(start).Milliseconds()
 
-	return writeListSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, results, durationMs, rp.driver.Capabilities())
+	return writeListSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, results, durationMs, rp.driver.Capabilities(), tracePath)
 }
 
-func listDefaultPaths(cmd *cobra.Command, ctx context.Context, format output.Format, rp *resolvedProfile, recursive bool, deps Deps) error {
+func listDefaultPaths(cmd *cobra.Command, ctx context.Context, format output.Format, rp *resolvedProfile, recursive bool, tracePath *string, deps Deps) error {
 	start := time.Now()
 	roots, err := rp.driver.FileRoots(ctx, rp.pi, rp.secrets, deps.Log)
 	if err != nil {
@@ -95,7 +109,7 @@ func listDefaultPaths(cmd *cobra.Command, ctx context.Context, format output.For
 	if len(roots) != 1 {
 		// Multiple roots: show roots table.
 		durationMs := time.Since(start).Milliseconds()
-		return writeRootsSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, roots, durationMs, rp.driver.Capabilities())
+		return writeRootsSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, roots, durationMs, rp.driver.Capabilities(), tracePath)
 	}
 
 	// Single root: list it.
@@ -107,7 +121,7 @@ func listDefaultPaths(cmd *cobra.Command, ctx context.Context, format output.For
 	durationMs := time.Since(start).Milliseconds()
 
 	results := []pathResult{{devicePath: root.Name + ":/", entries: lr.Entries}}
-	return writeListSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, results, durationMs, rp.driver.Capabilities())
+	return writeListSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, results, durationMs, rp.driver.Capabilities(), tracePath)
 }
 
 type pathResult struct {
@@ -115,14 +129,14 @@ type pathResult struct {
 	entries    []driver.FileEntry
 }
 
-func writeListSuccess(w io.Writer, format output.Format, name, driverName string, results []pathResult, durationMs int64, caps driver.Capabilities) error {
+func writeListSuccess(w io.Writer, format output.Format, name, driverName string, results []pathResult, durationMs int64, caps driver.Capabilities, tracePath *string) error {
 	if format == output.FormatJSON {
-		return writeListJSON(w, name, driverName, results, durationMs, caps)
+		return writeListJSON(w, name, driverName, results, durationMs, caps, tracePath)
 	}
 	return writeListHuman(w, name, results)
 }
 
-func writeListJSON(w io.Writer, name, driverName string, results []pathResult, durationMs int64, caps driver.Capabilities) error {
+func writeListJSON(w io.Writer, name, driverName string, results []pathResult, durationMs int64, caps driver.Capabilities, tracePath *string) error {
 	dm := durationMs
 	type pathData struct {
 		DevicePath string             `json:"devicePath"`
@@ -153,7 +167,7 @@ func writeListJSON(w io.Writer, name, driverName string, results []pathResult, d
 			Capabilities: makeFileCaps(caps),
 		},
 		Error: nil,
-		Meta:  output.Meta{Command: "files list", DurationMs: &dm},
+		Meta:  output.Meta{Command: "files list", DurationMs: &dm, ProtocolTracePath: tracePath},
 	})
 }
 

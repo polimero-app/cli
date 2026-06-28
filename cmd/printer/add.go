@@ -17,6 +17,7 @@ import (
 	"github.com/polimero-app/cli/internal/keychain"
 	"github.com/polimero-app/cli/internal/output"
 	"github.com/polimero-app/cli/internal/profile"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/polimero-app/cli/internal/tty"
 	"github.com/spf13/cobra"
 )
@@ -48,6 +49,7 @@ func AddCommandWithDeps(deps AddDeps) *cobra.Command {
 		timeout        string
 		insecure       bool
 		accessCodeFile string
+		protocolTrace  string
 	}
 
 	cmd := &cobra.Command{
@@ -61,7 +63,7 @@ func AddCommandWithDeps(deps AddDeps) *cobra.Command {
 				return writeAddUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
 			return runAdd(cmd, args[0], flags.driverName, flags.host, flags.serial,
-				flags.timeout, flags.insecure, flags.accessCodeFile, deps)
+				flags.timeout, flags.insecure, flags.accessCodeFile, flags.protocolTrace, deps)
 		},
 	}
 
@@ -71,6 +73,7 @@ func AddCommandWithDeps(deps AddDeps) *cobra.Command {
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "10s", "connection timeout")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS verification and auth check")
 	cmd.Flags().StringVar(&flags.accessCodeFile, "access-code-file", "", "file containing the access code")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 
 	return cmd
 }
@@ -85,7 +88,7 @@ func writeAddUsageError(cmd *cobra.Command, message string) error {
 	return writeAddError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message))
 }
 
-func runAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr string, insecure bool, accessCodeFile string, deps AddDeps) error {
+func runAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr string, insecure bool, accessCodeFile, protocolTrace string, deps AddDeps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -93,14 +96,20 @@ func runAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr st
 		return apperr.New(2, "")
 	}
 
-	err := doAdd(cmd, nameArg, driverName, host, serial, timeoutStr, insecure, accessCodeFile, format, deps)
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeAddError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
+
+	err := doAdd(cmd, traceCtx, nameArg, driverName, host, serial, timeoutStr, insecure, accessCodeFile, protocolTrace, format, deps)
 	if err == nil {
 		return nil
 	}
 	return writeAddError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err)
 }
 
-func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr string, insecure bool, accessCodeFile string, format output.Format, deps AddDeps) error {
+func doAdd(cmd *cobra.Command, ctx context.Context, nameArg, driverName, host, serial, timeoutStr string, insecure bool, accessCodeFile, protocolTrace string, format output.Format, deps AddDeps) error {
 	name := strings.ToLower(nameArg)
 
 	// 1. Validate
@@ -186,7 +195,7 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 	connectSecrets := driver.SecretsBundle{AccessCode: accessCode}
 
 	var fingerprint string
-	opCtx, opCancel := context.WithTimeout(cmd.Context(), timeout)
+	opCtx, opCancel := context.WithTimeout(ctx, timeout)
 	defer opCancel()
 	if !insecure {
 		// 3. Connectivity check (TLS + MQTT CONNECT + CONNACK)
@@ -208,7 +217,7 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 
 		// 5. Store TLS fingerprint; rollback access code on failure
 		if err := deps.KC.Set(opCtx, "polimero", kcFpAcct, fingerprint); err != nil {
-			cleanupCtx, cleanupCancel := secretStoreContext(cmd.Context())
+			cleanupCtx, cleanupCancel := secretStoreContext(ctx)
 			_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
 			cleanupCancel()
 			return apperr.Wrap(3, "cannot store TLS fingerprint in keychain", err)
@@ -235,7 +244,7 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 		Updated:  now,
 	}
 	if err := cfg.AddProfile(name, p); err != nil {
-		cleanupCtx, cleanupCancel := secretStoreContext(cmd.Context())
+		cleanupCtx, cleanupCancel := secretStoreContext(ctx)
 		_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
 		if !insecure {
 			_ = deps.KC.Delete(cleanupCtx, "polimero", kcFpAcct)
@@ -244,7 +253,7 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 		return apperr.Newf(1, "cannot add profile: %s", err)
 	}
 	if err := config.Save(dir, cfg); err != nil {
-		cleanupCtx, cleanupCancel := secretStoreContext(cmd.Context())
+		cleanupCtx, cleanupCancel := secretStoreContext(ctx)
 		_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
 		if !insecure {
 			_ = deps.KC.Delete(cleanupCtx, "polimero", kcFpAcct)
@@ -254,14 +263,18 @@ func doAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr str
 	}
 
 	// 7. Output success
-	return writeAddSuccess(cmd.OutOrStdout(), format, name, p, fingerprint)
+	return writeAddSuccess(cmd.OutOrStdout(), format, name, p, fingerprint, protocolTrace)
 }
 
-func writeAddSuccess(w io.Writer, format output.Format, name string, p config.Profile, fingerprint string) error {
+func writeAddSuccess(w io.Writer, format output.Format, name string, p config.Profile, fingerprint, tracePath string) error {
 	if format == output.FormatJSON {
 		var fp any
 		if fingerprint != "" {
 			fp = fingerprint
+		}
+		meta := output.Meta{Command: "printer add"}
+		if tracePath != "" {
+			meta.ProtocolTracePath = &tracePath
 		}
 		return output.WriteEnvelope(w, output.Envelope{
 			OK: true,
@@ -277,7 +290,7 @@ func writeAddSuccess(w io.Writer, format output.Format, name string, p config.Pr
 				},
 			},
 			Error: nil,
-			Meta:  output.Meta{Command: "printer add"},
+			Meta:  meta,
 		})
 	}
 	lines := []string{

@@ -296,14 +296,14 @@ func checkExpectedState(out, errOut io.Writer, format output.Format, cmdName, pr
 }
 
 // writeActionSuccess writes a successful job action result in the appropriate format.
-func writeActionSuccess(w io.Writer, format output.Format, cmdName, profileName, driverName, action, devicePath string, plate *int, result driver.JobActionResult, durationMs int64) error {
+func writeActionSuccess(w io.Writer, format output.Format, cmdName, profileName, driverName, action, devicePath string, plate *int, result driver.JobActionResult, durationMs int64, tracePath *string) error {
 	if format == output.FormatJSON {
-		return writeActionJSONSuccess(w, cmdName, profileName, driverName, action, devicePath, plate, result, durationMs)
+		return writeActionJSONSuccess(w, cmdName, profileName, driverName, action, devicePath, plate, result, durationMs, tracePath)
 	}
 	return writeActionHumanSuccess(w, profileName, action)
 }
 
-func writeActionJSONSuccess(w io.Writer, cmdName, profileName, driverName, action, devicePath string, plate *int, result driver.JobActionResult, durationMs int64) error {
+func writeActionJSONSuccess(w io.Writer, cmdName, profileName, driverName, action, devicePath string, plate *int, result driver.JobActionResult, durationMs int64, tracePath *string) error {
 	dm := durationMs
 	type data struct {
 		Profile      string                 `json:"profile"`
@@ -337,7 +337,7 @@ func writeActionJSONSuccess(w io.Writer, cmdName, profileName, driverName, actio
 		OK:    true,
 		Data:  d,
 		Error: nil,
-		Meta:  output.Meta{Command: cmdName, DurationMs: &dm},
+		Meta:  output.Meta{Command: cmdName, DurationMs: &dm, ProtocolTracePath: tracePath},
 	})
 }
 

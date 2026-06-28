@@ -14,6 +14,7 @@ import (
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
@@ -22,9 +23,10 @@ const commandStream = "camera stream"
 // streamCommandWithDeps constructs the "camera stream" cobra command with injected dependencies.
 func streamCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		port     int
-		timeout  string
-		insecure bool
+		port          int
+		timeout       string
+		insecure      bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -37,16 +39,17 @@ func streamCommandWithDeps(deps Deps) *cobra.Command {
 			if len(args) > 1 {
 				return writeUsageError(cmd, commandStream, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
-			return runStream(cmd, args[0], flags.port, flags.timeout, flags.insecure, deps)
+			return runStream(cmd, args[0], flags.port, flags.timeout, flags.insecure, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().IntVar(&flags.port, "port", 8080, "local HTTP server port")
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "auto-stop after this duration (e.g. 30m)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
-func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string, insecureFlag bool, deps Deps) error {
+func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -57,7 +60,13 @@ func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string,
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
 	}
 
-	result, name, err := openStream(cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	ctx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
+
+	result, name, err := openStream(ctx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
 	}
@@ -82,8 +91,8 @@ func validateFlags(port int, timeoutFlag string) error {
 	return nil
 }
 
-func openStream(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) (*driver.CameraStreamResult, string, error) {
-	rp, err := resolveProfile(cmd.Context(), nameArg, timeoutFlag, insecureFlag, deps)
+func openStream(ctx context.Context, cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) (*driver.CameraStreamResult, string, error) {
+	rp, err := resolveProfile(ctx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return nil, "", err
 	}
@@ -91,7 +100,7 @@ func openStream(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bo
 		return nil, "", apperr.Newf(5, "driver %q does not support camera streaming", rp.input.Driver)
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(ctx, rp.timeout)
 	defer cancel()
 
 	result, err := rp.driver.CameraStream(ctx, rp.input, rp.secrets, deps.Log)

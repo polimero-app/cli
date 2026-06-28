@@ -14,6 +14,7 @@ import (
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
 	"github.com/polimero-app/cli/internal/profile"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
@@ -21,10 +22,11 @@ const commandSnapshot = "camera snapshot"
 
 func snapshotCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		to        string
-		overwrite bool
-		timeout   string
-		insecure  bool
+		to            string
+		overwrite     bool
+		timeout       string
+		insecure      bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -37,22 +39,29 @@ func snapshotCommandWithDeps(deps Deps) *cobra.Command {
 			if len(args) > 1 {
 				return writeUsageError(cmd, commandSnapshot, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
-			return runSnapshot(cmd, args[0], flags.to, flags.overwrite, flags.timeout, flags.insecure, deps)
+			return runSnapshot(cmd, args[0], flags.to, flags.overwrite, flags.timeout, flags.insecure, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().StringVar(&flags.to, "to", "", "destination file path or directory")
 	cmd.Flags().BoolVar(&flags.overwrite, "overwrite", false, "replace an existing destination file")
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
-func runSnapshot(cmd *cobra.Command, nameArg, toFlag string, overwrite bool, timeoutFlag string, insecureFlag bool, deps Deps) error {
+func runSnapshot(cmd *cobra.Command, nameArg, toFlag string, overwrite bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
 		return writeUsageError(cmd, commandSnapshot, fmtErr.Error())
 	}
+
+	ctx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSnapshot, traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
 
 	name, err := normalizedProfileName(nameArg)
 	if err != nil {
@@ -62,16 +71,12 @@ func runSnapshot(cmd *cobra.Command, nameArg, toFlag string, overwrite bool, tim
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSnapshot, err)
 	}
-	// Checked again inside writeSnapshotFile after the capture completes, in
-	// case the destination is created during the (possibly multi-second)
-	// network round trip; this early check only avoids paying for that round
-	// trip when the destination is already known to be invalid.
 	if err := validateSnapshotDestination(dest, overwrite); err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSnapshot, err)
 	}
 
 	start := time.Now()
-	result, driverName, err := captureSnapshot(cmd, name, timeoutFlag, insecureFlag, deps)
+	result, driverName, err := captureSnapshot(ctx, cmd, name, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSnapshot, err)
 	}
@@ -79,7 +84,11 @@ func runSnapshot(cmd *cobra.Command, nameArg, toFlag string, overwrite bool, tim
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSnapshot, err)
 	}
 
-	return writeSnapshotSuccess(cmd.OutOrStdout(), format, name, driverName, dest, time.Since(start).Milliseconds(), result)
+	var tracePath *string
+	if protocolTrace != "" {
+		tracePath = &protocolTrace
+	}
+	return writeSnapshotSuccess(cmd.OutOrStdout(), format, name, driverName, dest, time.Since(start).Milliseconds(), result, tracePath)
 }
 
 func normalizedProfileName(nameArg string) (string, error) {
@@ -90,8 +99,8 @@ func normalizedProfileName(nameArg string) (string, error) {
 	return name, nil
 }
 
-func captureSnapshot(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) (*driver.CameraSnapshotResult, string, error) {
-	rp, err := resolveProfile(cmd.Context(), nameArg, timeoutFlag, insecureFlag, deps)
+func captureSnapshot(ctx context.Context, cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) (*driver.CameraSnapshotResult, string, error) {
+	rp, err := resolveProfile(ctx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return nil, "", err
 	}
@@ -99,7 +108,7 @@ func captureSnapshot(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFl
 		return nil, "", apperr.Newf(5, "driver %q does not support camera snapshot", rp.input.Driver)
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(ctx, rp.timeout)
 	defer cancel()
 
 	result, err := rp.driver.CameraSnapshot(ctx, rp.input, rp.secrets, deps.Log)
@@ -236,15 +245,15 @@ func validateSnapshotDestination(dest string, overwrite bool) error {
 	return nil
 }
 
-func writeSnapshotSuccess(w io.Writer, format output.Format, name, driverName, path string, durationMs int64, result *driver.CameraSnapshotResult) error {
+func writeSnapshotSuccess(w io.Writer, format output.Format, name, driverName, path string, durationMs int64, result *driver.CameraSnapshotResult, tracePath *string) error {
 	if format == output.FormatJSON {
-		return writeSnapshotJSONSuccess(w, name, driverName, path, durationMs, result)
+		return writeSnapshotJSONSuccess(w, name, driverName, path, durationMs, result, tracePath)
 	}
 	_, _ = fmt.Fprintf(w, "Snapshot saved to %s (%s).\n", path, formatByteSize(int64(len(result.Data))))
 	return nil
 }
 
-func writeSnapshotJSONSuccess(w io.Writer, name, driverName, path string, durationMs int64, result *driver.CameraSnapshotResult) error {
+func writeSnapshotJSONSuccess(w io.Writer, name, driverName, path string, durationMs int64, result *driver.CameraSnapshotResult, tracePath *string) error {
 	dm := durationMs
 	type snapshotData struct {
 		Profile   string `json:"profile"`
@@ -263,7 +272,7 @@ func writeSnapshotJSONSuccess(w io.Writer, name, driverName, path string, durati
 			Protocol:  result.Protocol,
 		},
 		Error: nil,
-		Meta:  output.Meta{Command: commandSnapshot, DurationMs: &dm},
+		Meta:  output.Meta{Command: commandSnapshot, DurationMs: &dm, ProtocolTracePath: tracePath},
 	})
 }
 

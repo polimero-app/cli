@@ -8,6 +8,7 @@ import (
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
 
@@ -15,11 +16,12 @@ const commandStart = "jobs start"
 
 func startCommandWithDeps(deps Deps) *cobra.Command {
 	var flags struct {
-		plate        int
-		skipLeveling bool
-		yes          bool
-		timeout      string
-		insecure     bool
+		plate         int
+		skipLeveling  bool
+		yes           bool
+		timeout       string
+		insecure      bool
+		protocolTrace string
 	}
 
 	cmd := &cobra.Command{
@@ -42,7 +44,7 @@ func startCommandWithDeps(deps Deps) *cobra.Command {
 				plate = &v
 			}
 			return runStart(cmd, args[0], args[1], plate, flags.skipLeveling,
-				flags.yes, flags.timeout, flags.insecure, deps)
+				flags.yes, flags.timeout, flags.insecure, flags.protocolTrace, deps)
 		},
 	}
 	cmd.Flags().IntVar(&flags.plate, "plate", 0, "plate/sub-file index within a multi-plate file")
@@ -50,6 +52,7 @@ func startCommandWithDeps(deps Deps) *cobra.Command {
 	cmd.Flags().BoolVar(&flags.yes, "yes", false, "skip interactive confirmation")
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "override the profile connection timeout (e.g. 10s)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
+	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
 	return cmd
 }
 
@@ -64,7 +67,7 @@ func writeUsageError(cmd *cobra.Command, cmdName, message string) error {
 }
 
 func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLeveling bool,
-	yes bool, timeoutFlag string, insecureFlag bool, deps Deps,
+	yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps,
 ) error {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
@@ -73,12 +76,18 @@ func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLe
 		return apperr.New(2, "")
 	}
 
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	if traceErr != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, traceErr)
+	}
+	defer func() { _ = traceCleanup() }()
+
 	// Validate device path format.
 	if err := validateDevicePath(devicePath); err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
 	}
 
-	rp, err := resolveProfile(cmd.Context(), nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
 	}
@@ -88,7 +97,7 @@ func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLe
 			apperr.Newf(5, "driver %q does not support job start", rp.pi.Driver))
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
 	defer cancel()
 
 	if _, err := checkStatePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart,
@@ -118,6 +127,10 @@ func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLe
 		return err
 	}
 
+	var tracePath *string
+	if protocolTrace != "" {
+		tracePath = &protocolTrace
+	}
 	return writeActionSuccess(cmd.OutOrStdout(), format, commandStart, rp.name, rp.pi.Driver,
-		"start", devicePath, plate, result, durationMs)
+		"start", devicePath, plate, result, durationMs, tracePath)
 }
