@@ -122,6 +122,9 @@ func (d *h264FrameDecoder) reinitRGBAFrame() error {
 	}
 
 	rgbaFrameSize := C.av_image_get_buffer_size(int32(d.rgbaFrame.format), d.rgbaFrame.width, d.rgbaFrame.height, 1)
+	if rgbaFrameSize < 0 {
+		return fmt.Errorf("RGBA buffer size calculation failed (libavutil error %d)", int(rgbaFrameSize))
+	}
 	d.rgbaFramePtr = (*[1 << 30]uint8)(unsafe.Pointer(d.rgbaFrame.data[0]))[:rgbaFrameSize:rgbaFrameSize]
 	return nil
 }
