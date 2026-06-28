@@ -2,6 +2,7 @@ package bambulan
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -98,8 +99,9 @@ func connectRTSPSH264(tlsCfg *tls.Config, host, accessCode string, timeout time.
 
 // dialRTSPS connects to a Bambu RTSPS camera endpoint and returns an
 // io.ReadCloser that emits an MPEG-TS stream containing H.264 video.
-func dialRTSPS(tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error) {
-	c, medi, forma, rtpDec, err := connectRTSPSH264(tlsCfg, host, accessCode, 10*time.Second)
+func dialRTSPS(ctx context.Context, tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error) {
+	timeout := rtspTimeout(ctx)
+	c, medi, forma, rtpDec, err := connectRTSPSH264(tlsCfg, host, accessCode, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +175,7 @@ func dialRTSPS(tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, erro
 			s.closeWithError(waitErr)
 		} else {
 			s.once.Do(func() {
+				s.client.Close()
 				close(s.dataCh)
 			})
 		}
