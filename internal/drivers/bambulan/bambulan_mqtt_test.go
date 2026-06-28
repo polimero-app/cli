@@ -141,6 +141,23 @@ func TestMqttCommand_PredicateSkipsNonMatchingReports(t *testing.T) {
 	}
 }
 
+func TestMqttCommand_UnsignedCommandRejection_ReturnsAuthError(t *testing.T) {
+	rejection := []byte(`{"print":{"command":"project_file","sequence_id":"9","result":"fail","reason":"MQTT Command verification failed","err_code":84033543}}`)
+	fc := &fakeCommandClient{responses: [][]byte{rejection, nil}}
+	drv := newCommandDriver(fc)
+	_, err := drv.mqttCommand(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, `{}`, anyPushall)
+	if err == nil {
+		t.Fatal("expected unsigned command rejection error")
+	}
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Fatalf("expected exit code 3, got %v", err)
+	}
+	if strings.Contains(err.Error(), "84033543") {
+		t.Fatalf("error should be sanitized, got %v", err)
+	}
+}
+
 // Verify that mqttCommand is not accidentally exported (it's internal to the driver).
 // This is a compile-time check; no assertion needed.
 var _ = func() {

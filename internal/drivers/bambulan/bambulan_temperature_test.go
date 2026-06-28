@@ -3,6 +3,7 @@ package bambulan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -13,8 +14,16 @@ import (
 
 func float64Ptr(v float64) *float64 { return &v }
 
+func temperaturePushallResponse(nozzleTarget, bedTarget float64) []byte {
+	return []byte(fmt.Sprintf(
+		`{"print":{"gcode_state":"IDLE","nozzle_temper":25.0,"nozzle_target_temper":%.1f,"bed_temper":22.0,"bed_target_temper":%.1f,"chamber_temper":0,"mc_percent":0,"hms":[]}}`,
+		nozzleTarget,
+		bedTarget,
+	))
+}
+
 func TestTemperatureSet_NozzleOnly_PublishesM104(t *testing.T) {
-	response := pushallResponse("IDLE")
+	response := temperaturePushallResponse(200, 60)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 	targets := driver.TemperatureTargets{NozzleCelsius: float64Ptr(200)}
@@ -35,7 +44,7 @@ func TestTemperatureSet_NozzleOnly_PublishesM104(t *testing.T) {
 }
 
 func TestTemperatureSet_BedOnly_PublishesM140(t *testing.T) {
-	response := pushallResponse("IDLE")
+	response := temperaturePushallResponse(200, 60)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 	targets := driver.TemperatureTargets{BedCelsius: float64Ptr(60)}
@@ -50,7 +59,7 @@ func TestTemperatureSet_BedOnly_PublishesM140(t *testing.T) {
 }
 
 func TestTemperatureSet_ChamberOnly_PublishesM141(t *testing.T) {
-	response := pushallResponse("IDLE")
+	response := temperaturePushallResponse(200, 60)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 	targets := driver.TemperatureTargets{ChamberCelsius: float64Ptr(45)}
@@ -65,7 +74,7 @@ func TestTemperatureSet_ChamberOnly_PublishesM141(t *testing.T) {
 }
 
 func TestTemperatureSet_AllTargets_PublishesAllGcodes(t *testing.T) {
-	response := pushallResponse("IDLE")
+	response := temperaturePushallResponse(220, 65)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 	targets := driver.TemperatureTargets{
@@ -140,7 +149,7 @@ func TestTemperatureSet_ConnectFails_ReturnsError(t *testing.T) {
 
 func TestTemperatureSet_ZeroNozzle_SendsM104S0(t *testing.T) {
 	// A value of 0 means "turn off the heater"
-	response := pushallResponse("IDLE")
+	response := temperaturePushallResponse(0, 60)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 	zero := 0.0
@@ -152,5 +161,41 @@ func TestTemperatureSet_ZeroNozzle_SendsM104S0(t *testing.T) {
 	pubs := fc.getPublished()
 	if !strings.Contains(pubs[0], "M104 S0") {
 		t.Errorf("expected M104 S0, got: %s", pubs[0])
+	}
+}
+
+func TestTemperatureSet_ZeroNozzle_ReturnsAcknowledgedZeroTarget(t *testing.T) {
+	response := temperaturePushallResponse(0, 60)
+	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
+	drv := newCommandDriver(fc)
+	zero := 0.0
+	targets := driver.TemperatureTargets{NozzleCelsius: &zero}
+	result, err := drv.TemperatureSet(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), targets)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Targets.NozzleCelsius == nil || *result.Targets.NozzleCelsius != 0 {
+		t.Fatalf("expected acknowledged nozzle target 0, got %v", result.Targets.NozzleCelsius)
+	}
+}
+
+func TestTemperatureSet_WaitsForRequestedTargets(t *testing.T) {
+	oldTargets := temperaturePushallResponse(180, 50)
+	newTargets := temperaturePushallResponse(210, 65)
+	fc := &fakeCommandClient{responses: [][]byte{oldTargets, newTargets}}
+	drv := newCommandDriver(fc)
+	targets := driver.TemperatureTargets{
+		NozzleCelsius: float64Ptr(210),
+		BedCelsius:    float64Ptr(65),
+	}
+	result, err := drv.TemperatureSet(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), targets)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Targets.NozzleCelsius == nil || *result.Targets.NozzleCelsius != 210 {
+		t.Errorf("expected nozzle target 210, got %v", result.Targets.NozzleCelsius)
+	}
+	if result.Targets.BedCelsius == nil || *result.Targets.BedCelsius != 65 {
+		t.Errorf("expected bed target 65, got %v", result.Targets.BedCelsius)
 	}
 }

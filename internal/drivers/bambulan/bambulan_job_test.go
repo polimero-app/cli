@@ -2,6 +2,7 @@ package bambulan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -137,8 +138,21 @@ func TestJobStart_3MF_SendsProjectFileCommand(t *testing.T) {
 	if !strings.Contains(pubs[0], "project_file") {
 		t.Errorf("expected project_file command for .3mf, got: %s", pubs[0])
 	}
-	if !strings.Contains(pubs[0], "/models/cube.3mf") {
-		t.Errorf("expected file path in command, got: %s", pubs[0])
+	printPayload := jobPrintPayload(t, pubs[0])
+	if printPayload["param"] != "Metadata/plate_1.gcode" {
+		t.Errorf("expected plate param, got %v", printPayload["param"])
+	}
+	if printPayload["file"] != "models/cube.3mf" {
+		t.Errorf("expected file without leading slash, got %v", printPayload["file"])
+	}
+	if printPayload["url"] != "file:///models/cube.3mf" {
+		t.Errorf("expected file URL, got %v", printPayload["url"])
+	}
+	if printPayload["project_id"] != "0" || printPayload["task_id"] != "0" {
+		t.Errorf("expected zero placeholder ids, got %v", printPayload)
+	}
+	if printPayload["md5"] != "" {
+		t.Errorf("expected empty md5 for existing printer file, got %v", printPayload["md5"])
 	}
 }
 
@@ -170,8 +184,9 @@ func TestJobStart_WithPlate_SendsPlateIdx(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	pubs := fc.getPublished()
-	if !strings.Contains(pubs[0], `"plate_idx":2`) {
-		t.Errorf("expected plate_idx=2, got: %s", pubs[0])
+	printPayload := jobPrintPayload(t, pubs[0])
+	if printPayload["param"] != "Metadata/plate_2.gcode" {
+		t.Errorf("expected plate_2 param, got: %v", printPayload["param"])
 	}
 }
 
@@ -257,6 +272,20 @@ func TestIsJobState_MatchesExpected(t *testing.T) {
 	if !pred(data) {
 		t.Error("expected predicate to match PAUSED")
 	}
+}
+
+func jobPrintPayload(t *testing.T, payload string) map[string]any {
+	t.Helper()
+	var root struct {
+		Print map[string]any `json:"print"`
+	}
+	if err := json.Unmarshal([]byte(payload), &root); err != nil {
+		t.Fatalf("invalid job payload JSON: %v\n%s", err, payload)
+	}
+	if root.Print == nil {
+		t.Fatalf("missing print payload: %s", payload)
+	}
+	return root.Print
 }
 
 func TestIsJobState_DoesNotMatchOther(t *testing.T) {

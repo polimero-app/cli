@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 
 	"github.com/polimero-app/cli/internal/apperr"
@@ -14,7 +15,8 @@ import (
 // TemperatureSet sends M104/M140/M141 G-code lines to set heater targets and
 // waits for the printer to confirm the new targets in a full status report.
 func (d *Driver) TemperatureSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, targets driver.TemperatureTargets) (driver.TemperatureResult, error) {
-	gcode := buildTemperatureGcode(targets)
+	commandTargets := normalizeTemperatureTargets(targets)
+	gcode := buildTemperatureGcode(commandTargets)
 	if gcode == "" {
 		return driver.TemperatureResult{}, apperr.New(2, "no temperature targets specified")
 	}
@@ -24,7 +26,7 @@ func (d *Driver) TemperatureSet(ctx context.Context, p driver.ProfileInput, s dr
 		return driver.TemperatureResult{}, apperr.Wrap(4, "failed to build temperature command", err)
 	}
 
-	data, err := d.mqttCommand(ctx, p, s, payload, isPushallReport)
+	data, err := d.mqttCommand(ctx, p, s, payload, isTemperatureTargetReport(commandTargets))
 	if err != nil {
 		return driver.TemperatureResult{}, err
 	}
@@ -44,22 +46,40 @@ func (d *Driver) TemperatureSet(ctx context.Context, p driver.ProfileInput, s dr
 		Capabilities: d.Capabilities(),
 	}
 
-	if status.Temperatures != nil {
-		if status.Temperatures.Nozzle != nil && status.Temperatures.Nozzle.TargetCelsius != nil {
-			v := *status.Temperatures.Nozzle.TargetCelsius
-			result.Targets.NozzleCelsius = &v
-		}
-		if status.Temperatures.Bed != nil && status.Temperatures.Bed.TargetCelsius != nil {
-			v := *status.Temperatures.Bed.TargetCelsius
-			result.Targets.BedCelsius = &v
-		}
-		if status.Temperatures.Chamber != nil {
-			// Chamber has no target in the status report; echo what was requested.
-			result.Targets.ChamberCelsius = targets.ChamberCelsius
-		}
+	if status.Temperatures != nil && commandTargets.NozzleCelsius != nil &&
+		status.Temperatures.Nozzle != nil && status.Temperatures.Nozzle.TargetCelsius != nil {
+		v := *status.Temperatures.Nozzle.TargetCelsius
+		result.Targets.NozzleCelsius = &v
+	}
+	if status.Temperatures != nil && commandTargets.BedCelsius != nil &&
+		status.Temperatures.Bed != nil && status.Temperatures.Bed.TargetCelsius != nil {
+		v := *status.Temperatures.Bed.TargetCelsius
+		result.Targets.BedCelsius = &v
+	}
+	if commandTargets.ChamberCelsius != nil {
+		// Chamber target read-back is not exposed in known status reports.
+		v := *commandTargets.ChamberCelsius
+		result.Targets.ChamberCelsius = &v
 	}
 
 	return result, nil
+}
+
+func normalizeTemperatureTargets(targets driver.TemperatureTargets) driver.TemperatureTargets {
+	var out driver.TemperatureTargets
+	if targets.NozzleCelsius != nil {
+		v := math.Round(*targets.NozzleCelsius)
+		out.NozzleCelsius = &v
+	}
+	if targets.BedCelsius != nil {
+		v := math.Round(*targets.BedCelsius)
+		out.BedCelsius = &v
+	}
+	if targets.ChamberCelsius != nil {
+		v := math.Round(*targets.ChamberCelsius)
+		out.ChamberCelsius = &v
+	}
+	return out
 }
 
 // buildTemperatureGcode converts TemperatureTargets to G-code lines.
@@ -90,7 +110,7 @@ func buildGcodeLinePayload(gcode string) (string, error) {
 		Print gcodeLineCmd `json:"print"`
 	}
 	p := payload{Print: gcodeLineCmd{
-		SequenceID: "1",
+		SequenceID: nextSequenceID(),
 		Command:    "gcode_line",
 		Param:      gcode,
 	}}
@@ -99,4 +119,35 @@ func buildGcodeLinePayload(gcode string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+func isTemperatureTargetReport(targets driver.TemperatureTargets) func([]byte) bool {
+	return func(data []byte) bool {
+		if !isPushallReport(data) {
+			return false
+		}
+		status, err := parseReport(data)
+		if err != nil || status == nil {
+			return false
+		}
+		if targets.NozzleCelsius != nil {
+			if status.Temperatures == nil || status.Temperatures.Nozzle == nil ||
+				status.Temperatures.Nozzle.TargetCelsius == nil ||
+				!temperatureTargetMatches(*status.Temperatures.Nozzle.TargetCelsius, *targets.NozzleCelsius) {
+				return false
+			}
+		}
+		if targets.BedCelsius != nil {
+			if status.Temperatures == nil || status.Temperatures.Bed == nil ||
+				status.Temperatures.Bed.TargetCelsius == nil ||
+				!temperatureTargetMatches(*status.Temperatures.Bed.TargetCelsius, *targets.BedCelsius) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func temperatureTargetMatches(observed, requested float64) bool {
+	return math.Abs(observed-requested) < 0.01
 }

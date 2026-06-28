@@ -205,11 +205,13 @@ func TestParseReport_IdleState_NoJob_NoChamber(t *testing.T) {
 	if result.Temperatures != nil && result.Temperatures.Chamber != nil {
 		t.Errorf("Chamber should be nil when chamber_temper=0, got %v", result.Temperatures.Chamber)
 	}
-	if result.Temperatures != nil && result.Temperatures.Nozzle != nil && result.Temperatures.Nozzle.TargetCelsius != nil {
-		t.Errorf("NozzleTarget should be nil when target is 0, got %v", result.Temperatures.Nozzle.TargetCelsius)
+	if result.Temperatures == nil || result.Temperatures.Nozzle == nil ||
+		result.Temperatures.Nozzle.TargetCelsius == nil || *result.Temperatures.Nozzle.TargetCelsius != 0 {
+		t.Errorf("NozzleTarget = %v, want 0", result.Temperatures)
 	}
-	if result.Temperatures != nil && result.Temperatures.Bed != nil && result.Temperatures.Bed.TargetCelsius != nil {
-		t.Errorf("BedTarget should be nil when target is 0, got %v", result.Temperatures.Bed.TargetCelsius)
+	if result.Temperatures == nil || result.Temperatures.Bed == nil ||
+		result.Temperatures.Bed.TargetCelsius == nil || *result.Temperatures.Bed.TargetCelsius != 0 {
+		t.Errorf("BedTarget = %v, want 0", result.Temperatures)
 	}
 	// Errors and Warnings must be empty slices, never nil
 	if result.Errors == nil {

@@ -646,8 +646,8 @@ type bambuPrint struct {
 	AMS *bambuAMS `json:"ams"`
 
 	// External spool holder (A1 Mini uses vt_tray, H2C uses vir_slot).
-	VtTray  *bambuVtTray   `json:"vt_tray"`
-	VirSlot []bambuVtTray  `json:"vir_slot"`
+	VtTray  *bambuVtTray  `json:"vt_tray"`
+	VirSlot []bambuVtTray `json:"vir_slot"`
 
 	// Z position.
 	ZOffset *rawValueString `json:"z_offset"` // not the current Z; see below
@@ -907,14 +907,14 @@ func mapTemperatures(p *bambuPrint) (*driver.Temperatures, []driver.StatusWarnin
 	temps := &driver.Temperatures{}
 	if nozzleTemper := rawToFloat(p.NozzleTemper); nozzleTemper != nil {
 		temps.Nozzle = &driver.Temperature{CurrentCelsius: *nozzleTemper}
-		if nozzleTarget := rawToFloat(p.NozzleTargetTemper); nozzleTarget != nil && *nozzleTarget > 0 {
+		if nozzleTarget := rawToFloat(p.NozzleTargetTemper); nozzleTarget != nil {
 			t := *nozzleTarget
 			temps.Nozzle.TargetCelsius = &t
 		}
 	}
 	if bedTemper := rawToFloat(p.BedTemper); bedTemper != nil {
 		temps.Bed = &driver.Temperature{CurrentCelsius: *bedTemper}
-		if bedTarget := rawToFloat(p.BedTargetTemper); bedTarget != nil && *bedTarget > 0 {
+		if bedTarget := rawToFloat(p.BedTargetTemper); bedTarget != nil {
 			t := *bedTarget
 			temps.Bed.TargetCelsius = &t
 		}

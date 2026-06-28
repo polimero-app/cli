@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/polimero-app/cli/internal/apperr"
@@ -51,7 +52,7 @@ func (d *Driver) JobCancel(ctx context.Context, p driver.ProfileInput, s driver.
 }
 
 // JobStart sends a Bambu project_file or gcode_file command and waits for
-// gcode_state in {PRINTING, PREPARE, SLICING}.
+// gcode_state in {PRINTING, PREPARE, RUNNING, SLICING}.
 func (d *Driver) JobStart(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, devicePath string, opts driver.JobStartOptions) (driver.JobActionResult, error) {
 	path, filename, err := parseJobDevicePath(devicePath)
 	if err != nil {
@@ -63,7 +64,7 @@ func (d *Driver) JobStart(ctx context.Context, p driver.ProfileInput, s driver.S
 		return driver.JobActionResult{}, err
 	}
 
-	data, err := d.mqttCommand(ctx, p, s, payload, isJobState("PRINTING", "PREPARE", "SLICING"))
+	data, err := d.mqttCommand(ctx, p, s, payload, isJobState("PRINTING", "PREPARE", "RUNNING", "SLICING"))
 	if err != nil {
 		return driver.JobActionResult{}, err
 	}
@@ -79,7 +80,7 @@ func buildJobControlPayload(command string) (string, error) {
 	type payload struct {
 		Print cmd `json:"print"`
 	}
-	b, err := json.Marshal(payload{Print: cmd{SequenceID: "1", Command: command}})
+	b, err := json.Marshal(payload{Print: cmd{SequenceID: nextSequenceID(), Command: command}})
 	if err != nil {
 		return "", err
 	}
@@ -89,12 +90,95 @@ func buildJobControlPayload(command string) (string, error) {
 // buildJobStartPayload constructs a Bambu project_file or gcode_file command payload.
 func buildJobStartPayload(path, filename string, opts driver.JobStartOptions) (string, error) {
 	command := jobCommandForPath(path)
+	if command == "project_file" {
+		return buildProjectFilePayload(path, filename, opts)
+	}
+	return buildGcodeFilePayload(path, filename, opts)
+}
+
+func buildProjectFilePayload(path, filename string, opts driver.JobStartOptions) (string, error) {
+	plateIdx := 0
+	if opts.Plate != nil {
+		plateIdx = *opts.Plate
+	}
+	plateNumber := plateIdx
+	if plateNumber <= 0 {
+		plateNumber = 1
+	}
+
+	type projectFileCmd struct {
+		SequenceID    string `json:"sequence_id"`
+		Command       string `json:"command"`
+		Param         string `json:"param"`
+		ProjectID     string `json:"project_id"`
+		ProfileID     string `json:"profile_id"`
+		TaskID        string `json:"task_id"`
+		SubtaskID     string `json:"subtask_id"`
+		SubtaskName   string `json:"subtask_name"`
+		File          string `json:"file"`
+		URL           string `json:"url"`
+		MD5           string `json:"md5"`
+		BedType       string `json:"bed_type"`
+		BedLeveling   bool   `json:"bed_leveling"`
+		FlowCali      bool   `json:"flow_cali"`
+		VibrationCali bool   `json:"vibration_cali"`
+		LayerInspect  bool   `json:"layer_inspect"`
+		Timelapse     bool   `json:"timelapse"`
+		UseAMS        bool   `json:"use_ams"`
+		AMSMapping    []int  `json:"ams_mapping"`
+		AMSMapping2   []any  `json:"ams_mapping2"`
+
+		AutoBedLeveling  int    `json:"auto_bed_leveling"`
+		NozzleOffsetCali int    `json:"nozzle_offset_cali"`
+		Cfg              string `json:"cfg"`
+		ExtrudeCaliFlag  int    `json:"extrude_cali_flag"`
+	}
+	type payload struct {
+		Print projectFileCmd `json:"print"`
+	}
+
+	p := payload{Print: projectFileCmd{
+		SequenceID:    nextSequenceID(),
+		Command:       "project_file",
+		Param:         plateParam(plateNumber),
+		ProjectID:     "0",
+		ProfileID:     "0",
+		TaskID:        "0",
+		SubtaskID:     "0",
+		SubtaskName:   filename,
+		File:          strings.TrimPrefix(path, "/"),
+		URL:           "file://" + path,
+		MD5:           "",
+		BedType:       "auto",
+		BedLeveling:   !opts.SkipLeveling,
+		FlowCali:      false,
+		VibrationCali: false,
+		LayerInspect:  false,
+		Timelapse:     false,
+		UseAMS:        false,
+		AMSMapping:    []int{},
+		AMSMapping2:   []any{},
+
+		AutoBedLeveling:  0,
+		NozzleOffsetCali: 0,
+		Cfg:              "0",
+		ExtrudeCaliFlag:  0,
+	}}
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func buildGcodeFilePayload(path, filename string, opts driver.JobStartOptions) (string, error) {
 	plateIdx := 0
 	if opts.Plate != nil {
 		plateIdx = *opts.Plate
 	}
 
-	type projectFileCmd struct {
+	type gcodeFileCmd struct {
 		SequenceID    string `json:"sequence_id"`
 		Command       string `json:"command"`
 		Param         string `json:"param"`
@@ -109,12 +193,12 @@ func buildJobStartPayload(path, filename string, opts driver.JobStartOptions) (s
 		PlateIdx      int    `json:"plate_idx"`
 	}
 	type payload struct {
-		Print projectFileCmd `json:"print"`
+		Print gcodeFileCmd `json:"print"`
 	}
 
-	p := payload{Print: projectFileCmd{
-		SequenceID:    "1",
-		Command:       command,
+	p := payload{Print: gcodeFileCmd{
+		SequenceID:    nextSequenceID(),
+		Command:       "gcode_file",
 		Param:         path,
 		SubtaskName:   filename,
 		Timelapse:     false,
@@ -132,6 +216,10 @@ func buildJobStartPayload(path, filename string, opts driver.JobStartOptions) (s
 		return "", err
 	}
 	return string(b), nil
+}
+
+func plateParam(plate int) string {
+	return "Metadata/plate_" + strconv.Itoa(plate) + ".gcode"
 }
 
 // parseJobDevicePath splits "sdcard:/models/cube.3mf" into path="/models/cube.3mf"

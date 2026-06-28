@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -12,6 +15,22 @@ import (
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/protocoltrace"
 )
+
+var mqttSequence atomic.Int64
+
+func nextSequenceID() string {
+	now := time.Now().UnixMilli()
+	for {
+		last := mqttSequence.Load()
+		next := now
+		if next <= last {
+			next = last + 1
+		}
+		if mqttSequence.CompareAndSwap(last, next) {
+			return strconv.FormatInt(next, 10)
+		}
+	}
+}
 
 // mqttCommand connects, subscribes to the report topic, publishes commandPayload
 // to the request topic, then immediately publishes a pushall to get a fresh full
@@ -166,6 +185,9 @@ func (d *Driver) mqttCommand(
 	for {
 		select {
 		case data := <-ch:
+			if err := commandRejectionError(data); err != nil {
+				return nil, err
+			}
 			if predicate(data) {
 				dur := time.Since(receiveStart).Milliseconds()
 				bc := int64(len(data))
@@ -197,6 +219,36 @@ func (d *Driver) mqttCommand(
 			return nil, mqttContextError(ctx.Err())
 		}
 	}
+}
+
+func commandRejectionError(data []byte) error {
+	var rep struct {
+		Print *struct {
+			Result  *string         `json:"result"`
+			Reason  *string         `json:"reason"`
+			ErrCode *rawValueString `json:"err_code"`
+			ErrNo   *rawValueString `json:"errno"`
+		} `json:"print"`
+	}
+	if err := json.Unmarshal(data, &rep); err != nil || rep.Print == nil {
+		return nil
+	}
+	reason := ""
+	if rep.Print.Reason != nil {
+		reason = strings.TrimSpace(*rep.Print.Reason)
+	}
+	errCode := rawToInt(rep.Print.ErrCode)
+	if errCode == nil {
+		errCode = rawToInt(rep.Print.ErrNo)
+	}
+	lowerReason := strings.ToLower(reason)
+	if (errCode != nil && *errCode == 84033543) || strings.Contains(lowerReason, "verification failed") {
+		return apperr.New(3, "printer rejected unsigned command; enable Developer Mode or use a signed command path")
+	}
+	if rep.Print.Result != nil && strings.EqualFold(strings.TrimSpace(*rep.Print.Result), "fail") {
+		return apperr.New(1, "printer rejected command")
+	}
+	return nil
 }
 
 func mqttContextError(err error) error {
