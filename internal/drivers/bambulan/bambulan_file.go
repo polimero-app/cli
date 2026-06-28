@@ -16,6 +16,7 @@ import (
 	"github.com/jlaffaye/ftp"
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 )
 
 const (
@@ -83,6 +84,9 @@ func (d *Driver) ftpDial() ftpDialer {
 
 // connectFTP establishes an authenticated FTPS connection.
 func (d *Driver) connectFTP(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, log *slog.Logger) (ftpConn, error) {
+	trace := protocoltrace.FromContext(ctx)
+	endpoint := fmt.Sprintf("%s:%d", p.Host, ftpPort)
+
 	tlsCfg, err := buildFTPTLSConfig(p.Serial, s.TLSFingerprint, p.Insecure)
 	if err != nil {
 		return nil, err
@@ -91,18 +95,62 @@ func (d *Driver) connectFTP(ctx context.Context, p driver.ProfileInput, s driver
 	addr := fmt.Sprintf("%s:%d", p.Host, ftpPort)
 	log.Debug("connecting to FTPS", "addr", addr, "insecure", p.Insecure)
 
+	connectStart := time.Now()
 	conn, err := d.ftpDial()(ctx, addr, tlsCfg)
 	if err != nil {
+		dur := time.Since(connectStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "FTP",
+			Phase:         "connect",
+			Transport:     "ftps",
+			Endpoint:      endpoint,
+			DurationMs:    &dur,
+			ErrorCategory: "connection_error",
+		})
 		log.Debug("FTPS connection failed", "err", err.Error())
 		return nil, apperr.Newf(4, "FTP connection failed: %s", sanitizeFTPError(err))
 	}
+	connectDur := time.Since(connectStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:  time.Now().UTC(),
+		Driver:     "bambu-lan",
+		Operation:  "FTP",
+		Phase:      "connect",
+		Transport:  "ftps",
+		Endpoint:   endpoint,
+		DurationMs: &connectDur,
+	})
 
 	log.Debug("FTPS connected, authenticating")
+	authStart := time.Now()
 	if err := conn.Login(ftpUser, s.AccessCode); err != nil {
+		dur := time.Since(authStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "FTP",
+			Phase:         "authenticate",
+			Transport:     "ftps",
+			Endpoint:      endpoint,
+			DurationMs:    &dur,
+			ErrorCategory: "auth_rejected",
+		})
 		_ = conn.Quit()
 		log.Debug("FTPS authentication failed")
 		return nil, apperr.Newf(3, "FTP authentication failed")
 	}
+	authDur := time.Since(authStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:  time.Now().UTC(),
+		Driver:     "bambu-lan",
+		Operation:  "FTP",
+		Phase:      "authenticate",
+		Transport:  "ftps",
+		Endpoint:   endpoint,
+		DurationMs: &authDur,
+	})
 
 	log.Debug("FTPS authenticated successfully")
 	return conn, nil

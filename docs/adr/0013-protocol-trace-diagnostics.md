@@ -49,8 +49,10 @@ Trace events must not include:
 
 - Access codes, passwords, tokens, private keys, or TLS private material.
 - Raw authentication payloads.
-- Raw MQTT payloads, raw FTP command streams, raw discovery packets, raw camera frames, raw transferred file contents, or unredacted protocol payloads.
+- Raw camera frames, raw transferred file contents, or raw FTP command streams.
 - Unsanitized backend, parser, TLS, FTP, MQTT, RTSP, or secret-store error text.
+
+Trace events may include protocol payloads (MQTT command/report JSON, discovery records) when they do not contain secrets. Drivers must ensure payloads are stripped of any authentication or credential material before emitting them to the trace sink. Binary payloads (camera frames, file transfer content) are never included.
 
 The command layer owns trace file lifecycle:
 

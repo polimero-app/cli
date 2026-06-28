@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	zeroconf "github.com/grandcat/zeroconf"
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 )
 
 // mqttConn is the subset of mqtt.Client used by this driver.
@@ -198,6 +200,9 @@ func (d *Driver) ConnectCheck(ctx context.Context, p driver.ProfileInput, s driv
 		return "", nil
 	}
 
+	trace := protocoltrace.FromContext(ctx)
+	endpoint := fmt.Sprintf("%s:8883", p.Host)
+
 	tlsCfg := buildCaptureTLSConfig(p.Serial)
 
 	var (
@@ -214,7 +219,7 @@ func (d *Driver) ConnectCheck(ctx context.Context, p driver.ProfileInput, s driv
 	}
 
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tls://%s:8883", p.Host))
+	opts.AddBroker(fmt.Sprintf("tls://%s", endpoint))
 	opts.SetClientID(randomClientID())
 	opts.SetUsername("bblp")
 	opts.SetPassword(s.AccessCode)
@@ -224,13 +229,37 @@ func (d *Driver) ConnectCheck(ctx context.Context, p driver.ProfileInput, s driv
 	opts.SetKeepAlive(60)
 
 	client := d.newClient(opts)
+	connectStart := time.Now()
 	if err := waitMQTTToken(ctx, client.Connect()); err != nil {
+		dur := time.Since(connectStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "ConnectCheck",
+			Phase:         "connect",
+			Transport:     "mqtt",
+			Endpoint:      endpoint,
+			Protocol:      "mqttv3.1.1",
+			DurationMs:    &dur,
+			ErrorCategory: classifyTraceError(err),
+		})
 		if isContextDoneErr(err) {
 			go client.Disconnect(0)
 			return "", apperr.New(4, "connection cancelled")
 		}
 		return "", classifyMQTTError(err)
 	}
+	connectDur := time.Since(connectStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:  time.Now().UTC(),
+		Driver:     "bambu-lan",
+		Operation:  "ConnectCheck",
+		Phase:      "connect",
+		Transport:  "mqtt",
+		Endpoint:   endpoint,
+		Protocol:   "mqttv3.1.1",
+		DurationMs: &connectDur,
+	})
 	client.Disconnect(250)
 
 	mu.Lock()
@@ -253,13 +282,16 @@ func (d *Driver) ConnectCheck(ctx context.Context, p driver.ProfileInput, s driv
 //   - 3: TLS fingerprint mismatch or MQTT auth rejected
 //   - 4: network failure, subscribe/publish failure, or context deadline exceeded
 func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
+	trace := protocoltrace.FromContext(ctx)
+	endpoint := fmt.Sprintf("%s:8883", p.Host)
+
 	tlsCfg, err := buildTLSConfig(p.Serial, s.TLSFingerprint, p.Insecure)
 	if err != nil {
 		return nil, err
 	}
 
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tls://%s:8883", p.Host))
+	opts.AddBroker(fmt.Sprintf("tls://%s", endpoint))
 	opts.SetClientID(randomClientID())
 	opts.SetUsername("bblp")
 	opts.SetPassword(s.AccessCode)
@@ -270,19 +302,44 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 
 	client := d.newClient(opts)
 
+	connectStart := time.Now()
 	if err := waitMQTTToken(ctx, client.Connect()); err != nil {
+		dur := time.Since(connectStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "Status",
+			Phase:         "connect",
+			Transport:     "mqtt",
+			Endpoint:      endpoint,
+			Protocol:      "mqttv3.1.1",
+			DurationMs:    &dur,
+			ErrorCategory: classifyTraceError(err),
+		})
 		if isContextDoneErr(err) {
 			go client.Disconnect(0)
 			return nil, statusContextError(err)
 		}
 		return nil, classifyStatusError(err)
 	}
+	connectDur := time.Since(connectStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:  time.Now().UTC(),
+		Driver:     "bambu-lan",
+		Operation:  "Status",
+		Phase:      "connect",
+		Transport:  "mqtt",
+		Endpoint:   endpoint,
+		Protocol:   "mqttv3.1.1",
+		DurationMs: &connectDur,
+	})
 	defer client.Disconnect(250)
 
 	ch := make(chan []byte, 8)
 	reportTopic := fmt.Sprintf("device/%s/report", p.Serial)
 	requestTopic := fmt.Sprintf("device/%s/request", p.Serial)
 
+	subStart := time.Now()
 	subToken := client.Subscribe(reportTopic, 0, func(_ mqtt.Client, msg mqtt.Message) {
 		payload := make([]byte, len(msg.Payload()))
 		copy(payload, msg.Payload())
@@ -292,34 +349,147 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 		}
 	})
 	if err := waitMQTTToken(ctx, subToken); err != nil {
+		dur := time.Since(subStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "Status",
+			Phase:         "subscribe",
+			Transport:     "mqtt",
+			Endpoint:      endpoint,
+			DurationMs:    &dur,
+			ErrorCategory: classifyTraceError(err),
+		})
 		if isContextDoneErr(err) {
 			return nil, statusContextError(err)
 		}
 		return nil, apperr.Wrap(4, "status subscription failed", err)
 	}
+	subDur := time.Since(subStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:  time.Now().UTC(),
+		Driver:     "bambu-lan",
+		Operation:  "Status",
+		Phase:      "subscribe",
+		Transport:  "mqtt",
+		Endpoint:   endpoint,
+		DurationMs: &subDur,
+	})
 
+	pubStart := time.Now()
 	const pushall = `{"pushing":{"sequence_id":"1","command":"pushall","version":1,"push_target":1}}`
 	pubToken := client.Publish(requestTopic, 0, false, pushall)
 	if err := waitMQTTToken(ctx, pubToken); err != nil {
+		dur := time.Since(pubStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "Status",
+			Phase:         "publish",
+			Transport:     "mqtt",
+			Endpoint:      endpoint,
+			DurationMs:    &dur,
+			Payload:       json.RawMessage(pushall),
+			ErrorCategory: classifyTraceError(err),
+		})
 		if isContextDoneErr(err) {
 			return nil, statusContextError(err)
 		}
 		return nil, apperr.Wrap(4, "status request failed", err)
 	}
+	pubDur := time.Since(pubStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:  time.Now().UTC(),
+		Driver:     "bambu-lan",
+		Operation:  "Status",
+		Phase:      "publish",
+		Transport:  "mqtt",
+		Endpoint:   endpoint,
+		DurationMs: &pubDur,
+		Payload:    json.RawMessage(pushall),
+	})
 
+	receiveStart := time.Now()
 	for {
 		select {
 		case data := <-ch:
 			if isPushallReport(data) {
-				return parseReport(data)
+				dur := time.Since(receiveStart).Milliseconds()
+				bc := int64(len(data))
+				trace.Emit(protocoltrace.Event{
+					Timestamp:  time.Now().UTC(),
+					Driver:     "bambu-lan",
+					Operation:  "Status",
+					Phase:      "receive",
+					Transport:  "mqtt",
+					Endpoint:   endpoint,
+					DurationMs: &dur,
+					ByteCount:  &bc,
+					Payload:    json.RawMessage(data),
+				})
+				result, parseErr := parseReport(data)
+				emitParseEvent(trace, data, result)
+				return result, parseErr
 			}
 		case <-ctx.Done():
+			dur := time.Since(receiveStart).Milliseconds()
+			trace.Emit(protocoltrace.Event{
+				Timestamp:     time.Now().UTC(),
+				Driver:        "bambu-lan",
+				Operation:     "Status",
+				Phase:         "receive",
+				Transport:     "mqtt",
+				Endpoint:      endpoint,
+				DurationMs:    &dur,
+				ErrorCategory: "timeout",
+			})
 			if errors.Is(ctx.Err(), context.Canceled) {
 				return nil, apperr.New(4, "status check cancelled")
 			}
 			return nil, apperr.New(4, "status check timed out")
 		}
 	}
+}
+
+// emitParseEvent emits a "parse" phase trace event with response key inventory
+// and any parser warnings from the status result.
+func emitParseEvent(trace protocoltrace.Sink, data []byte, result *driver.StatusResult) {
+	keys := extractTopLevelKeys(data)
+	var warning string
+	if result != nil && len(result.Warnings) > 0 {
+		codes := make([]string, 0, len(result.Warnings))
+		for _, w := range result.Warnings {
+			codes = append(codes, w.Code)
+		}
+		warning = strings.Join(codes, ", ")
+	}
+	ev := protocoltrace.Event{
+		Timestamp: time.Now().UTC(),
+		Driver:    "bambu-lan",
+		Operation: "Status",
+		Phase:     "parse",
+		Keys:      keys,
+	}
+	if warning != "" {
+		ev.Warning = warning
+	}
+	trace.Emit(ev)
+}
+
+// extractTopLevelKeys returns the keys from the "print" object in a Bambu report.
+func extractTopLevelKeys(data []byte) []string {
+	var raw struct {
+		Print map[string]json.RawMessage `json:"print"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil || raw.Print == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(raw.Print))
+	for k := range raw.Print {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // isPushallReport returns true when data contains a full pushall response.
@@ -361,6 +531,22 @@ func statusContextError(err error) error {
 		return apperr.New(4, "status check cancelled")
 	}
 	return apperr.New(4, "status check timed out")
+}
+
+// classifyTraceError returns a sanitized error category for trace events.
+// Never includes raw error messages or secrets.
+func classifyTraceError(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if errors.Is(err, packets.ErrorRefusedBadUsernameOrPassword) ||
+		errors.Is(err, packets.ErrorRefusedNotAuthorised) {
+		return "auth_rejected"
+	}
+	return "connection_error"
 }
 
 // classifyMQTTError maps paho connect errors to apperr exit codes.
@@ -1225,35 +1411,100 @@ const (
 // H-series and X-series printers serve camera only via RTSPS;
 // A1/A1 mini family printers refuse port 322 and serve MJPEG on port 6000.
 func (d *Driver) CameraStream(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
+	trace := protocoltrace.FromContext(ctx)
+
 	tlsCfg, err := buildTLSConfig(p.Serial, s.TLSFingerprint, p.Insecure)
 	if err != nil {
 		return nil, err
 	}
 
 	// Try port 322 (RTSPS / H.264) first.
+	rtspEndpoint := fmt.Sprintf("%s:322", p.Host)
+	rtspStart := time.Now()
 	rtspTLS := tlsCfg.Clone()
 	rtspStream, rtspErr := d.dialRTSPSFn(ctx, rtspTLS, p.Host, s.AccessCode)
 	if rtspErr == nil {
+		dur := time.Since(rtspStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:  time.Now().UTC(),
+			Driver:     "bambu-lan",
+			Operation:  "CameraStream",
+			Phase:      "connect",
+			Transport:  "rtsps",
+			Endpoint:   rtspEndpoint,
+			Protocol:   "h264",
+			DurationMs: &dur,
+		})
 		return &driver.CameraStreamResult{
 			Format:       driver.CameraFormatH264,
 			Stream:       rtspStream,
 			Capabilities: d.Capabilities(),
 		}, nil
 	}
+	rtspDur := time.Since(rtspStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:     time.Now().UTC(),
+		Driver:        "bambu-lan",
+		Operation:     "CameraStream",
+		Phase:         "connect",
+		Transport:     "rtsps",
+		Endpoint:      rtspEndpoint,
+		Protocol:      "h264",
+		DurationMs:    &rtspDur,
+		ErrorCategory: "connection_error",
+	})
 
 	// Fall back to port 6000 (MJPEG) with a short timeout.
+	mjpegEndpoint := fmt.Sprintf("%s:%d", p.Host, cameraPortMJPEG)
+	mjpegStart := time.Now()
 	mjpegCtx, mjpegCancel := context.WithTimeout(ctx, cameraProbeTimeout)
-	conn, mjpegErr := d.dialTLS(mjpegCtx, fmt.Sprintf("%s:%d", p.Host, cameraPortMJPEG), tlsCfg.Clone())
+	conn, mjpegErr := d.dialTLS(mjpegCtx, mjpegEndpoint, tlsCfg.Clone())
 	mjpegCancel()
 
 	if mjpegErr != nil {
+		dur := time.Since(mjpegStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "CameraStream",
+			Phase:         "connect",
+			Transport:     "tls",
+			Endpoint:      mjpegEndpoint,
+			Protocol:      "mjpeg",
+			DurationMs:    &dur,
+			ErrorCategory: "connection_error",
+		})
 		return nil, apperr.New(4, "camera endpoint unreachable: both ports 322 and 6000 failed")
 	}
 
 	if authErr := sendCameraAuth(conn, s.AccessCode); authErr != nil {
 		_ = conn.Close()
+		dur := time.Since(mjpegStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "CameraStream",
+			Phase:         "authenticate",
+			Transport:     "tls",
+			Endpoint:      mjpegEndpoint,
+			Protocol:      "mjpeg",
+			DurationMs:    &dur,
+			ErrorCategory: "auth_rejected",
+		})
 		return nil, apperr.Wrap(4, "camera authentication failed", authErr)
 	}
+
+	dur := time.Since(mjpegStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:  time.Now().UTC(),
+		Driver:     "bambu-lan",
+		Operation:  "CameraStream",
+		Phase:      "connect",
+		Transport:  "tls",
+		Endpoint:   mjpegEndpoint,
+		Protocol:   "mjpeg",
+		DurationMs: &dur,
+	})
 
 	stream := newMJPEGStream(conn)
 	return &driver.CameraStreamResult{
@@ -1351,14 +1602,39 @@ func (m *mjpegStream) Close() error {
 }
 
 func (d *Driver) CaptureFingerprint(ctx context.Context, p driver.ProfileInput) (string, error) {
+	trace := protocoltrace.FromContext(ctx)
+	endpoint := fmt.Sprintf("%s:8883", p.Host)
+
 	cfg := &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // Bambu CA not in OS trust stores; capturing cert for TOFU pin (ADR 0007)
 		ServerName:         p.Serial,
 	}
-	conn, err := d.dialTLS(ctx, fmt.Sprintf("%s:8883", p.Host), cfg)
+	connectStart := time.Now()
+	conn, err := d.dialTLS(ctx, endpoint, cfg)
 	if err != nil {
+		dur := time.Since(connectStart).Milliseconds()
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "CaptureFingerprint",
+			Phase:         "connect",
+			Transport:     "tls",
+			Endpoint:      endpoint,
+			DurationMs:    &dur,
+			ErrorCategory: "connection_error",
+		})
 		return "", apperr.Wrap(4, "TLS connect failed", err)
 	}
+	connectDur := time.Since(connectStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:  time.Now().UTC(),
+		Driver:     "bambu-lan",
+		Operation:  "CaptureFingerprint",
+		Phase:      "connect",
+		Transport:  "tls",
+		Endpoint:   endpoint,
+		DurationMs: &connectDur,
+	})
 	defer func() { _ = conn.Close() }()
 	state := conn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
@@ -1369,6 +1645,8 @@ func (d *Driver) CaptureFingerprint(ctx context.Context, p driver.ProfileInput) 
 }
 
 func (d *Driver) Discover(ctx context.Context) ([]driver.DiscoveredPrinter, error) {
+	trace := protocoltrace.FromContext(ctx)
+
 	type protoStart struct {
 		name  string
 		start func() (<-chan *mdnsEntry, error)
@@ -1390,10 +1668,19 @@ func (d *Driver) Discover(ctx context.Context) ([]driver.DiscoveredPrinter, erro
 		}
 	}
 	if len(channels) == 0 {
+		trace.Emit(protocoltrace.Event{
+			Timestamp:     time.Now().UTC(),
+			Driver:        "bambu-lan",
+			Operation:     "Discover",
+			Phase:         "scan",
+			Transport:     "multicast",
+			ErrorCategory: "all_protocols_failed",
+		})
 		return nil, apperr.Newf(4, "all discovery protocols failed to start: %s",
 			strings.Join(startErrs, "; "))
 	}
 
+	scanStart := time.Now()
 	merged := fanIn(ctx, channels...)
 	seen := make(map[string]struct{})
 	result := []driver.DiscoveredPrinter{}
@@ -1412,6 +1699,17 @@ func (d *Driver) Discover(ctx context.Context) ([]driver.DiscoveredPrinter, erro
 			result = append(result, p)
 		}
 	}
+	scanDur := time.Since(scanStart).Milliseconds()
+	count := int64(len(result))
+	trace.Emit(protocoltrace.Event{
+		Timestamp:  time.Now().UTC(),
+		Driver:     "bambu-lan",
+		Operation:  "Discover",
+		Phase:      "scan",
+		Transport:  "multicast",
+		DurationMs: &scanDur,
+		Detail:     map[string]any{"found": count},
+	})
 	return result, nil
 }
 

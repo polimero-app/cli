@@ -8,9 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 )
 
 const (
@@ -20,6 +22,8 @@ const (
 
 // CameraSnapshot captures one JPEG-encoded camera frame from the printer.
 func (d *Driver) CameraSnapshot(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger) (*driver.CameraSnapshotResult, error) {
+	trace := protocoltrace.FromContext(ctx)
+
 	tlsCfg, err := buildTLSConfig(p.Serial, s.TLSFingerprint, p.Insecure)
 	if err != nil {
 		return nil, err
@@ -30,33 +34,84 @@ func (d *Driver) CameraSnapshot(ctx context.Context, p driver.ProfileInput, s dr
 		captureH264 = captureRTSPSH264Snapshot
 	}
 
+	rtspEndpoint := fmt.Sprintf("%s:322", p.Host)
+	h264Start := time.Now()
 	data, h264Err := captureH264(ctx, tlsCfg.Clone(), p.Host, s.AccessCode)
 	if h264Err == nil {
+		dur := time.Since(h264Start).Milliseconds()
+		bc := int64(len(data))
+		trace.Emit(protocoltrace.Event{
+			Timestamp:  time.Now().UTC(),
+			Driver:     "bambu-lan",
+			Operation:  "CameraSnapshot",
+			Phase:      "capture",
+			Transport:  "rtsps",
+			Endpoint:   rtspEndpoint,
+			Protocol:   "h264",
+			DurationMs: &dur,
+			ByteCount:  &bc,
+		})
 		return &driver.CameraSnapshotResult{
 			Data:         data,
 			Protocol:     cameraProtocolH264,
 			Capabilities: d.Capabilities(),
 		}, nil
 	}
+	h264Dur := time.Since(h264Start).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:     time.Now().UTC(),
+		Driver:        "bambu-lan",
+		Operation:     "CameraSnapshot",
+		Phase:         "capture",
+		Transport:     "rtsps",
+		Endpoint:      rtspEndpoint,
+		Protocol:      "h264",
+		DurationMs:    &h264Dur,
+		ErrorCategory: "connection_error",
+	})
+
 	if ctx.Err() != nil {
-		// The H.264 attempt already consumed the whole timeout/cancellation
-		// budget; an MJPEG fallback dial would fail instantly on the same
-		// expired context, so report the real cause directly instead of
-		// attempting a doomed connection.
 		return nil, cameraContextError(ctx.Err())
 	}
 	if !isConnectionError(h264Err) {
 		return nil, h264Err
 	}
 
+	mjpegEndpoint := fmt.Sprintf("%s:%d", p.Host, cameraPortMJPEG)
+	mjpegStart := time.Now()
 	data, mjpegErr := d.captureMJPEGSnapshot(ctx, p, s, tlsCfg.Clone())
 	if mjpegErr == nil {
+		dur := time.Since(mjpegStart).Milliseconds()
+		bc := int64(len(data))
+		trace.Emit(protocoltrace.Event{
+			Timestamp:  time.Now().UTC(),
+			Driver:     "bambu-lan",
+			Operation:  "CameraSnapshot",
+			Phase:      "capture",
+			Transport:  "tls",
+			Endpoint:   mjpegEndpoint,
+			Protocol:   "mjpeg",
+			DurationMs: &dur,
+			ByteCount:  &bc,
+		})
 		return &driver.CameraSnapshotResult{
 			Data:         data,
 			Protocol:     cameraProtocolMJPEG,
 			Capabilities: d.Capabilities(),
 		}, nil
 	}
+	mjpegDur := time.Since(mjpegStart).Milliseconds()
+	trace.Emit(protocoltrace.Event{
+		Timestamp:     time.Now().UTC(),
+		Driver:        "bambu-lan",
+		Operation:     "CameraSnapshot",
+		Phase:         "capture",
+		Transport:     "tls",
+		Endpoint:      mjpegEndpoint,
+		Protocol:      "mjpeg",
+		DurationMs:    &mjpegDur,
+		ErrorCategory: "connection_error",
+	})
 	if ctx.Err() != nil {
 		return nil, cameraContextError(ctx.Err())
 	}

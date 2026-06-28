@@ -1,6 +1,9 @@
 package protocoltrace
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Event is a single protocol trace diagnostic record.
 // Each event is written as one JSON Lines entry to the trace file.
@@ -34,6 +37,11 @@ type Event struct {
 
 	// Protocol is a selected sub-protocol name (e.g. "mqttv3.1.1", "ftps-explicit").
 	Protocol string `json:"protocol,omitempty"`
+
+	// Payload is the raw protocol payload sent or received in this phase.
+	// For JSON-based protocols, this embeds directly without double-encoding.
+	// Must never contain secrets (access codes, passwords, tokens).
+	Payload json.RawMessage `json:"payload,omitempty"`
 
 	// Capability records a capability decision (e.g. "cameraStream: true").
 	Capability string `json:"capability,omitempty"`
