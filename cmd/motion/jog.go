@@ -209,6 +209,7 @@ func writeJogJSONSuccess(w io.Writer, name, driverName string, delta driver.JogD
 		Profile      string                 `json:"profile"`
 		Driver       string                 `json:"driver"`
 		Action       string                 `json:"action"`
+		State        string                 `json:"state"`
 		Delta        deltaJSON              `json:"delta"`
 		Warnings     []driver.StatusWarning `json:"warnings"`
 		Capabilities driver.Capabilities    `json:"capabilities"`
@@ -223,6 +224,7 @@ func writeJogJSONSuccess(w io.Writer, name, driverName string, delta driver.JogD
 			Profile: name,
 			Driver:  driverName,
 			Action:  "jog",
+			State:   motionResultState(result),
 			Delta: deltaJSON{
 				XMillimeters:     delta.XMillimeters,
 				YMillimeters:     delta.YMillimeters,
@@ -251,7 +253,7 @@ func writeJogHumanSuccess(w io.Writer, name string, delta driver.JogDelta) error
 	lines := []string{
 		fmt.Sprintf("Printer: %s", name),
 		fmt.Sprintf("Jogging %s at %dmm/min...", strings.Join(parts, " "), delta.FeedrateMmPerMin),
-		"Jog complete.",
+		"Jog command accepted.",
 	}
 	for _, l := range lines {
 		if _, err := fmt.Fprintln(w, l); err != nil {

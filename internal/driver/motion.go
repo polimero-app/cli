@@ -12,7 +12,7 @@ type MotionDriver interface {
 
 	// MotionHome homes the specified axes.
 	// An empty axes slice means home all axes.
-	// The driver blocks until it confirms the motion has physically finished.
+	// The driver blocks until it can return accepted or complete state.
 	MotionHome(
 		ctx context.Context,
 		p ProfileInput,
@@ -22,7 +22,7 @@ type MotionDriver interface {
 	) (MotionResult, error)
 
 	// MotionJog moves the toolhead relative to its current position.
-	// The driver blocks until it confirms the motion has physically finished.
+	// The driver blocks until it can return accepted or complete state.
 	MotionJog(
 		ctx context.Context,
 		p ProfileInput,

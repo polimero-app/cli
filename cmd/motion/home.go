@@ -177,6 +177,7 @@ func writeHomeJSONSuccess(w io.Writer, name, driverName string, axisNames []stri
 		Profile      string                 `json:"profile"`
 		Driver       string                 `json:"driver"`
 		Action       string                 `json:"action"`
+		State        string                 `json:"state"`
 		Axes         []any                  `json:"axes"`
 		Warnings     []driver.StatusWarning `json:"warnings"`
 		Capabilities driver.Capabilities    `json:"capabilities"`
@@ -191,6 +192,7 @@ func writeHomeJSONSuccess(w io.Writer, name, driverName string, axisNames []stri
 			Profile:      name,
 			Driver:       driverName,
 			Action:       "home",
+			State:        motionResultState(result),
 			Axes:         axes,
 			Warnings:     warnings,
 			Capabilities: result.Capabilities,
@@ -204,7 +206,7 @@ func writeHomeHumanSuccess(w io.Writer, name string, axisNames []string) error {
 	lines := []string{
 		fmt.Sprintf("Printer: %s", name),
 		fmt.Sprintf("Homing %s...", strings.Join(axisNames, ", ")),
-		"Homing complete.",
+		"Homing command accepted.",
 	}
 	for _, l := range lines {
 		if _, err := fmt.Fprintln(w, l); err != nil {
@@ -212,4 +214,11 @@ func writeHomeHumanSuccess(w io.Writer, name string, axisNames []string) error {
 		}
 	}
 	return nil
+}
+
+func motionResultState(result driver.MotionResult) string {
+	if result.State == "" {
+		return string(driver.MotionStateAccepted)
+	}
+	return string(result.State)
 }

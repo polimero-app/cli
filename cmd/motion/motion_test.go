@@ -60,7 +60,7 @@ func (s *stubMotionDriver) MotionHome(_ context.Context, _ driver.ProfileInput, 
 	if s.homeRes != nil {
 		return *s.homeRes, nil
 	}
-	return driver.MotionResult{Capabilities: s.caps}, nil
+	return driver.MotionResult{State: driver.MotionStateAccepted, Capabilities: s.caps}, nil
 }
 func (s *stubMotionDriver) MotionJog(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger, _ driver.JogDelta) (driver.MotionResult, error) {
 	if s.jogErr != nil {
@@ -69,7 +69,7 @@ func (s *stubMotionDriver) MotionJog(_ context.Context, _ driver.ProfileInput, _
 	if s.jogRes != nil {
 		return *s.jogRes, nil
 	}
-	return driver.MotionResult{Capabilities: s.caps}, nil
+	return driver.MotionResult{State: driver.MotionStateAccepted, Capabilities: s.caps}, nil
 }
 
 func defaultMotionDriver() *stubMotionDriver {
@@ -164,8 +164,8 @@ func TestMotionHome_AllAxes_HumanSuccess(t *testing.T) {
 	if !strings.Contains(out, "Homing x, y, z") {
 		t.Errorf("expected homing message, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Homing complete") {
-		t.Errorf("expected completion message, got:\n%s", out)
+	if !strings.Contains(out, "Homing command accepted") {
+		t.Errorf("expected accepted message, got:\n%s", out)
 	}
 }
 
@@ -202,6 +202,9 @@ func TestMotionHome_JSONSuccess(t *testing.T) {
 	data := env["data"].(map[string]any)
 	if data["action"] != "home" {
 		t.Errorf("expected action=home, got %v", data["action"])
+	}
+	if data["state"] != "accepted" {
+		t.Errorf("expected state=accepted, got %v", data["state"])
 	}
 	axes, ok := data["axes"].([]any)
 	if !ok || len(axes) != 3 {
@@ -312,8 +315,8 @@ func TestMotionJog_SingleAxis_HumanSuccess(t *testing.T) {
 	if !strings.Contains(out, "Jogging") {
 		t.Errorf("expected jogging message, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Jog complete") {
-		t.Errorf("expected completion message, got:\n%s", out)
+	if !strings.Contains(out, "Jog command accepted") {
+		t.Errorf("expected accepted message, got:\n%s", out)
 	}
 }
 
@@ -336,6 +339,9 @@ func TestMotionJog_JSONSuccess(t *testing.T) {
 	data := env["data"].(map[string]any)
 	if data["action"] != "jog" {
 		t.Errorf("expected action=jog, got %v", data["action"])
+	}
+	if data["state"] != "accepted" {
+		t.Errorf("expected state=accepted, got %v", data["state"])
 	}
 }
 

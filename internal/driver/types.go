@@ -272,8 +272,17 @@ type JogDelta struct {
 	FeedrateMmPerMin int
 }
 
+// MotionState describes how far a driver can truthfully confirm a motion command.
+type MotionState string
+
+const (
+	MotionStateAccepted MotionState = "accepted"
+	MotionStateComplete MotionState = "complete"
+)
+
 // MotionResult is returned by motion control operations.
 type MotionResult struct {
+	State        MotionState
 	Warnings     []StatusWarning
 	Capabilities Capabilities
 }

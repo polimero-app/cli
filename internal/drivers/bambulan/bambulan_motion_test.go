@@ -72,6 +72,9 @@ func TestMotionHome_HappyPath_ReturnsResult(t *testing.T) {
 	if result.Warnings == nil {
 		t.Error("Warnings must be non-nil slice")
 	}
+	if result.State != driver.MotionStateAccepted {
+		t.Errorf("expected state=accepted, got %q", result.State)
+	}
 }
 
 func TestMotionHome_ConnectFails_ReturnsError(t *testing.T) {
@@ -151,6 +154,9 @@ func TestMotionJog_HappyPath_ReturnsResult(t *testing.T) {
 	}
 	if result.Warnings == nil {
 		t.Error("Warnings must be non-nil slice")
+	}
+	if result.State != driver.MotionStateAccepted {
+		t.Errorf("expected state=accepted, got %q", result.State)
 	}
 }
 

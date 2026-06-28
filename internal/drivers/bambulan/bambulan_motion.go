@@ -10,7 +10,7 @@ import (
 )
 
 // MotionHome homes the printer axes by sending a G28 G-code command and
-// waiting for a full status report to confirm the command was processed.
+// waiting for a full status report to confirm the command was accepted.
 // If axes is empty or nil, all axes are homed (G28 with no arguments).
 func (d *Driver) MotionHome(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, axes []driver.Axis) (driver.MotionResult, error) {
 	gcode := buildHomeGcode(axes)
@@ -28,7 +28,7 @@ func (d *Driver) MotionHome(ctx context.Context, p driver.ProfileInput, s driver
 }
 
 // MotionJog moves the toolhead by a relative delta using G91+G1+G90 G-code and
-// waits for a full status report to confirm the command was processed.
+// waits for a full status report to confirm the command was accepted.
 func (d *Driver) MotionJog(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, delta driver.JogDelta) (driver.MotionResult, error) {
 	gcode := buildJogGcode(delta)
 	payload, err := buildGcodeLinePayload(gcode)
@@ -81,7 +81,7 @@ func buildJogGcode(delta driver.JogDelta) string {
 	return sb.String()
 }
 
-// motionResultFromReport parses a pushall report and returns a MotionResult.
+// motionResultFromReport parses a pushall report and returns an accepted result.
 func motionResultFromReport(data []byte, d *Driver) (driver.MotionResult, error) {
 	status, err := parseReport(data)
 	if err != nil {
@@ -92,6 +92,7 @@ func motionResultFromReport(data []byte, d *Driver) (driver.MotionResult, error)
 		warnings = []driver.StatusWarning{}
 	}
 	return driver.MotionResult{
+		State:        driver.MotionStateAccepted,
 		Warnings:     warnings,
 		Capabilities: d.Capabilities(),
 	}, nil
