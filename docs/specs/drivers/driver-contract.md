@@ -48,6 +48,9 @@ Capabilities {
     TemperatureRead  bool
     TemperatureWrite bool
     MotionControl    bool
+    FanControl       bool
+    LightControl     bool
+    SpeedControl     bool
     TLSRefresh       bool
     CameraStream     bool
     CameraSnapshot   bool
@@ -415,6 +418,140 @@ Contract:
 - Return `unsupported_capability` when the driver does not support the requested axis or motion type.
 - Sanitize transport and protocol errors before returning them.
 
+## Fan Control Operation
+
+Drivers that declare `FanControl: true` in their `Capabilities` must implement:
+
+```go
+FanSet(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger, target FanTarget) (FanControlResult, error)
+```
+
+Where:
+
+```go
+type FanTarget struct {
+    Fan          string // canonical driver-supported fan key
+    SpeedPercent int    // 0-100, where 0 means off
+}
+
+type FanControlResult struct {
+    Fan          string // canonical fan key acknowledged by the printer
+    SpeedPercent int
+    Warnings     []StatusWarning
+    Capabilities Capabilities
+}
+```
+
+Contract:
+
+- The command layer enforces fan speed bounds (`0` to `100`) and the state
+  precondition (`idle`, `printing`, or `paused`) before calling this operation.
+  Drivers do not re-derive these checks.
+- The command layer normalizes portable aliases before dispatch. Drivers receive
+  canonical fan keys and must return canonical fan keys in results.
+- The operation must only expose user-controllable fans. Firmware-managed safety
+  fans such as heatbreak, hotend, controller, electronics, and power-supply fans
+  are not generic fan-control targets.
+- The driver blocks, bounded by `ctx`, until the printer acknowledges the
+  requested fan speed. A fresh status echo is preferred. An explicit protocol
+  acknowledgment is acceptable only when it identifies the requested fan and
+  requested percentage. Transport publish or socket-write success alone is not
+  an acknowledgment.
+- If the connected model does not support the requested fan, return
+  `unsupported_capability`.
+- Return `timeout` if no acknowledgment arrives before the context deadline.
+- Sanitize transport and protocol errors before returning them.
+
+## Light Control Operation
+
+Drivers that declare `LightControl: true` in their `Capabilities` must
+implement:
+
+```go
+LightSet(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger, target LightTarget) (LightControlResult, error)
+```
+
+Where:
+
+```go
+type LightState string
+
+const (
+    LightStateOn  LightState = "on"
+    LightStateOff LightState = "off"
+)
+
+type LightTarget struct {
+    Light string
+    State LightState
+}
+
+type LightControlResult struct {
+    Light        string
+    State        LightState
+    Warnings     []StatusWarning
+    Capabilities Capabilities
+}
+```
+
+Contract:
+
+- The command layer enforces the known-reachable-state precondition before
+  calling this operation. Allowed states are `idle`, `printing`, `paused`, and
+  `error`.
+- The command layer normalizes portable aliases before dispatch. Drivers receive
+  canonical light keys and must return canonical light keys in results.
+- This operation controls on/off lighting only. Brightness, color, animation,
+  and scheduled lighting require a later contract.
+- The driver blocks, bounded by `ctx`, until the printer acknowledges the
+  requested light state. A fresh status echo is preferred. An explicit protocol
+  acknowledgment is acceptable only when it identifies the requested light and
+  requested state. Transport publish or socket-write success alone is not an
+  acknowledgment.
+- If the connected model does not support the requested light, return
+  `unsupported_capability`.
+- Return `timeout` if no acknowledgment arrives before the context deadline.
+- Sanitize transport and protocol errors before returning them.
+
+## Speed Control Operation
+
+Drivers that declare `SpeedControl: true` in their `Capabilities` must
+implement:
+
+```go
+SpeedSet(ctx context.Context, p ProfileInput, s SecretsBundle, log *slog.Logger, profile string) (SpeedControlResult, error)
+```
+
+Where:
+
+```go
+type SpeedControlResult struct {
+    SpeedProfile string
+    Warnings     []StatusWarning
+    Capabilities Capabilities
+}
+```
+
+Contract:
+
+- The command layer enforces profile token syntax and the state precondition
+  (`printing` or `paused`) before calling this operation.
+- Speed profiles are stable lowercase string tokens documented by the driver
+  spec. Drivers receive canonical speed profile tokens and must return canonical
+  tokens in results.
+- This operation controls active print speed profile only. It must not expose
+  arbitrary G-code, percentage multipliers, acceleration, jerk, pressure
+  advance, flow, or motion feedrate settings.
+- The driver blocks, bounded by `ctx`, until the printer acknowledges the
+  requested speed profile. A fresh status echo is preferred. An explicit
+  protocol acknowledgment is acceptable only when it identifies the requested
+  profile. Transport publish or socket-write success alone is not an
+  acknowledgment.
+- If the connected model or firmware does not support the requested profile,
+  return `unsupported_capability`.
+- Return `timeout` if no acknowledgment arrives before the context deadline.
+- Sanitize transport and protocol errors before returning them.
+
 ## Errors
 
 Drivers return typed errors using internal error codes. The command layer maps these to the public JSON `error.code` values emitted in `--output json` responses. These are two distinct namespaces; the mapping is:
@@ -438,6 +575,11 @@ Drivers return typed errors using internal error codes. The command layer maps t
 | `driver_internal_error` | `internal_error` |
 
 The command layer is responsible for the translation. Driver implementations must use the internal codes only.
+
+Command-layer validation failures that occur before driver dispatch are outside
+the driver internal-code namespace. For example, auxiliary-control command specs
+use public JSON error code `invalid_argument` for malformed CLI tokens that
+drivers never receive.
 
 Partial data is reported as warnings in the status result, not as an error. Errors must be sanitized before they reach CLI output.
 
@@ -463,5 +605,8 @@ Every driver must support:
 - Contract tests for redaction.
 - Contract tests for file capability handling, path errors, empty directory results, transfer overwrite handling, and secret redaction when file operations are supported.
 - Contract tests for job/temperature/motion capability handling, confirmed-state-vs-expected-transition mismatches (`job_action_failed`), and timeout while awaiting confirmation, when these capabilities are supported.
+- Contract tests for fan/light/speed capability handling, unsupported targets,
+  timeout while awaiting acknowledgment, and secret redaction when these
+  capabilities are supported.
 
 Hardware tests must be opt-in and build-tagged.

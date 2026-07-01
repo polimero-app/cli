@@ -59,7 +59,7 @@ The initial repository should contain:
 - `docs/specs/drivers/`
 - `docs/security/`
 
-Printer-control commands (jobs, temperature, motion) are authorized by ADR 0012 and their respective command specs.
+Printer-control commands (jobs, temperature, motion) are authorized by ADR 0012 and their respective command specs. Auxiliary controls (fans, lights, speed) are authorized by ADR 0014 and their respective command specs.
 
 ## ADR Workflow
 
@@ -144,6 +144,8 @@ Initial ADRs:
 - `docs/adr/0010-promote-status-to-top-level.md`
 - `docs/adr/0011-extended-read-only-status.md`
 - `docs/adr/0012-printer-control-commands.md`
+- `docs/adr/0013-protocol-trace-diagnostics.md`
+- `docs/adr/0014-auxiliary-printer-controls.md`
 
 Command specs:
 
@@ -161,6 +163,9 @@ Command specs:
 - `docs/specs/commands/jobs.md`
 - `docs/specs/commands/temperature.md`
 - `docs/specs/commands/motion.md`
+- `docs/specs/commands/fans.md`
+- `docs/specs/commands/lights.md`
+- `docs/specs/commands/speed.md`
 
 Driver and security docs:
 
