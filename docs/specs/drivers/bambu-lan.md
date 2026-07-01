@@ -52,6 +52,8 @@ Out of scope:
 - AMS-aware job start (`use_ams: true`).
 - Timelapse control during job start.
 - Chamber heater target read-back (M141 is sent; the report omits target).
+- Fan, light, and speed control until this driver spec documents verified
+  payloads, model limits, and acknowledgment mappings.
 
 ## Capability Policy
 
@@ -225,6 +227,50 @@ Bambu LAN MQTT status does not expose a reliable motion-finished acknowledgment 
 #### Unsigned Command Rejection
 
 Firmware with command-signature enforcement may reject unsigned `print` commands with `err_code` `84033543` or a reason equivalent to `MQTT Command verification failed`. The driver maps this to an auth/authorization failure with a sanitized message. It must not attempt certificate extraction, signature bypass, cloud credential use, or other authorization bypass behavior.
+
+#### Auxiliary Control Research Status
+
+Implementation status: not implemented. The Bambu LAN driver must keep
+`FanControl`, `LightControl`, and `SpeedControl` disabled until this spec is
+updated with verified command payloads and acknowledgment mappings.
+
+Research source: `https://github.com/ClusterM/open-bamboo-networking`
+(AGPL-3.0). It is used as protocol research and attribution only; no source code
+is copied into Polimero.
+
+Findings from that reference:
+
+- The network plugin exposes a generic send-message path that publishes
+  Studio-style JSON to the printer request topic. The plugin runner can publish
+  raw JSON to user-owned Developer Mode printers for protocol experiments.
+- Developer Mode is required for unsigned MQTT control commands. Non-Developer
+  Mode rejection uses the same unsigned-command failure pattern already mapped
+  above.
+- Light read-back is documented through `lights_report[]`, where
+  `node == "chamber_light"` carries a mode such as `on`, `off`, or `flashing`.
+  The same research notes also identify a `home_flag` bit for chamber-light
+  state.
+- Speed-level read-back is documented through `home_flag` bits for a 3-bit print
+  speed level.
+- The reviewed reference does not define a verified fan-control command payload.
+
+Requirements before enabling auxiliary control capabilities:
+
+- `FanControl`: document the exact Bambu payload or G-code for each canonical
+  fan key, the model families where it is safe, percent-to-wire conversion, and
+  the status field that echoes the requested speed.
+- `LightControl`: document the exact payload for portable `chamber` mapped to
+  Bambu `chamber_light`. Acknowledgment must wait for a fresh full status report
+  where `lights_report[]` or the documented status bit matches the requested
+  state.
+- `SpeedControl`: document the exact payload and profile-to-wire mapping.
+  Acknowledgment must wait for a fresh full status report where the documented
+  speed-level field matches the requested profile.
+- Publish success, socket-write success, or a generic library return code is not
+  sufficient for success.
+- The driver must preserve the unsigned-command rejection handling above and
+  must not attempt command-signature bypass, cloud credential use, or any other
+  authorization bypass.
 
 ### Push Behavior by Family
 
