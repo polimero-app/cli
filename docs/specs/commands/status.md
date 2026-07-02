@@ -27,7 +27,7 @@ polimero status <name> [--detailed] [--timeout <duration>] [--insecure] [--proto
 - `--detailed`: optional. Includes extended telemetry (fans, time estimates, speed, Wi-Fi, lights, print metadata, stage, timelapse, g-code position, and brand-specific extensions such as AMS). Without this flag, only summary fields are returned.
 - `--timeout <duration>`: optional. Overrides profile/default timeout for this command.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
-- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include protocol phases, response key inventories, parser fallback decisions, safe scalar summaries, byte counts, and parser warnings. It must not include access codes, TLS private material, raw auth payloads, raw MQTT payloads, or unsanitized protocol errors.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include protocol phases, response key inventories, parser fallback decisions, safe scalar summaries, byte counts, and parser warnings. It must not include access codes, TLS private material, raw auth payloads, MQTT payloads containing credential material, or unsanitized protocol errors. Traced MQTT command and report payloads are secret-free per ADR 0013.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -418,7 +418,7 @@ JSON timeout example:
 
 - Do not print or log access codes.
 - Do not include protocol payloads in debug logs unless redacted.
-- Protocol trace output must contain sanitized event summaries only. It must not include access codes, raw auth payloads, raw MQTT payloads, TLS private material, or unsanitized parser/transport errors.
+- Protocol trace output must contain sanitized events. It must not include access codes, raw auth payloads, MQTT payloads containing credential material, TLS private material, or unsanitized parser/transport errors. Traced MQTT command and report payloads are secret-free per ADR 0013.
 - Do not perform discovery or scanning.
 - Do not send state-changing commands.
 - Sanitize authentication and transport errors.
@@ -444,7 +444,7 @@ JSON timeout example:
 - Writes sanitized protocol trace events when `--protocol-trace` is set.
 - Refuses to overwrite an existing protocol trace file.
 - Fails before connecting when the protocol trace file cannot be created.
-- Does not leak access codes, raw auth payloads, raw MQTT payloads, or TLS material in protocol trace output.
+- Does not leak access codes, raw auth payloads, credential material, or TLS material in protocol trace output.
 - Does not leak secrets in output or logs.
 - Sanitizes terminal control characters in printer-supplied strings in human output.
 - Does not include extended fields without `--detailed`.

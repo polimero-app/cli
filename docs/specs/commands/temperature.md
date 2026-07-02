@@ -33,7 +33,7 @@ polimero temperature set <printer> [--nozzle <celsius>] [--bed <celsius>] [--cha
 - `--yes`: optional. Skips the interactive confirmation prompt. Required in non-interactive sessions (no controlling TTY).
 - `--timeout <duration>`: optional. Overrides profile/default timeout for the status check and the temperature operation.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
-- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include status precheck phases, temperature action phase names, capability decisions, selected portable states, acknowledged target categories, byte counts, durations, parser warnings, and sanitized error categories. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include status precheck phases, temperature action phase names, capability decisions, selected portable states, acknowledged target categories, byte counts, durations, parser warnings, and sanitized error categories. It must not include access codes, raw auth payloads, MQTT payloads containing credential material, TLS private material, or unsanitized protocol errors. Traced MQTT command and report payloads are secret-free per ADR 0013.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -247,7 +247,7 @@ JSON precondition error example:
 - `--yes` only skips the interactive prompt; it does not skip the bounds or precondition checks.
 - Sanitize authentication, transport, and secret-store errors.
 - Sanitize protocol parser errors and do not expose raw protocol payloads.
-- Protocol trace output must contain sanitized temperature-control summaries only. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
+- Protocol trace output must contain sanitized temperature-control events. It must not include access codes, raw auth payloads, MQTT payloads containing credential material, TLS private material, or unsanitized protocol errors. Traced MQTT command and report payloads are secret-free per ADR 0013.
 - Do not perform discovery or scanning.
 
 ## Test Scenarios
@@ -280,7 +280,7 @@ JSON precondition error example:
 - Writes sanitized protocol trace events when `--protocol-trace` is set.
 - Refuses to overwrite an existing protocol trace file.
 - Fails before protocol work when the protocol trace file cannot be created.
-- Does not leak access code, raw auth payloads, raw MQTT payloads, raw command payloads, or TLS material in protocol trace output.
+- Does not leak access codes, raw auth payloads, credential material, or TLS material in protocol trace output.
 - Does not leak secrets in output or logs.
 
 ## Non-goals

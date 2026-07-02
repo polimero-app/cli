@@ -54,8 +54,9 @@ polimero fans set <printer> <fan> <percent> [--yes] [--timeout <duration>] [--in
   may include status precheck phases, fan action phase names, capability
   decisions, selected portable states, acknowledged fan key and percentage,
   byte counts, durations, parser warnings, and sanitized error categories. It
-  must not include access codes, raw auth payloads, raw MQTT payloads, raw
-  command payloads, TLS private material, or unsanitized protocol errors.
+  must not include access codes, raw auth payloads, MQTT payloads containing
+  credential material, TLS private material, or unsanitized protocol errors.
+  Traced MQTT command and report payloads are secret-free per ADR 0013.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -277,7 +278,7 @@ JSON bounds error example:
 - `--yes` only skips the prompt; it does not skip bounds or preconditions.
 - Sanitize authentication, transport, and secret-store errors.
 - Sanitize protocol parser errors and do not expose raw protocol payloads.
-- Protocol trace output must contain sanitized fan-control summaries only.
+- Protocol trace output must contain sanitized fan-control events; traced MQTT payloads must be secret-free (ADR 0013).
 - Do not perform discovery or scanning.
 - Do not expose firmware-managed safety fan overrides through this command.
 
@@ -304,7 +305,7 @@ JSON bounds error example:
 - Emits stable JSON envelope.
 - Writes sanitized protocol trace events when `--protocol-trace` is set.
 - Refuses to overwrite an existing protocol trace file.
-- Does not leak secrets or raw protocol payloads in output, logs, or trace.
+- Does not leak secrets in output, logs, or trace; raw protocol payloads stay out of output and logs, and traced payloads are secret-free.
 
 ## Non-goals
 

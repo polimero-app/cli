@@ -33,7 +33,7 @@ polimero jobs cancel <printer> [--yes] [--timeout <duration>] [--insecure] [--pr
 - `--yes`: optional. Skips the interactive confirmation prompt. Required in non-interactive sessions (no controlling TTY).
 - `--timeout <duration>`: optional. Overrides profile/default timeout for the status check and the job action.
 - `--insecure`: optional. Skips TLS verification for this invocation regardless of the profile `insecure` setting.
-- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include status precheck phases, job action phase names, capability decisions, selected portable states, acknowledgment state, byte counts, durations, parser warnings, and sanitized error categories. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
+- `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include status precheck phases, job action phase names, capability decisions, selected portable states, acknowledgment state, byte counts, durations, parser warnings, and sanitized error categories. It must not include access codes, raw auth payloads, MQTT payloads containing credential material, TLS private material, or unsanitized protocol errors. Traced MQTT command and report payloads are secret-free per ADR 0013.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
 
 ## Config Requirements
@@ -259,7 +259,7 @@ JSON action-failed error example:
 - `jobs start` must not upload a file; it only starts a print from an existing device path.
 - Sanitize authentication, transport, and secret-store errors.
 - Sanitize protocol parser errors and do not expose raw protocol payloads.
-- Protocol trace output must contain sanitized job-control summaries only. It must not include access codes, raw auth payloads, raw MQTT payloads, raw command payloads, TLS private material, or unsanitized protocol errors.
+- Protocol trace output must contain sanitized job-control events. It must not include access codes, raw auth payloads, MQTT payloads containing credential material, TLS private material, or unsanitized protocol errors. Traced MQTT command and report payloads are secret-free per ADR 0013.
 - Do not perform discovery or scanning.
 
 ## Test Scenarios
@@ -288,7 +288,7 @@ JSON action-failed error example:
 - Writes sanitized protocol trace events when `--protocol-trace` is set.
 - Refuses to overwrite an existing protocol trace file.
 - Fails before protocol work when the protocol trace file cannot be created.
-- Does not leak access code, raw auth payloads, raw MQTT payloads, raw command payloads, or TLS material in protocol trace output.
+- Does not leak access codes, raw auth payloads, credential material, or TLS material in protocol trace output.
 - Emits stable JSON envelope.
 - Does not leak secrets in output or logs.
 

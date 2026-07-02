@@ -494,15 +494,17 @@ When a protocol trace sink is present in `context.Context`, the Bambu LAN driver
 
 Allowed trace data:
 
-- MQTT status and control phases: connect, TLS fingerprint verification result, subscribe topic template, publish command name, report byte count, response key inventory, selected `gcode_state`, parser fallback decisions, parser warnings, action acknowledgment state, and sanitized error categories.
+- MQTT status and control phases: connect, TLS fingerprint verification result, subscribe topic template, publish command name, report byte count, response key inventory, secret-free MQTT command and report JSON payloads, selected `gcode_state`, parser fallback decisions, parser warnings, action acknowledgment state, and sanitized error categories.
 - FTPS file phases: control/data connection phases, TLS fingerprint verification result, command category (`list`, `download`, `upload`), root name, normalized driver-neutral device path, transfer byte counts, listing entry counts, parser warnings, and sanitized FTP status categories.
 - Camera phases: probed endpoint kind (`mjpeg` or `h264`), selected protocol, TLS fingerprint verification result, frame/stream byte counts, decode phase names, timeout categories, and sanitized codec or camera protocol errors.
-- Discovery phases: enabled protocols, listener/probe start results, result counts, deduplication decisions, and sanitized record key inventories.
+- Discovery phases: enabled protocols, listener/probe start results, result counts, deduplication decisions, secret-free discovery records, and sanitized record key inventories.
 - TLS refresh phases: connection attempt, SNI presence, captured fingerprint format status, and sanitized TLS error categories.
 
 Forbidden trace data:
 
-- LAN access code, FTP password, MQTT password, raw MQTT CONNECT payloads, raw MQTT report payloads, raw outgoing MQTT command payloads, raw FTP command streams, raw FTP file contents, raw camera frames, decoded images, TLS private material, private keys, certificates beyond fingerprint metadata, and unsanitized transport or parser errors.
+- LAN access code, FTP password, MQTT password, raw MQTT CONNECT payloads, raw FTP command streams, raw FTP file contents, raw camera frames, decoded images, TLS private material, private keys, certificates beyond fingerprint metadata, and unsanitized transport or parser errors.
+
+Trace output may include secret-free protocol payloads (MQTT command and report JSON, discovery records) per ADR 0013. The driver must strip any authentication or credential material before emitting a payload; binary payloads are never included.
 
 Trace output may include printer serial numbers, configured host names or addresses, file names, job names, and operational metadata because those values already appear in command output or profile data. It must still sanitize terminal control characters and JSON strings normally.
 

@@ -124,8 +124,8 @@ Protocol trace files must:
 - Refuse to overwrite an existing file.
 - Use owner-only read/write permissions (`0600`) on POSIX-like systems.
 - Contain JSON Lines events with sanitized metadata only.
-- Omit access codes, passwords, tokens, private keys, TLS private material, raw authentication payloads, raw protocol payloads, transferred file contents, camera frames, decoded images, and unsanitized backend errors.
+- Omit access codes, passwords, tokens, private keys, TLS private material, raw authentication payloads, protocol payloads containing credential material, transferred file contents, camera frames, decoded images, and unsanitized backend errors.
 
-Protocol trace files may include profile names, driver names, printer host names or addresses, printer serial numbers, job names, file names, device paths, byte counts, durations, selected protocol names, response key inventories, parser warnings, and sanitized error categories.
+Protocol trace files may include profile names, driver names, printer host names or addresses, printer serial numbers, job names, file names, device paths, byte counts, durations, selected protocol names, response key inventories, parser warnings, sanitized error categories, and secret-free protocol payloads (MQTT command and report JSON, discovery records) per ADR 0013.
 
 Trace files are more sensitive than ordinary command output because they can combine operational metadata across multiple protocol phases. They must never be automatically uploaded, attached to errors, embedded in JSON output, or written without an explicit `--protocol-trace` path.

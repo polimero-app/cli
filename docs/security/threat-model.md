@@ -145,7 +145,7 @@ Controls:
 - Protocol tracing is opt-in through `--protocol-trace <file>` on commands that perform printer protocol work.
 - Trace files are created as new files only and must not overwrite existing paths.
 - POSIX-like implementations create trace files with owner-only read/write permissions (`0600`).
-- Trace events contain sanitized summaries, parser decisions, response key inventories, byte counts, and error categories, not raw protocol payloads.
+- Trace events contain sanitized summaries, parser decisions, response key inventories, byte counts, and error categories, and may include secret-free protocol payloads (MQTT command and report JSON, discovery records) per ADR 0013; binary payloads such as camera frames and file contents are never included.
 - Access codes, passwords, raw auth payloads, TLS private material, transferred file contents, and camera frames are forbidden in trace files.
 - Trace contents are never embedded in human output, JSON output, logs, or errors.
 
