@@ -2,6 +2,7 @@ package files
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -120,9 +121,8 @@ func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag strin
 	}
 
 	_ = tmpFile.Close()
-	if err := os.Rename(tmpPath, localPath); err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files download",
-			apperr.Newf(1, "cannot move downloaded file to destination: %s", err))
+	if err := commitDownloadFile(tmpPath, localPath, overwriteFlag); err != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files download", err)
 	}
 
 	var tracePath *string
@@ -130,6 +130,39 @@ func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag strin
 		tracePath = &protocolTrace
 	}
 	return writeDownloadSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, dp.String(), localPath, result, durationMs, rp.driver.Capabilities(), tracePath)
+}
+
+// commitDownloadFile moves tmpPath into place at dest. When overwrite is
+// false, it tries Link+Remove first: hard-link creation fails atomically
+// with os.ErrExist if dest already exists, closing the TOCTOU window that
+// a bare Rename leaves open (rename(2) silently replaces an existing dest).
+// Filesystems without hard-link support fall back to stat-then-rename,
+// which narrows but cannot fully close that window — best effort there.
+func commitDownloadFile(tmpPath, dest string, overwrite bool) error {
+	if overwrite {
+		return renameDownloadFile(tmpPath, dest)
+	}
+
+	if err := os.Link(tmpPath, dest); err == nil {
+		_ = os.Remove(tmpPath)
+		return nil
+	} else if errors.Is(err, os.ErrExist) {
+		return apperr.Newf(2, "destination file already exists: %s (use --overwrite to replace)", dest)
+	}
+
+	if _, statErr := os.Stat(dest); statErr == nil {
+		return apperr.Newf(2, "destination file already exists: %s (use --overwrite to replace)", dest)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return apperr.Wrap(2, "cannot inspect destination path", statErr)
+	}
+	return renameDownloadFile(tmpPath, dest)
+}
+
+func renameDownloadFile(tmpPath, dest string) error {
+	if err := os.Rename(tmpPath, dest); err != nil {
+		return apperr.Newf(1, "cannot move downloaded file to destination: %s", err)
+	}
+	return nil
 }
 
 func resolveDownloadDest(toFlag, baseName string) (string, error) {
