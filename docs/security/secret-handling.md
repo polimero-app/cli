@@ -26,6 +26,7 @@ Enter Bambu LAN access code for <name>:
 ```
 
 - Input is hidden.
+- If the process is interrupted while the prompt is active, the terminal state (echo) is restored before the signal terminates the process.
 - Empty input is rejected.
 - The value is stored directly in OS keychain.
 
