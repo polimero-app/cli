@@ -3,6 +3,7 @@ package temperature_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -126,16 +127,17 @@ func runCmd(t *testing.T, deps temperature.Deps, args ...string) (string, error)
 	return buf.String(), err
 }
 
-func TestTemperatureSet_NoArgs_ShowsHelp(t *testing.T) {
+func TestTemperatureSet_NoArgs_ExitsCode2(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	deps := makeDeps(t, dir, kc, defaultTempDriver(), &tty.Mock{Terminal: true})
 	out, err := runCmd(t, deps, "set")
-	if err != nil {
-		t.Errorf("expected no error (help), got %v", err)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2, got %v", err)
 	}
-	if !strings.Contains(out, "set <printer>") {
-		t.Errorf("expected usage in help, got:\n%s", out)
+	if !strings.Contains(out, "profile name is required") {
+		t.Errorf("expected usage error message, got:\n%s", out)
 	}
 }
 

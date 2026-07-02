@@ -2,10 +2,12 @@ package cmd_test
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/polimero-app/cli/cmd"
+	"github.com/polimero-app/cli/internal/apperr"
 )
 
 func TestNewRoot_HasExpectedCommands(t *testing.T) {
@@ -87,17 +89,18 @@ func TestRun_Help_Exits0(t *testing.T) {
 	}
 }
 
-func TestNewRoot_Status_NoArgs_ShowsHelp(t *testing.T) {
+func TestNewRoot_Status_NoArgs_ExitsCode2(t *testing.T) {
 	root := cmd.NewRoot()
 	buf := &bytes.Buffer{}
 	root.SetOut(buf)
 	root.SetErr(buf)
 	root.SetArgs([]string{"status"})
 	err := root.Execute()
-	if err != nil {
-		t.Fatalf("expected no error (help), got %v", err)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit 2, got %v", err)
 	}
-	if !strings.Contains(buf.String(), "status <name>") {
-		t.Errorf("expected usage in help output:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "profile name is required") {
+		t.Errorf("expected usage error message in output:\n%s", buf.String())
 	}
 }

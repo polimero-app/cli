@@ -26,7 +26,7 @@ func cancelCommandWithDeps(deps Deps) *cobra.Command {
 		Short: "Cancel the active or paused print job",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeUsageError(cmd, commandCancel, "profile name is required")
 			}
 			if len(args) > 1 {
 				return writeUsageError(cmd, commandCancel, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))

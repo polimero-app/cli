@@ -29,7 +29,7 @@ func uploadCommandWithDeps(deps Deps) *cobra.Command {
 		Short: "Upload a file to printer storage",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) < 1 {
-				return cmd.Help()
+				return writeUsageError(cmd, "files upload", "profile name is required")
 			}
 			if len(args) < 2 {
 				return writeUsageError(cmd, "files upload", "local path is required")

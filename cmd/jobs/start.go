@@ -30,7 +30,7 @@ func startCommandWithDeps(deps Deps) *cobra.Command {
 		Short: "Start a print job from a file on printer storage",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeUsageError(cmd, commandStart, "profile name is required")
 			}
 			if len(args) < 2 {
 				return writeUsageError(cmd, commandStart, "device-path is required")

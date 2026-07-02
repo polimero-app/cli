@@ -25,7 +25,7 @@ func rootsCommandWithDeps(deps Deps) *cobra.Command {
 		Short: "List storage roots available on a printer",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeUsageError(cmd, "files roots", "profile name is required")
 			}
 			if len(args) > 1 {
 				return writeUsageError(cmd, "files roots", fmt.Sprintf("expected exactly one profile name, got %d", len(args)))

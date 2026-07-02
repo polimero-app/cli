@@ -30,7 +30,7 @@ func downloadCommandWithDeps(deps Deps) *cobra.Command {
 		Short: "Download a file from printer storage",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) < 1 {
-				return cmd.Help()
+				return writeUsageError(cmd, "files download", "profile name is required")
 			}
 			if len(args) < 2 {
 				return writeUsageError(cmd, "files download", "device path is required")

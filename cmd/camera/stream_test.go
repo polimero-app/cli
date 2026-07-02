@@ -129,16 +129,17 @@ func runCmd(t *testing.T, deps camera.Deps, args ...string) (string, error) {
 
 // --- Tests ---
 
-func TestStream_NoArgs_ShowsHelp(t *testing.T) {
+func TestStream_NoArgs_ExitsCode2(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	deps := makeDeps(t, dir, kc, defaultDriver())
 	out, err := runCmd(t, deps)
-	if err != nil {
-		t.Errorf("expected no error (help), got %v", err)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2, got %v", err)
 	}
-	if !strings.Contains(out, "stream <name>") {
-		t.Errorf("expected usage line in help output:\n%s", out)
+	if !strings.Contains(out, "profile name is required") {
+		t.Errorf("expected usage error message, got:\n%s", out)
 	}
 }
 

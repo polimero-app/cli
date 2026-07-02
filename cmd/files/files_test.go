@@ -231,6 +231,22 @@ func TestRoots_JSON(t *testing.T) {
 	}
 }
 
+func TestFiles_NoArgs_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := makeDeps(t, dir, kc, defaultFileDriver())
+	for _, sub := range []string{"roots", "list", "download", "upload"} {
+		out, err := runCmd(t, deps, sub)
+		var exitErr *apperr.ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+			t.Errorf("%s: expected exit 2, got %v", sub, err)
+		}
+		if !strings.Contains(out, "profile name is required") {
+			t.Errorf("%s: expected usage error message, got:\n%s", sub, out)
+		}
+	}
+}
+
 func TestRoots_ProfileNotFound_ExitsCode2(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()

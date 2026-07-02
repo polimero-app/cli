@@ -26,7 +26,7 @@ func resumeCommandWithDeps(deps Deps) *cobra.Command {
 		Short: "Resume a paused print job",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeUsageError(cmd, commandResume, "profile name is required")
 			}
 			if len(args) > 1 {
 				return writeUsageError(cmd, commandResume, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))

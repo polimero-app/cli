@@ -27,7 +27,7 @@ func listCommandWithDeps(deps Deps) *cobra.Command {
 		Short: "List files on printer storage",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeUsageError(cmd, "files list", "profile name is required")
 			}
 			return runList(cmd, args[0], args[1:], flags.timeout, flags.insecure, flags.recursive, flags.protocolTrace, deps)
 		},

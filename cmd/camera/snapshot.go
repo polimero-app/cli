@@ -34,7 +34,7 @@ func snapshotCommandWithDeps(deps Deps) *cobra.Command {
 		Short: "Capture one still image from a printer camera",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeUsageError(cmd, commandSnapshot, "profile name is required")
 			}
 			if len(args) > 1 {
 				return writeUsageError(cmd, commandSnapshot, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))

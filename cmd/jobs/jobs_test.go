@@ -3,6 +3,7 @@ package jobs_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -172,6 +173,22 @@ func runCmd(t *testing.T, deps jobs.Deps, args ...string) (string, error) {
 }
 
 // --- jobs pause ---
+
+func TestJobs_NoArgs_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	deps := makeDeps(t, dir, kc, printingDriver(), &tty.Mock{Terminal: true})
+	for _, sub := range []string{"pause", "resume", "cancel", "start"} {
+		out, err := runCmd(t, deps, sub)
+		var exitErr *apperr.ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+			t.Errorf("%s: expected exit 2, got %v", sub, err)
+		}
+		if !strings.Contains(out, "profile name is required") {
+			t.Errorf("%s: expected usage error message, got:\n%s", sub, out)
+		}
+	}
+}
 
 func TestJobsPause_WhenPrinting_Success(t *testing.T) {
 	dir := t.TempDir()

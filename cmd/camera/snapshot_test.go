@@ -37,16 +37,17 @@ func runSnapshotCmd(t *testing.T, deps camera.Deps, args ...string) (string, err
 	return buf.String(), err
 }
 
-func TestSnapshot_NoArgs_ShowsHelp(t *testing.T) {
+func TestSnapshot_NoArgs_ExitsCode2(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	deps := makeDeps(t, dir, kc, snapshotDriver())
 	out, err := runSnapshotCmd(t, deps)
-	if err != nil {
-		t.Errorf("expected no error (help), got %v", err)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2, got %v", err)
 	}
-	if !strings.Contains(out, "snapshot <name>") {
-		t.Errorf("expected usage line in help output:\n%s", out)
+	if !strings.Contains(out, "profile name is required") {
+		t.Errorf("expected usage error message, got:\n%s", out)
 	}
 }
 

@@ -47,7 +47,7 @@ func setCommandWithDeps(deps Deps) *cobra.Command {
 		Short: "Set heater target temperatures on a printer",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				return writeUsageError(cmd, "profile name is required")
 			}
 			if len(args) > 1 {
 				return writeUsageError(cmd, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
