@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/cmderr"
 	"github.com/polimero-app/cli/internal/config"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/keychain"
@@ -118,118 +119,6 @@ func resolveProfile(ctx context.Context, nameArg, timeoutFlag string, insecureFl
 		secrets: secrets,
 		timeout: timeout,
 	}, nil
-}
-
-func writeError(out, errOut io.Writer, format output.Format, cmdName string, err error) error {
-	var exitErr *apperr.ExitError
-	code := 1
-	if errors.As(err, &exitErr) {
-		code = exitErr.Code
-	}
-	errDetail := buildErrorDetail(err)
-	if format == output.FormatJSON {
-		_ = output.WriteEnvelope(out, output.Envelope{
-			OK:    false,
-			Data:  nil,
-			Error: &errDetail,
-			Meta:  output.Meta{Command: cmdName},
-		})
-	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", errDetail.Message)
-	}
-	return apperr.New(code, "")
-}
-
-func writeDetailError(out, errOut io.Writer, format output.Format, cmdName string, exitCode int, jsonCode, msg string, details map[string]any) error {
-	detail := output.ErrDetail{Code: jsonCode, Message: msg, Details: details}
-	if format == output.FormatJSON {
-		_ = output.WriteEnvelope(out, output.Envelope{
-			OK:    false,
-			Data:  nil,
-			Error: &detail,
-			Meta:  output.Meta{Command: cmdName},
-		})
-	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", msg)
-	}
-	return apperr.New(exitCode, msg)
-}
-
-func buildErrorDetail(err error) output.ErrDetail {
-	return output.ErrDetail{Code: errorCode(err), Message: errorMessage(err)}
-}
-
-func errorMessage(err error) string {
-	msg := err.Error()
-	lower := strings.ToLower(msg)
-	switch errorCode(err) {
-	case "authentication_failed":
-		switch {
-		case strings.Contains(msg, "MQTT authentication rejected"):
-			return "MQTT authentication rejected"
-		case strings.Contains(msg, "TLS fingerprint mismatch"):
-			return "TLS fingerprint mismatch"
-		default:
-			return "authentication or secret error"
-		}
-	case "secret_not_found":
-		return "secret not found"
-	case "connection_failed":
-		switch {
-		case strings.Contains(lower, "cancelled") || strings.Contains(lower, "canceled"):
-			return "request cancelled"
-		case strings.Contains(msg, "subscription failed"):
-			return "command subscription failed"
-		case strings.Contains(msg, "publish failed"):
-			return "command publish failed"
-		case strings.Contains(msg, "connection failed"):
-			return "connection failed"
-		default:
-			return "command failed"
-		}
-	case "timeout":
-		return "command timed out"
-	default:
-		return msg
-	}
-}
-
-func errorCode(err error) string {
-	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) {
-		return "error"
-	}
-	switch exitErr.Code {
-	case 2:
-		return "config_error"
-	case 3:
-		msg := err.Error()
-		if strings.Contains(msg, "TLS fingerprint mismatch") {
-			return "authentication_failed"
-		}
-		return "secret_not_found"
-	case 4:
-		if isTimeout(err) {
-			return "timeout"
-		}
-		return "connection_failed"
-	case 5:
-		return "capability_unsupported"
-	default:
-		return "error"
-	}
-}
-
-func isTimeout(err error) bool {
-	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
 }
 
 // checkStatePrecondition fetches status and verifies it matches one of the required states.
@@ -369,4 +258,14 @@ func validateDevicePath(path string) error {
 		return apperr.Newf(2, "invalid device path %q: must use format root:/path (e.g. sdcard:/models/cube.3mf)", path)
 	}
 	return nil
+}
+
+func writeError(out, errOut io.Writer, format output.Format, cmdName string, err error) error {
+	detail := output.ErrDetail{Code: cmderr.Code(err, true), Message: cmderr.CommandMessage(err)}
+	return cmderr.Write(out, errOut, format, cmdName, detail, err)
+}
+
+// writeDetailError writes a structured error with a specific JSON code and details map.
+func writeDetailError(out, errOut io.Writer, format output.Format, cmdName string, exitCode int, jsonCode, msg string, details map[string]any) error {
+	return cmderr.WriteDetail(out, errOut, format, cmdName, exitCode, jsonCode, msg, details)
 }

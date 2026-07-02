@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/cmderr"
 	"github.com/polimero-app/cli/internal/config"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/keychain"
@@ -125,58 +126,10 @@ func resolveProfile(ctx context.Context, cmd *cobra.Command, nameArg, timeoutFla
 
 // writeError writes an error response in the appropriate format and returns an ExitError.
 func writeError(out, errOut io.Writer, format output.Format, cmdName string, err error) error {
-	var exitErr *apperr.ExitError
-	code := 1
-	if errors.As(err, &exitErr) {
-		code = exitErr.Code
-	}
-	errDetail := buildErrorDetail(err)
-	if format == output.FormatJSON {
-		_ = output.WriteEnvelope(out, output.Envelope{
-			OK:    false,
-			Data:  nil,
-			Error: &errDetail,
-			Meta:  output.Meta{Command: cmdName},
-		})
-	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", errDetail.Message)
-	}
-	return apperr.New(code, "")
-}
-
-func buildErrorDetail(err error) output.ErrDetail {
-	return output.ErrDetail{Code: errorCode(err), Message: err.Error()}
-}
-
-func errorCode(err error) string {
-	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) {
-		return "error"
-	}
-	switch exitErr.Code {
-	case 2:
-		return "config_error"
-	case 3:
-		msg := err.Error()
-		if strings.Contains(msg, "TLS fingerprint mismatch") {
-			return "authentication_failed"
-		}
-		return "secret_not_found"
-	case 4:
-		return "connection_failed"
-	case 5:
-		return "capability_unsupported"
-	default:
-		return "error"
-	}
+	detail := output.ErrDetail{Code: cmderr.Code(err, false), Message: err.Error()}
+	return cmderr.Write(out, errOut, format, cmdName, detail, err)
 }
 
 func writeUsageError(cmd *cobra.Command, cmdName, message string) error {
-	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
-	format, fmtErr := output.ParseFormat(formatStr)
-	if fmtErr != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
-		return apperr.New(2, "")
-	}
-	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, cmdName, apperr.New(2, message))
+	return cmderr.WriteUsage(cmd, cmdName, message)
 }

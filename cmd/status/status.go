@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/cmderr"
 	"github.com/polimero-app/cli/internal/config"
 	"github.com/polimero-app/cli/internal/devicepath"
 	"github.com/polimero-app/cli/internal/driver"
@@ -67,13 +68,7 @@ func CommandWithDeps(deps Deps) *cobra.Command {
 }
 
 func writeUsageError(cmd *cobra.Command, message string) error {
-	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
-	format, fmtErr := output.ParseFormat(formatStr)
-	if fmtErr != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
-		return apperr.New(2, "")
-	}
-	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), errorContext{})
+	return cmderr.WriteUsage(cmd, "status", message)
 }
 
 func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, detailed bool, protocolTrace string, deps Deps) (retErr error) {
@@ -510,23 +505,7 @@ func formatAMS(ams *driver.AMSData) string {
 }
 
 func writeError(out, errOut io.Writer, format output.Format, err error, errCtx errorContext) error {
-	var exitErr *apperr.ExitError
-	code := 1
-	if errors.As(err, &exitErr) {
-		code = exitErr.Code
-	}
-	errDetail := buildErrorDetail(err, errCtx)
-	if format == output.FormatJSON {
-		_ = output.WriteEnvelope(out, output.Envelope{
-			OK:    false,
-			Data:  nil,
-			Error: &errDetail,
-			Meta:  output.Meta{Command: "status"},
-		})
-	} else {
-		_, _ = fmt.Fprintf(errOut, "Error: %s\n", errDetail.Message)
-	}
-	return apperr.New(code, "")
+	return cmderr.Write(out, errOut, format, "status", buildErrorDetail(err, errCtx), err)
 }
 
 func buildErrorDetail(err error, errCtx errorContext) output.ErrDetail {
@@ -582,37 +561,16 @@ func errorMessage(err error) string {
 	}
 }
 
+// errorCode maps errors to stable JSON codes. Status recognizes MQTT
+// authentication rejections in addition to the shared classification.
 func errorCode(err error) string {
 	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) {
-		return "error"
+	if errors.As(err, &exitErr) && exitErr.Code == 3 && strings.Contains(err.Error(), "MQTT authentication") {
+		return "authentication_failed"
 	}
-	switch exitErr.Code {
-	case 2:
-		return "config_error"
-	case 3:
-		msg := err.Error()
-		if strings.Contains(msg, "MQTT authentication") || strings.Contains(msg, "TLS fingerprint mismatch") {
-			return "authentication_failed"
-		}
-		return "secret_not_found"
-	case 4:
-		return "connection_failed"
-	case 5:
-		return "capability_unsupported"
-	default:
-		return "error"
-	}
+	return cmderr.Code(err, false)
 }
 
 func isTimeout(err error) bool {
-	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
+	return cmderr.IsTimeout(err)
 }

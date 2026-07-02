@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/cmderr"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
 	"github.com/polimero-app/cli/internal/protocoltrace"
@@ -70,13 +71,7 @@ func setCommandWithDeps(deps Deps) *cobra.Command {
 }
 
 func writeUsageError(cmd *cobra.Command, message string) error {
-	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
-	format, fmtErr := output.ParseFormat(formatStr)
-	if fmtErr != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
-		return apperr.New(2, "")
-	}
-	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, apperr.New(2, message))
+	return cmderr.WriteUsage(cmd, commandSet, message)
 }
 
 func runSet(cmd *cobra.Command, nameArg string,

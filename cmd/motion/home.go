@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/cmderr"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
 	"github.com/polimero-app/cli/internal/protocoltrace"
@@ -53,13 +54,7 @@ func homeCommandWithDeps(deps Deps) *cobra.Command {
 }
 
 func writeUsageError(cmd *cobra.Command, cmdName, message string) error {
-	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
-	format, fmtErr := output.ParseFormat(formatStr)
-	if fmtErr != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: %s\n", fmtErr)
-		return apperr.New(2, "")
-	}
-	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, cmdName, apperr.New(2, message))
+	return cmderr.WriteUsage(cmd, cmdName, message)
 }
 
 func runHome(cmd *cobra.Command, nameArg, axisFlag string, yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) (retErr error) {
