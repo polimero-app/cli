@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os"
 
 	"github.com/polimero-app/cli/cmd/camera"
@@ -39,12 +41,25 @@ func NewRoot() *cobra.Command {
 // Execute builds and runs the root command, then exits the process.
 // Exit codes come from *apperr.ExitError returned by subcommands.
 func Execute() {
+	os.Exit(Run(os.Args[1:], os.Stderr))
+}
+
+// Run executes the root command with the given arguments and returns the
+// process exit code. Errors produced by cobra itself (unknown commands or
+// flags, bad flag values) never pass through the per-command output
+// helpers, so they are printed here and mapped to exit code 2 per the
+// usage-error contract.
+func Run(args []string, errOut io.Writer) int {
 	root := NewRoot()
-	if err := root.Execute(); err != nil {
-		var exitErr *apperr.ExitError
-		if errors.As(err, &exitErr) {
-			os.Exit(exitErr.Code)
-		}
-		os.Exit(1)
+	root.SetArgs(args)
+	err := root.Execute()
+	if err == nil {
+		return 0
 	}
+	var exitErr *apperr.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.Code
+	}
+	_, _ = fmt.Fprintf(errOut, "Error: %s\n", err)
+	return 2
 }
