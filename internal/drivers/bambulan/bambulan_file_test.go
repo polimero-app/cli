@@ -7,10 +7,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jlaffaye/ftp"
+	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
 )
 
@@ -19,16 +21,22 @@ type mockFTPConn struct {
 	loginErr   error
 	listResult []*ftp.Entry
 	listErr    error
+	sizeResult int64
+	sizeErr    error
 	retrData   []byte
 	retrErr    error
 	storErr    error
 	storData   []byte // captured data from Stor
+	storCalled bool
 	quitErr    error
 }
 
 func (m *mockFTPConn) Login(_, _ string) error { return m.loginErr }
 func (m *mockFTPConn) List(_ string) ([]*ftp.Entry, error) {
 	return m.listResult, m.listErr
+}
+func (m *mockFTPConn) FileSize(_ string) (int64, error) {
+	return m.sizeResult, m.sizeErr
 }
 func (m *mockFTPConn) Retr(_ string) (io.ReadCloser, error) {
 	if m.retrErr != nil {
@@ -37,6 +45,7 @@ func (m *mockFTPConn) Retr(_ string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(m.retrData)), nil
 }
 func (m *mockFTPConn) Stor(_ string, r io.Reader) error {
+	m.storCalled = true
 	if m.storErr != nil {
 		return m.storErr
 	}
@@ -188,6 +197,107 @@ func TestFileUpload_UnknownRoot_ReturnsError(t *testing.T) {
 	_, err := d.FileUpload(ctx, testProfileInput(), testSecrets(), "unknown", "/test.3mf", bytes.NewReader(nil), 0, false, slog.Default())
 	if err == nil {
 		t.Fatal("expected error for unknown root")
+	}
+}
+
+func TestFileUpload_RefusesOverwrite_WhenFileExists(t *testing.T) {
+	conn := &mockFTPConn{
+		listResult: []*ftp.Entry{{Name: "test.3mf", Type: ftp.EntryTypeFile}},
+	}
+	d := &Driver{dialFTP: mockDialer(conn, nil)}
+
+	ctx := context.Background()
+	_, err := d.FileUpload(ctx, testProfileInput(), testSecrets(), "sdcard", "/test.3mf", bytes.NewReader([]byte("x")), 1, false, slog.Default())
+	if err == nil {
+		t.Fatal("expected error when destination exists without overwrite")
+	}
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit code 2, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("expected already-exists message, got %q", err.Error())
+	}
+	if conn.storCalled {
+		t.Error("Stor must not be called when destination exists")
+	}
+}
+
+func TestFileUpload_FailsClosed_WhenExistenceCheckFails(t *testing.T) {
+	conn := &mockFTPConn{
+		listErr: errors.New("MLSD of a file path is not allowed"),
+		sizeErr: errors.New("450 transient failure"),
+	}
+	d := &Driver{dialFTP: mockDialer(conn, nil)}
+
+	ctx := context.Background()
+	_, err := d.FileUpload(ctx, testProfileInput(), testSecrets(), "sdcard", "/test.3mf", bytes.NewReader([]byte("x")), 1, false, slog.Default())
+	if err == nil {
+		t.Fatal("expected fail-closed error when existence cannot be determined")
+	}
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("expected exit code 1, got %v", err)
+	}
+	if conn.storCalled {
+		t.Error("Stor must not be called when existence is undetermined")
+	}
+}
+
+func TestFileUpload_SizeFallback_ExistingFile_Refuses(t *testing.T) {
+	conn := &mockFTPConn{
+		listErr:    errors.New("MLSD of a file path is not allowed"),
+		sizeResult: 1234,
+	}
+	d := &Driver{dialFTP: mockDialer(conn, nil)}
+
+	ctx := context.Background()
+	_, err := d.FileUpload(ctx, testProfileInput(), testSecrets(), "sdcard", "/test.3mf", bytes.NewReader([]byte("x")), 1, false, slog.Default())
+	if err == nil {
+		t.Fatal("expected error when SIZE probe finds an existing file")
+	}
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit code 2, got %v", err)
+	}
+	if conn.storCalled {
+		t.Error("Stor must not be called when destination exists")
+	}
+}
+
+func TestFileUpload_SizeFallback_NotFound_Proceeds(t *testing.T) {
+	conn := &mockFTPConn{
+		listErr: errors.New("MLSD of a file path is not allowed"),
+		sizeErr: errors.New("550 Could not get file size."),
+	}
+	d := &Driver{dialFTP: mockDialer(conn, nil)}
+
+	ctx := context.Background()
+	data := []byte("hello world")
+	result, err := d.FileUpload(ctx, testProfileInput(), testSecrets(), "sdcard", "/test.3mf", bytes.NewReader(data), int64(len(data)), false, slog.Default())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.BytesTransferred == nil || *result.BytesTransferred != int64(len(data)) {
+		t.Errorf("expected %d bytes transferred, got %v", len(data), result.BytesTransferred)
+	}
+}
+
+func TestFileUpload_Overwrite_SkipsExistenceCheck(t *testing.T) {
+	conn := &mockFTPConn{
+		listErr: errors.New("listing failed"),
+		sizeErr: errors.New("450 transient failure"),
+	}
+	d := &Driver{dialFTP: mockDialer(conn, nil)}
+
+	ctx := context.Background()
+	data := []byte("hello world")
+	_, err := d.FileUpload(ctx, testProfileInput(), testSecrets(), "sdcard", "/test.3mf", bytes.NewReader(data), int64(len(data)), true, slog.Default())
+	if err != nil {
+		t.Fatalf("unexpected error with --overwrite: %v", err)
+	}
+	if !bytes.Equal(conn.storData, data) {
+		t.Errorf("stored data mismatch")
 	}
 }
 

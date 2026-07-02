@@ -32,6 +32,7 @@ const (
 type ftpConn interface {
 	Login(user, password string) error
 	List(path string) ([]*ftp.Entry, error)
+	FileSize(path string) (int64, error)
 	Retr(path string) (io.ReadCloser, error)
 	Stor(path string, r io.Reader) error
 	Quit() error
@@ -44,6 +45,7 @@ type ftpConnAdapter struct {
 
 func (a *ftpConnAdapter) Login(user, password string) error       { return a.conn.Login(user, password) }
 func (a *ftpConnAdapter) List(path string) ([]*ftp.Entry, error)  { return a.conn.List(path) }
+func (a *ftpConnAdapter) FileSize(path string) (int64, error)     { return a.conn.FileSize(path) }
 func (a *ftpConnAdapter) Retr(path string) (io.ReadCloser, error) { return a.conn.Retr(path) }
 func (a *ftpConnAdapter) Stor(path string, r io.Reader) error     { return a.conn.Stor(path, r) }
 func (a *ftpConnAdapter) Quit() error                             { return a.conn.Quit() }
@@ -376,15 +378,16 @@ func (d *Driver) FileUpload(
 
 	ftpPath := mapToFTPPath(remotePath)
 
-	// Check existence when overwrite is false.
+	// Check existence when overwrite is false. The driver spec requires
+	// failing closed when existence cannot be determined safely.
 	if !overwrite {
-		existing, listErr := conn.List(ftpPath)
-		if listErr == nil && len(existing) > 0 {
-			for _, e := range existing {
-				if e.Name == path.Base(ftpPath) {
-					return nil, apperr.Newf(2, "device path already exists: %s:%s", root, remotePath)
-				}
-			}
+		exists, checkErr := remoteFileExists(conn, ftpPath)
+		if checkErr != nil {
+			log.Debug("upload existence check failed", "path", ftpPath, "err", checkErr)
+			return nil, apperr.Newf(1, "could not determine whether destination exists: %s:%s", root, remotePath)
+		}
+		if exists {
+			return nil, apperr.Newf(2, "device path already exists: %s:%s", root, remotePath)
 		}
 	}
 
@@ -401,6 +404,39 @@ func (d *Driver) FileUpload(
 
 	n := cr.n
 	return &driver.FileTransferResult{BytesTransferred: &n}, nil
+}
+
+// remoteFileExists reports whether ftpPath refers to an existing file.
+// A LIST of the exact path is tried first; servers that reject listing a
+// file path (for example when the library issues MLSD, RFC 3659) fall back
+// to a SIZE probe. The error is non-nil only when existence could not be
+// determined at all, in which case callers must fail closed.
+func remoteFileExists(conn ftpConn, ftpPath string) (bool, error) {
+	entries, listErr := conn.List(ftpPath)
+	if listErr == nil {
+		for _, e := range entries {
+			if e.Name == path.Base(ftpPath) {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	if _, sizeErr := conn.FileSize(ftpPath); sizeErr != nil {
+		if isFTPNotFound(sizeErr) {
+			return false, nil
+		}
+		return false, sizeErr
+	}
+	return true, nil
+}
+
+// isFTPNotFound reports whether an FTP error indicates a missing path.
+func isFTPNotFound(err error) bool {
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "550") ||
+		strings.Contains(lower, "no such file") ||
+		strings.Contains(lower, "not found")
 }
 
 // countingReader wraps an io.Reader and counts bytes read.
