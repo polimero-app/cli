@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -110,6 +111,43 @@ func openStream(ctx context.Context, cmd *cobra.Command, nameArg, timeoutFlag st
 	return result, rp.name, nil
 }
 
+// streamHandler serves the single upstream camera feed to at most one HTTP
+// client at a time. The feed cannot be duplicated, so concurrent requests
+// receive 503 Service Unavailable until the active client disconnects.
+func streamHandler(stream io.Reader, contentType string) http.Handler {
+	var active atomic.Bool
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !active.CompareAndSwap(false, true) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "stream already has an active client", http.StatusServiceUnavailable)
+			return
+		}
+		defer active.Store(false)
+
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "close")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, _ := w.(http.Flusher)
+		buf := make([]byte, 32*1024)
+		for {
+			n, readErr := stream.Read(buf)
+			if n > 0 {
+				if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+					return
+				}
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	})
+}
+
 func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format output.Format, result *driver.CameraStreamResult) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
@@ -133,29 +171,7 @@ func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "close")
-		w.WriteHeader(http.StatusOK)
-
-		flusher, _ := w.(http.Flusher)
-		buf := make([]byte, 32*1024)
-		for {
-			n, readErr := result.Stream.Read(buf)
-			if n > 0 {
-				if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-					return
-				}
-				if flusher != nil {
-					flusher.Flush()
-				}
-			}
-			if readErr != nil {
-				return
-			}
-		}
-	})
+	mux.Handle("/stream", streamHandler(result.Stream, contentType))
 
 	srv := &http.Server{
 		Handler:     mux,

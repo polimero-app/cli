@@ -57,6 +57,7 @@ If the TLS fingerprint is missing for a secure profile, the command fails with e
 - The command resolves the printer profile, loads secrets, and calls the driver's `CameraStream` operation.
 - The driver returns a raw stream and a format descriptor (`mjpeg` or `h264`).
 - The command layer starts an HTTP server on `127.0.0.1:<port>` and serves the stream at `/stream`.
+- The upstream camera feed cannot be duplicated: `/stream` serves at most one client at a time. Additional concurrent requests receive `503 Service Unavailable` until the active client disconnects.
 - All other HTTP paths return `404`.
 - The HTTP server runs until Ctrl+C is received or `--timeout` elapses (exit code `0`).
 - If the stream errors after serving has started, the command exits with code `1`.
@@ -198,6 +199,7 @@ JSON error example:
 - `--timeout` auto-stops server after duration (exit `0`).
 - HTTP `/stream` serves correct `Content-Type` per format.
 - HTTP server returns `404` for all paths other than `/stream`.
+- Concurrent `/stream` request receives `503` while another client is active; a new client succeeds after disconnect.
 - Emits stable JSON envelope when `--output json`.
 - Writes sanitized protocol trace events when `--protocol-trace` is set.
 - Refuses to overwrite an existing protocol trace file.
