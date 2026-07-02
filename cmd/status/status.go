@@ -509,7 +509,7 @@ func writeError(out, errOut io.Writer, format output.Format, err error, errCtx e
 }
 
 func buildErrorDetail(err error, errCtx errorContext) output.ErrDetail {
-	detail := output.ErrDetail{Code: errorCode(err), Message: errorMessage(err)}
+	detail := output.ErrDetail{Code: cmderr.Code(err, false), Message: errorMessage(err)}
 	if isTimeout(err) {
 		detail.Code = "timeout"
 		detail.Message = "status request timed out"
@@ -529,7 +529,7 @@ func buildErrorDetail(err error, errCtx errorContext) output.ErrDetail {
 func errorMessage(err error) string {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
-	switch errorCode(err) {
+	switch cmderr.Code(err, false) {
 	case "authentication_failed":
 		switch {
 		case strings.Contains(msg, "MQTT authentication rejected"):
@@ -559,16 +559,6 @@ func errorMessage(err error) string {
 	default:
 		return msg
 	}
-}
-
-// errorCode maps errors to stable JSON codes. Status recognizes MQTT
-// authentication rejections in addition to the shared classification.
-func errorCode(err error) string {
-	var exitErr *apperr.ExitError
-	if errors.As(err, &exitErr) && exitErr.Code == 3 && strings.Contains(err.Error(), "MQTT authentication") {
-		return "authentication_failed"
-	}
-	return cmderr.Code(err, false)
 }
 
 func isTimeout(err error) bool {

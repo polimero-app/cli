@@ -34,6 +34,7 @@ func TestCode(t *testing.T) {
 		{"config", apperr.New(2, "bad flag"), false, "config_error"},
 		{"secret missing", apperr.New(3, "access code not found"), false, "secret_not_found"},
 		{"tls mismatch", apperr.New(3, "TLS fingerprint mismatch"), false, "authentication_failed"},
+		{"mqtt auth", apperr.New(3, "MQTT authentication rejected"), false, "authentication_failed"},
 		{"network", apperr.New(4, "connection failed"), false, "connection_failed"},
 		{"timeout unclassified", apperr.New(4, "request timed out"), false, "connection_failed"},
 		{"timeout classified", apperr.New(4, "request timed out"), true, "timeout"},

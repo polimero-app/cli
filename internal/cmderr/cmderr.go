@@ -50,7 +50,9 @@ func Code(err error, classifyTimeout bool) string {
 	case 2:
 		return "config_error"
 	case 3:
-		if strings.Contains(err.Error(), "TLS fingerprint mismatch") {
+		msg := err.Error()
+		if strings.Contains(msg, "MQTT authentication") ||
+			strings.Contains(msg, "TLS fingerprint mismatch") {
 			return "authentication_failed"
 		}
 		return "secret_not_found"
