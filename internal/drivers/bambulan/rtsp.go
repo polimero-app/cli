@@ -41,7 +41,7 @@ type rtspStream struct {
 // (directly or via defer) once done, and must register OnPacketRTP before
 // calling client.Play(nil). On error, client is nil and any partially-started
 // connection has already been closed.
-func connectRTSPSH264(tlsCfg *tls.Config, host, accessCode string, timeout time.Duration) (
+func connectRTSPSH264(tlsCfg *tls.Config, host, accessCode string, port int, timeout time.Duration) (
 	client *gortsplib.Client,
 	medi *description.Media,
 	forma *format.H264,
@@ -49,7 +49,7 @@ func connectRTSPSH264(tlsCfg *tls.Config, host, accessCode string, timeout time.
 	err error,
 ) {
 	rtspURL := fmt.Sprintf("rtsps://%s:%s@%s:%d/streaming/live/1",
-		cameraUsername, accessCode, host, cameraPortH264)
+		cameraUsername, accessCode, host, port)
 
 	u, err := base.ParseURL(rtspURL)
 	if err != nil {
@@ -101,11 +101,17 @@ func connectRTSPSH264(tlsCfg *tls.Config, host, accessCode string, timeout time.
 // io.ReadCloser that emits an MPEG-TS stream containing H.264 video.
 func dialRTSPS(ctx context.Context, tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error) {
 	timeout := rtspTimeout(ctx)
-	c, medi, forma, rtpDec, err := connectRTSPSH264(tlsCfg, host, accessCode, timeout)
+	c, medi, forma, rtpDec, err := connectRTSPSH264(tlsCfg, host, accessCode, cameraPortH264, timeout)
 	if err != nil {
 		return nil, err
 	}
+	return newRTSPStream(c, medi, forma, rtpDec)
+}
 
+// newRTSPStream registers the RTP-to-MPEG-TS pipeline on a connected client,
+// starts playback, and returns the resulting stream. On error the client has
+// been closed.
+func newRTSPStream(c *gortsplib.Client, medi *description.Media, forma *format.H264, rtpDec *rtph264.Decoder) (io.ReadCloser, error) {
 	dataCh := make(chan []byte, 256)
 	s := &rtspStream{
 		client: c,
@@ -127,12 +133,26 @@ func dialRTSPS(ctx context.Context, tlsCfg *tls.Config, host, accessCode string)
 	var ptsOffset int64
 	var ptsInited bool
 
+	// fatalCh carries at most one fatal error out of the RTP callback.
+	// The callback must never call client.Close itself: with TCP-interleaved
+	// transport gortsplib runs callbacks on its connection-reader goroutine,
+	// and Close() waits for that goroutine to exit, so closing from inside
+	// the callback deadlocks the client and every later Close caller that
+	// blocks on the shared sync.Once.
+	fatalCh := make(chan error, 1)
+	reportFatal := func(err error) {
+		select {
+		case fatalCh <- err:
+		default:
+		}
+	}
+
 	c.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
 		au, decErr := rtpDec.Decode(pkt)
 		if decErr != nil {
 			if !errors.Is(decErr, rtph264.ErrNonStartingPacketAndNoPrevious) &&
 				!errors.Is(decErr, rtph264.ErrMorePacketsNeeded) {
-				s.closeWithError(fmt.Errorf("RTP decode: %w", decErr))
+				reportFatal(fmt.Errorf("RTP decode: %w", decErr))
 			}
 			return
 		}
@@ -147,7 +167,7 @@ func dialRTSPS(ctx context.Context, tlsCfg *tls.Config, host, accessCode string)
 
 		tsBuf.Reset()
 		if writeErr := tsWriter.WriteH264(track, pts, pts, au); writeErr != nil {
-			s.closeWithError(fmt.Errorf("MPEG-TS write: %w", writeErr))
+			reportFatal(fmt.Errorf("MPEG-TS write: %w", writeErr))
 			return
 		}
 
@@ -162,22 +182,31 @@ func dialRTSPS(ctx context.Context, tlsCfg *tls.Config, host, accessCode string)
 		}
 	})
 
-	_, err = c.Play(nil)
-	if err != nil {
+	if _, err := c.Play(nil); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("RTSP PLAY: %w", err)
 	}
 
-	// Monitor for fatal errors from the RTSP client.
+	// Monitor for fatal errors from the callback or the RTSP client. All
+	// teardown happens on this goroutine, never on the client's own
+	// reader goroutine.
 	go func() {
-		waitErr := c.Wait()
-		if waitErr != nil {
-			s.closeWithError(waitErr)
-		} else {
-			s.once.Do(func() {
-				s.client.Close()
-				close(s.dataCh)
-			})
+		waitDone := make(chan error, 1)
+		go func() { waitDone <- c.Wait() }()
+
+		select {
+		case cbErr := <-fatalCh:
+			s.closeWithError(cbErr)
+			<-waitDone
+		case waitErr := <-waitDone:
+			if waitErr != nil {
+				s.closeWithError(waitErr)
+			} else {
+				s.once.Do(func() {
+					s.client.Close()
+					close(s.dataCh)
+				})
+			}
 		}
 	}()
 

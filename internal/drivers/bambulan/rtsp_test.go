@@ -1,0 +1,224 @@
+package bambulan
+
+import (
+	"crypto/tls"
+	"net"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/bluenviron/gortsplib/v5"
+	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
+	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/pion/rtp"
+)
+
+// rtspTestHandler serves a single pre-built H.264 stream to any reader and
+// signals on playCh once a client has entered the PLAY state.
+type rtspTestHandler struct {
+	server *gortsplib.Server
+	stream *gortsplib.ServerStream
+	mu     sync.Mutex
+	playCh chan struct{}
+}
+
+func (h *rtspTestHandler) OnDescribe(
+	_ *gortsplib.ServerHandlerOnDescribeCtx,
+) (*base.Response, *gortsplib.ServerStream, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return &base.Response{StatusCode: base.StatusOK}, h.stream, nil
+}
+
+func (h *rtspTestHandler) OnSetup(
+	_ *gortsplib.ServerHandlerOnSetupCtx,
+) (*base.Response, *gortsplib.ServerStream, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return &base.Response{StatusCode: base.StatusOK}, h.stream, nil
+}
+
+func (h *rtspTestHandler) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
+	select {
+	case h.playCh <- struct{}{}:
+	default:
+	}
+	return &base.Response{StatusCode: base.StatusOK}, nil
+}
+
+// startRTSPSTestServer starts a TLS RTSP server with one H.264 track on a
+// random localhost port and returns the handler and port.
+func startRTSPSTestServer(t *testing.T) (*rtspTestHandler, *description.Media, int) {
+	t.Helper()
+
+	cert := makeSelfSignedTLSCert(t)
+
+	// Reserve a random free port for the server.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	forma := &format.H264{
+		PayloadTyp:        96,
+		PacketizationMode: 1,
+	}
+	medi := &description.Media{
+		Type:    description.MediaTypeVideo,
+		Formats: []format.Format{forma},
+	}
+
+	h := &rtspTestHandler{playCh: make(chan struct{}, 1)}
+	h.server = &gortsplib.Server{
+		Handler:     h,
+		RTSPAddress: "127.0.0.1:" + strconv.Itoa(port),
+		TLSConfig:   &tls.Config{Certificates: []tls.Certificate{cert}},
+	}
+	if err := h.server.Start(); err != nil {
+		t.Fatalf("start RTSP server: %v", err)
+	}
+	t.Cleanup(h.server.Close)
+
+	h.stream = &gortsplib.ServerStream{
+		Server: h.server,
+		Desc:   &description.Session{Medias: []*description.Media{medi}},
+	}
+	if err := h.stream.Initialize(); err != nil {
+		t.Fatalf("init server stream: %v", err)
+	}
+	t.Cleanup(h.stream.Close)
+
+	return h, medi, port
+}
+
+// TestRTSPStream_FatalDecodeErrorDoesNotDeadlock is a regression test for a
+// deadlock: the OnPacketRTP callback used to call client.Close() directly on
+// a fatal decode error, but with TCP-interleaved transport gortsplib runs
+// that callback on its connection-reader goroutine, and Close() waits for
+// that same goroutine to exit. The stream then hung forever, as did every
+// later Close() caller blocking on the shared sync.Once.
+func TestRTSPStream_FatalDecodeErrorDoesNotDeadlock(t *testing.T) {
+	h, medi, port := startRTSPSTestServer(t)
+
+	clientTLS := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test server uses a throwaway self-signed cert
+	c, cliMedi, forma, rtpDec, err := connectRTSPSH264(clientTLS, "127.0.0.1", "testcode", port, 5*time.Second)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	stream, err := newRTSPStream(c, cliMedi, forma, rtpDec)
+	if err != nil {
+		t.Fatalf("newRTSPStream: %v", err)
+	}
+
+	select {
+	case <-h.playCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client never reached PLAY state")
+	}
+
+	// A one-byte FU-A payload (NALU type 28) with no FU header is a fatal
+	// "invalid FU-A packet" decode error, not one of the two ignored
+	// benign sentinel errors.
+	pkt := &rtp.Packet{
+		Header: rtp.Header{
+			Version:        2,
+			PayloadType:    96,
+			SequenceNumber: 1,
+			Timestamp:      90000,
+			SSRC:           0x1234,
+		},
+		Payload: []byte{0x1c},
+	}
+	if err := h.stream.WritePacketRTP(medi, pkt); err != nil {
+		t.Fatalf("write RTP packet: %v", err)
+	}
+
+	// Read must observe the fatal error instead of blocking forever.
+	readDone := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, readErr := stream.Read(buf); readErr != nil {
+				readDone <- readErr
+				return
+			}
+		}
+	}()
+
+	select {
+	case readErr := <-readDone:
+		if readErr == nil {
+			t.Fatal("expected a non-nil stream error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock: Read did not return after fatal decode error")
+	}
+
+	// Close must also return promptly rather than blocking on the Once.
+	closeDone := make(chan struct{})
+	go func() {
+		_ = stream.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock: Close did not return after fatal decode error")
+	}
+}
+
+// TestRTSPStream_CloseWhileStreaming verifies a plain Close with no error
+// terminates the stream and unblocks a concurrent reader.
+func TestRTSPStream_CloseWhileStreaming(t *testing.T) {
+	h, _, port := startRTSPSTestServer(t)
+
+	clientTLS := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test server uses a throwaway self-signed cert
+	c, cliMedi, forma, rtpDec, err := connectRTSPSH264(clientTLS, "127.0.0.1", "testcode", port, 5*time.Second)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	stream, err := newRTSPStream(c, cliMedi, forma, rtpDec)
+	if err != nil {
+		t.Fatalf("newRTSPStream: %v", err)
+	}
+
+	select {
+	case <-h.playCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client never reached PLAY state")
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, readErr := stream.Read(buf); readErr != nil {
+				readDone <- readErr
+				return
+			}
+		}
+	}()
+
+	closeDone := make(chan struct{})
+	go func() {
+		_ = stream.Close()
+		close(closeDone)
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return")
+	}
+	select {
+	case <-readDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Read did not unblock after Close")
+	}
+}

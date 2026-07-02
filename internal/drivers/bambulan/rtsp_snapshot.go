@@ -25,7 +25,7 @@ import (
 // answer has already been found.
 func captureRTSPSH264Snapshot(ctx context.Context, tlsCfg *tls.Config, host, accessCode string) ([]byte, error) {
 	timeout := rtspTimeout(ctx)
-	c, medi, forma, rtpDec, err := connectRTSPSH264(tlsCfg, host, accessCode, timeout)
+	c, medi, forma, rtpDec, err := connectRTSPSH264(tlsCfg, host, accessCode, cameraPortH264, timeout)
 	if err != nil {
 		return nil, apperr.Wrap(4, "RTSPS camera endpoint unreachable", err)
 	}
