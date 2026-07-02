@@ -166,6 +166,36 @@ func TestOpen_Malformed(t *testing.T) {
 	}
 }
 
+func TestOpen_UnknownTopLevelField_Malformed(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "version: 1\nprofiles: {}\nunknown_field: true\n")
+
+	_, err := config.Open(dir)
+	if !errors.Is(err, config.ErrMalformed) {
+		t.Errorf("expected ErrMalformed for unknown top-level field, got %v", err)
+	}
+}
+
+func TestOpen_UnknownProfileField_Malformed(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `version: 1
+profiles:
+  myprinter:
+    driver: bambu-lan
+    host: 192.0.2.10
+    timeout: 10s
+    insecure: false
+    created: 2024-01-01T00:00:00Z
+    updated: 2024-01-01T00:00:00Z
+    access_code: secret123
+`)
+
+	_, err := config.Open(dir)
+	if !errors.Is(err, config.ErrMalformed) {
+		t.Errorf("expected ErrMalformed for stray access_code field, got %v", err)
+	}
+}
+
 func TestOpen_VersionZero(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, "profiles: {}\n") // no version field → defaults to 0

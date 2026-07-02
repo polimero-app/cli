@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,7 +58,11 @@ func Open(dir string) (*Config, error) {
 	}
 
 	var f configFile
-	if err := yaml.Unmarshal(data, &f); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	// Reject unknown fields so typos (or a stray access_code: line) fail
+	// loudly instead of being silently dropped on the next save.
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%w: %s", ErrMalformed, err)
 	}
 

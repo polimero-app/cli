@@ -19,6 +19,7 @@ Non-secret configuration:
 - Stored as versioned YAML at `polimero/polimero.yaml` under `os.UserConfigDir`.
 - For example: `~/.config/polimero/polimero.yaml` on Linux.
 - Parsed and written directly with `gopkg.in/yaml.v3` through Polimero's config package.
+- Parsed strictly: unknown fields are rejected as a malformed-config error, so typos are not silently dropped on the next save and stray secret-looking keys (for example `access_code:`) cannot linger unnoticed in the file.
 - Must not contain access codes, tokens, passwords, or other secrets.
 
 Config file structure:
