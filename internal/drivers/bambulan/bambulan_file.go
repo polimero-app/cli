@@ -101,6 +101,10 @@ func (d *Driver) connectFTP(ctx context.Context, p driver.ProfileInput, s driver
 	conn, err := d.ftpDial()(ctx, addr, tlsCfg)
 	if err != nil {
 		dur := time.Since(connectStart).Milliseconds()
+		category := "connection_error"
+		if isFingerprintMismatch(err) {
+			category = "auth_rejected"
+		}
 		trace.Emit(protocoltrace.Event{
 			Timestamp:     time.Now().UTC(),
 			Driver:        "bambu-lan",
@@ -109,9 +113,12 @@ func (d *Driver) connectFTP(ctx context.Context, p driver.ProfileInput, s driver
 			Transport:     "ftps",
 			Endpoint:      endpoint,
 			DurationMs:    &dur,
-			ErrorCategory: "connection_error",
+			ErrorCategory: category,
 		})
 		log.Debug("FTPS connection failed", "err", err.Error())
+		if isFingerprintMismatch(err) {
+			return nil, apperr.Wrap(3, "TLS fingerprint mismatch", err)
+		}
 		return nil, apperr.Newf(4, "FTP connection failed: %s", sanitizeFTPError(err))
 	}
 	connectDur := time.Since(connectStart).Milliseconds()

@@ -108,6 +108,30 @@ func TestFileRoots_ConnectionError(t *testing.T) {
 	}
 }
 
+func TestFileRoots_FingerprintMismatchExitsAuth(t *testing.T) {
+	fpErr := &fingerprintMismatchError{got: "aa", want: "bb"}
+	d := &Driver{dialFTP: mockDialer(nil, fpErr)}
+
+	ctx := context.Background()
+	_, err := d.FileRoots(ctx, testProfileInput(), testSecrets(), slog.Default())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *apperr.ExitError, got %T: %v", err, err)
+	}
+	if exitErr.Code != 3 {
+		t.Errorf("expected exit code 3, got %d", exitErr.Code)
+	}
+	if err.Error() != "TLS fingerprint mismatch" {
+		t.Errorf("expected sanitized message %q, got %q", "TLS fingerprint mismatch", err.Error())
+	}
+	if !errors.As(err, new(*fingerprintMismatchError)) {
+		t.Error("expected wrapped fingerprintMismatchError for errors.As")
+	}
+}
+
 func TestFileRoots_AuthError(t *testing.T) {
 	conn := &mockFTPConn{loginErr: errors.New("530 Login incorrect")}
 	d := &Driver{dialFTP: mockDialer(conn, nil)}
