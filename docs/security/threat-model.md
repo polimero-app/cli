@@ -160,6 +160,7 @@ Risks:
 Controls:
 
 - Dependency allowlist and audit policy.
+- Dependency posture record in `dependencies.md` (purpose, license, maintenance, risk records).
 - License compatibility check.
 - Attribution for OSS protocol references.
 - Vulnerability scanning in CI.
