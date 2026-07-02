@@ -86,7 +86,7 @@ Rules:
 - `/` is the only path separator.
 - Empty segments and `.` segments are normalized away.
 - `..` segments are rejected.
-- NUL bytes and ASCII control characters are rejected.
+- NUL bytes, C0/C1 control characters, and invalid UTF-8 are rejected.
 - Device paths longer than 1024 bytes after UTF-8 encoding are rejected.
 
 Examples:

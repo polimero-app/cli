@@ -11,6 +11,7 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/config"
+	"github.com/polimero-app/cli/internal/devicepath"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/drivers"
 	"github.com/polimero-app/cli/internal/keychain"
@@ -272,6 +273,12 @@ func writeJSONSuccess(w io.Writer, name, driverName string, result *driver.Statu
 	})
 }
 
+// sanitize replaces terminal control characters in printer-supplied strings
+// for safe human-readable output.
+func sanitize(s string) string {
+	return devicepath.SanitizeForDisplay(s)
+}
+
 func writeHumanSuccess(w io.Writer, name string, result *driver.StatusResult, detailed bool) error {
 	lines := []string{
 		fmt.Sprintf("Printer: %s", name),
@@ -324,11 +331,11 @@ func writeHumanSuccess(w io.Writer, name string, result *driver.StatusResult, de
 	if detailed && result.Lights != nil {
 		lines = append(lines, "Lights:")
 		for _, lightName := range sortedLightKeys(result.Lights) {
-			lines = append(lines, fmt.Sprintf("  %s: %s", lightName, result.Lights[lightName]))
+			lines = append(lines, fmt.Sprintf("  %s: %s", sanitize(lightName), sanitize(result.Lights[lightName])))
 		}
 	}
 	if result.Job != nil {
-		jobLine := fmt.Sprintf("Job: %s", result.Job.Name)
+		jobLine := fmt.Sprintf("Job: %s", sanitize(result.Job.Name))
 		if detailed && result.PrintMeta != nil {
 			var parts []string
 			if result.PrintMeta.FileSize != nil {
@@ -338,7 +345,7 @@ func writeHumanSuccess(w io.Writer, name string, result *driver.StatusResult, de
 				parts = append(parts, fmt.Sprintf("%.1fmm nozzle", *result.PrintMeta.NozzleDiameter))
 			}
 			if result.PrintMeta.BedType != nil {
-				parts = append(parts, *result.PrintMeta.BedType)
+				parts = append(parts, sanitize(*result.PrintMeta.BedType))
 			}
 			if len(parts) > 0 {
 				jobLine += " (" + strings.Join(parts, ", ") + ")"
@@ -377,16 +384,16 @@ func writeHumanSuccess(w io.Writer, name string, result *driver.StatusResult, de
 		lines = append(lines, "Errors:")
 		for _, statusErr := range result.Errors {
 			if statusErr.Code != "" {
-				lines = append(lines, fmt.Sprintf("- %s %s", statusErr.Code, statusErr.Message))
+				lines = append(lines, fmt.Sprintf("- %s %s", sanitize(statusErr.Code), sanitize(statusErr.Message)))
 			} else {
-				lines = append(lines, fmt.Sprintf("- %s", statusErr.Message))
+				lines = append(lines, fmt.Sprintf("- %s", sanitize(statusErr.Message)))
 			}
 		}
 	}
 	if len(result.Warnings) > 0 {
 		lines = append(lines, "Warnings:")
 		for _, warn := range result.Warnings {
-			lines = append(lines, fmt.Sprintf("- %s", warn.Message))
+			lines = append(lines, fmt.Sprintf("- %s", sanitize(warn.Message)))
 		}
 	}
 	for _, l := range lines {
@@ -490,9 +497,9 @@ func formatAMS(ams *driver.AMSData) string {
 		for _, tray := range unit.Trays {
 			trayLine := fmt.Sprintf("    Slot %d: ", tray.Slot)
 			if tray.FilamentType != nil {
-				trayLine += *tray.FilamentType
+				trayLine += sanitize(*tray.FilamentType)
 				if tray.Color != nil {
-					trayLine += " " + *tray.Color
+					trayLine += " " + sanitize(*tray.Color)
 				}
 				if tray.RemainingPercent != nil {
 					trayLine += fmt.Sprintf(" (%d%%)", *tray.RemainingPercent)

@@ -59,6 +59,9 @@ func TestParse_Invalid(t *testing.T) {
 		{"sdcard:/models/../secret", "'..' traversal"},
 		{"sdcard:/file\x00name", "invalid control characters"},
 		{"sdcard:/file\x01name", "invalid control characters"},
+		{"sdcard:/file\u009bname", "invalid control characters"},
+		{"sdcard:/file\u0085name", "invalid control characters"},
+		{"sdcard:/file\x9bname", "invalid UTF-8"},
 	}
 
 	for _, tt := range tests {
@@ -113,6 +116,20 @@ func TestSanitizeForDisplay(t *testing.T) {
 	got := SanitizeForDisplay(input)
 	if strings.ContainsAny(got, "\x01\x7f") {
 		t.Errorf("SanitizeForDisplay still contains control chars: %q", got)
+	}
+}
+
+func TestSanitizeForDisplay_C1Controls(t *testing.T) {
+	input := "file\u009b31mname\u0085end"
+	got := SanitizeForDisplay(input)
+	if strings.ContainsAny(got, "\u009b\u0085") {
+		t.Errorf("SanitizeForDisplay still contains C1 control chars: %q", got)
+	}
+	if !strings.Contains(got, "\ufffd") {
+		t.Errorf("SanitizeForDisplay did not replace C1 controls: %q", got)
+	}
+	if !strings.Contains(got, "file") || !strings.Contains(got, "31mname") || !strings.Contains(got, "end") {
+		t.Errorf("SanitizeForDisplay mangled non-control text: %q", got)
 	}
 }
 

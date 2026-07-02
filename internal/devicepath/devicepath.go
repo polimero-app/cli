@@ -3,6 +3,7 @@ package devicepath
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/polimero-app/cli/internal/apperr"
 )
@@ -45,11 +46,17 @@ func Parse(raw string) (DevicePath, error) {
 		return DevicePath{}, apperr.New(2, "device path is required")
 	}
 
-	// Check for control characters and NUL bytes.
-	for i := 0; i < len(raw); i++ {
-		if raw[i] < 0x20 || raw[i] == 0x7f {
+	// Reject C0 controls, DEL, C1 controls (0x80-0x9F, terminal escape
+	// injection), and invalid UTF-8 (which can smuggle raw control bytes).
+	for i := 0; i < len(raw); {
+		r, size := utf8.DecodeRuneInString(raw[i:])
+		if r == utf8.RuneError && size == 1 {
+			return DevicePath{}, apperr.New(2, "device path contains invalid UTF-8")
+		}
+		if isControlRune(r) {
 			return DevicePath{}, apperr.New(2, "device path contains invalid control characters")
 		}
+		i += size
 	}
 
 	// Split root from path at first ":"
@@ -148,13 +155,19 @@ func ValidateRootName(root string) error {
 	return validateRoot(root)
 }
 
+// isControlRune reports whether r is a C0 control, DEL, or C1 control
+// (0x80-0x9F, including U+009B CSI which can start escape sequences).
+func isControlRune(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
+}
+
 // SanitizeForDisplay replaces control characters in a device path string
 // with the Unicode replacement character for safe terminal output.
 func SanitizeForDisplay(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
+		if isControlRune(r) {
 			b.WriteRune('\ufffd')
 		} else {
 			b.WriteRune(r)

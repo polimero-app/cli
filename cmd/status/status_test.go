@@ -690,6 +690,38 @@ func detailedDriver() *stubDriver {
 	}
 }
 
+func TestStatus_HumanOutput_SanitizesPrinterStrings(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", true)
+	bedType := "textured\u009b31m_pei"
+	drv := &stubDriver{
+		caps: driver.Capabilities{Status: true},
+		result: &driver.StatusResult{
+			State:        "printing",
+			Job:          &driver.Job{Name: "evil\x1b]0;pwned\x07.3mf"},
+			PrintMeta:    &driver.PrintMeta{FileName: "evil.3mf", BedType: &bedType},
+			Lights:       driver.Lights{"chamber\x1b[2Jlight": "on\u009bK"},
+			Errors:       []driver.StatusError{{Code: "printer_error", Message: "printer error: \x1b[31mE100"}},
+			Warnings:     []driver.StatusWarning{{Code: "w", Message: "warn\x1b[0m text"}},
+			Capabilities: driver.Capabilities{Status: true},
+		},
+	}
+	deps := makeDeps(t, dir, kc, drv)
+	out, err := runCmd(t, deps, "myprinter", "--detailed")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.ContainsAny(out, "\x1b\x07") || strings.Contains(out, "\u009b") {
+		t.Errorf("human output contains unsanitized control characters:\n%q", out)
+	}
+	for _, want := range []string{"Job: evil\ufffd]0;pwned\ufffd.3mf", "textured\ufffd31m_pei", "chamber\ufffd[2Jlight: on\ufffdK", "printer error: \ufffd[31mE100", "warn\ufffd[0m text"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output:\n%s", want, out)
+		}
+	}
+}
+
 func TestStatus_Detailed_HumanOutput(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()

@@ -208,6 +208,8 @@ JSON success example:
 
 When `--protocol-trace` is enabled and the trace file is opened successfully, JSON `meta` may include `protocolTracePath`. Human output never includes trace contents.
 
+Human output sanitizes printer-supplied strings (job names, bed types, light names and modes, filament types and colors, error and warning text) by replacing C0/C1 terminal control characters with U+FFFD. JSON output relies on normal JSON string escaping.
+
 ### Detailed output (`--detailed`)
 
 Human detailed example:
@@ -444,6 +446,7 @@ JSON timeout example:
 - Fails before connecting when the protocol trace file cannot be created.
 - Does not leak access codes, raw auth payloads, raw MQTT payloads, or TLS material in protocol trace output.
 - Does not leak secrets in output or logs.
+- Sanitizes terminal control characters in printer-supplied strings in human output.
 - Does not include extended fields without `--detailed`.
 
 ### Detailed mode
