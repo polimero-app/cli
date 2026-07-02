@@ -91,54 +91,61 @@ func runTlsRefresh(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag
 	verbose := verboseFlag && format == output.FormatHuman
 
 	name := strings.ToLower(nameArg)
-	fp, durationMs, errName, err := doTlsRefresh(cmd, traceCtx, name, timeoutFlag, insecureFlag, yes, verbose, deps)
+	fp, durationMs, warnings, errName, err := doTlsRefresh(cmd, traceCtx, name, timeoutFlag, insecureFlag, yes, verbose, deps)
 	if err != nil {
 		return writeTlsRefreshError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, err, errName)
 	}
-	return writeTlsRefreshSuccess(cmd.OutOrStdout(), format, name, fp, insecureFlag, durationMs, protocolTrace)
+	return writeTlsRefreshSuccess(cmd.OutOrStdout(), format, name, fp, insecureFlag, durationMs, protocolTrace, warnings)
 }
 
-// doTlsRefresh executes the core logic. Returns (fingerprint, durationMs, profileName, error).
+// tlsRefreshWarning reports a non-fatal cleanup problem after the profile
+// update itself succeeded.
+type tlsRefreshWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// doTlsRefresh executes the core logic. Returns (fingerprint, durationMs, warnings, profileName, error).
 // profileName is used for error details; it is empty when the error occurs before name is known.
-func doTlsRefresh(cmd *cobra.Command, ctx context.Context, name, timeoutFlag string, insecureFlag, yes, verbose bool, deps TlsRefreshDeps) (string, int64, string, error) {
+func doTlsRefresh(cmd *cobra.Command, ctx context.Context, name, timeoutFlag string, insecureFlag, yes, verbose bool, deps TlsRefreshDeps) (string, int64, []tlsRefreshWarning, string, error) {
 	if err := validateProfileName(name); err != nil {
-		return "", 0, "", err
+		return "", 0, nil, "", err
 	}
 
 	dir, err := config.ConfigDir()
 	if err != nil {
-		return "", 0, "", apperr.Newf(1, "cannot resolve config directory: %s", err)
+		return "", 0, nil, "", apperr.Newf(1, "cannot resolve config directory: %s", err)
 	}
 	cfg, err := config.Open(dir)
 	if err != nil {
-		return "", 0, name, apperr.Newf(2, "cannot load config: %s", err)
+		return "", 0, nil, name, apperr.Newf(2, "cannot load config: %s", err)
 	}
 	p, ok := cfg.GetProfile(name)
 	if !ok {
-		return "", 0, name, apperr.Newf(2, "printer profile %q not found", name)
+		return "", 0, nil, name, apperr.Newf(2, "printer profile %q not found", name)
 	}
 
 	if !yes {
 		if !deps.Prompter.IsTerminal() {
-			return "", 0, name, apperr.New(2, "non-interactive mode requires --yes")
+			return "", 0, nil, name, apperr.New(2, "non-interactive mode requires --yes")
 		}
 		answer, promptErr := deps.Prompter.ReadLine(
 			fmt.Sprintf("Re-pin TLS certificate for %s? Type 'yes' to continue: ", name),
 		)
 		if promptErr != nil {
-			return "", 0, name, apperr.Newf(1, "cannot read confirmation: %s", promptErr)
+			return "", 0, nil, name, apperr.Newf(1, "cannot read confirmation: %s", promptErr)
 		}
 		if answer != "yes" {
-			return "", 0, name, apperr.New(2, "confirmation declined; TLS certificate not updated")
+			return "", 0, nil, name, apperr.New(2, "confirmation declined; TLS certificate not updated")
 		}
 	}
 
 	drv, ok := deps.GetDriver(p.Driver)
 	if !ok {
-		return "", 0, name, apperr.Newf(2, "unknown driver %q", p.Driver)
+		return "", 0, nil, name, apperr.Newf(2, "unknown driver %q", p.Driver)
 	}
 	if !drv.Capabilities().TLSRefresh {
-		return "", 0, name, apperr.Newf(5, "driver %q does not support the tls refresh command", p.Driver)
+		return "", 0, nil, name, apperr.Newf(5, "driver %q does not support the tls refresh command", p.Driver)
 	}
 
 	timeoutStr := p.Timeout
@@ -150,10 +157,10 @@ func doTlsRefresh(cmd *cobra.Command, ctx context.Context, name, timeoutFlag str
 	}
 	timeout, err := time.ParseDuration(timeoutStr)
 	if err != nil {
-		return "", 0, name, apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
+		return "", 0, nil, name, apperr.Newf(2, "invalid --timeout %q: %s", timeoutStr, err)
 	}
 	if timeout <= 0 {
-		return "", 0, name, apperr.Newf(2, "--timeout must be greater than zero")
+		return "", 0, nil, name, apperr.Newf(2, "--timeout must be greater than zero")
 	}
 
 	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
@@ -164,16 +171,22 @@ func doTlsRefresh(cmd *cobra.Command, ctx context.Context, name, timeoutFlag str
 		p.Insecure = true
 		p.Updated = time.Now().UTC()
 		if setErr := cfg.SetProfile(name, p); setErr != nil {
-			return "", 0, name, apperr.Newf(1, "cannot update profile: %s", setErr)
+			return "", 0, nil, name, apperr.Newf(1, "cannot update profile: %s", setErr)
 		}
 		if saveErr := config.Save(dir, cfg); saveErr != nil {
-			return "", 0, name, apperr.Newf(1, "cannot save config: %s", saveErr)
+			return "", 0, nil, name, apperr.Newf(1, "cannot save config: %s", saveErr)
 		}
-		// Config saved successfully; now clean up keychain (best-effort).
+		// Config saved successfully; keychain cleanup is best-effort. The
+		// profile is already insecure, so a stale fingerprint entry is a
+		// warning, not a failure — rerunning cannot roll back the config.
+		var warnings []tlsRefreshWarning
 		if delErr := deps.KC.Delete(ctx, "polimero", kcFpAcct); delErr != nil && !errors.Is(delErr, keychain.ErrNotFound) {
-			return "", 0, name, apperr.Wrap(3, "cannot delete TLS fingerprint from keychain", delErr)
+			warnings = append(warnings, tlsRefreshWarning{
+				Code:    "tls_fingerprint_delete_failed",
+				Message: "profile was switched to insecure, but the stored TLS fingerprint could not be deleted from keychain",
+			})
 		}
-		return "", 0, "", nil
+		return "", 0, warnings, "", nil
 	}
 
 	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("Connecting to %s...", p.Host))
@@ -187,30 +200,30 @@ func doTlsRefresh(cmd *cobra.Command, ctx context.Context, name, timeoutFlag str
 	fp, err := drv.CaptureFingerprint(ctx, captureInput)
 	durationMs := time.Since(start).Milliseconds()
 	if err != nil {
-		return "", 0, name, err
+		return "", 0, nil, name, err
 	}
 	if !driver.ValidTLSFingerprint(fp) {
-		return "", 0, name, apperr.New(4, "driver returned invalid TLS fingerprint")
+		return "", 0, nil, name, apperr.New(4, "driver returned invalid TLS fingerprint")
 	}
 	output.Verbose(cmd.OutOrStdout(), verbose, fmt.Sprintf("TLS certificate captured. New fingerprint: %s", fp))
 
 	output.Verbose(cmd.OutOrStdout(), verbose, "Updating TLS fingerprint in keychain...")
 	if setErr := deps.KC.Set(ctx, "polimero", kcFpAcct, fp); setErr != nil {
-		return "", 0, name, apperr.Wrap(3, "cannot store TLS fingerprint in keychain", setErr)
+		return "", 0, nil, name, apperr.Wrap(3, "cannot store TLS fingerprint in keychain", setErr)
 	}
 
 	p.Insecure = false
 	p.Updated = time.Now().UTC()
 	if setErr := cfg.SetProfile(name, p); setErr != nil {
-		return "", 0, name, apperr.Newf(1, "cannot update profile: %s", setErr)
+		return "", 0, nil, name, apperr.Newf(1, "cannot update profile: %s", setErr)
 	}
 	if saveErr := config.Save(dir, cfg); saveErr != nil {
-		return "", 0, name, apperr.Newf(1, "cannot save config: %s", saveErr)
+		return "", 0, nil, name, apperr.Newf(1, "cannot save config: %s", saveErr)
 	}
-	return fp, durationMs, "", nil
+	return fp, durationMs, nil, "", nil
 }
 
-func writeTlsRefreshSuccess(w io.Writer, format output.Format, name, fp string, insecure bool, durationMs int64, tracePath string) error {
+func writeTlsRefreshSuccess(w io.Writer, format output.Format, name, fp string, insecure bool, durationMs int64, tracePath string, warnings []tlsRefreshWarning) error {
 	if format == output.FormatJSON {
 		var fpVal any
 		if fp != "" {
@@ -230,6 +243,13 @@ func writeTlsRefreshSuccess(w io.Writer, format output.Format, name, fp string, 
 			Error: nil,
 			Meta:  meta,
 		}
+		if len(warnings) > 0 {
+			warningsOut := make([]any, len(warnings))
+			for i, ww := range warnings {
+				warningsOut[i] = map[string]any{"code": ww.Code, "message": ww.Message}
+			}
+			env.Data.(map[string]any)["warnings"] = warningsOut
+		}
 		if !insecure {
 			dm := durationMs
 			env.Meta.DurationMs = &dm
@@ -238,8 +258,15 @@ func writeTlsRefreshSuccess(w io.Writer, format output.Format, name, fp string, 
 	}
 
 	if insecure {
-		_, err := fmt.Fprintf(w, "TLS certificate verification disabled: %s\nWarning: TLS verification is disabled for this profile.\n", name)
-		return err
+		if _, err := fmt.Fprintf(w, "TLS certificate verification disabled: %s\nWarning: TLS verification is disabled for this profile.\n", name); err != nil {
+			return err
+		}
+		for _, ww := range warnings {
+			if _, err := fmt.Fprintf(w, "Warning: %s\n", ww.Message); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	_, err := fmt.Fprintf(w, "TLS certificate re-pinned: %s\nFingerprint: %s\n", name, fp)
 	return err

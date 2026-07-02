@@ -44,7 +44,7 @@ Without `--insecure`: stores the new fingerprint in OS keychain:
 - Service: `polimero`
 - Account: `bambu-lan:<name>:tls-fingerprint`
 
-With `--insecure`: removes the existing `bambu-lan:<name>:tls-fingerprint` keychain entry if present, then stores nothing.
+With `--insecure`: removes the existing `bambu-lan:<name>:tls-fingerprint` keychain entry if present, then stores nothing. The config update is the primary effect: if the profile was saved as insecure but the keychain delete fails, the command still succeeds and reports a `tls_fingerprint_delete_failed` warning (matching `printer remove`), since the stale entry has no security effect and rerunning cannot roll back the config.
 
 If the keychain is unavailable, the command fails with exit code `3`.
 
@@ -126,6 +126,8 @@ JSON insecure example:
 }
 ```
 
+When the profile was switched to insecure but the stored fingerprint could not be deleted, `data` additionally contains a `warnings` array with entries of the form `{"code": "tls_fingerprint_delete_failed", "message": "..."}`; human output prints a corresponding `Warning:` line.
+
 JSON error example:
 
 ```json
@@ -183,6 +185,7 @@ JSON error example:
 - Updates `updated` timestamp in profile after re-pin.
 - Switches insecure profile to secure: stores new fingerprint, sets `insecure: false`.
 - Switches secure profile to insecure: removes fingerprint from keychain, sets `insecure: true`.
+- Succeeds with `tls_fingerprint_delete_failed` warning when the config was switched to insecure but the keychain delete fails.
 - Requires confirmation interactively.
 - Requires `--yes` in non-interactive mode.
 - Rejects missing profile.

@@ -578,7 +578,7 @@ func TestTlsRefresh_NoVerbose_NoProgressLines(t *testing.T) {
 	}
 }
 
-func TestTlsRefresh_Insecure_KeychainDeleteFailure_ExitsCode3(t *testing.T) {
+func TestTlsRefresh_Insecure_KeychainDeleteFailure_SucceedsWithWarning(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
 	seedProfile(t, dir, kc, "myprinter", false)
@@ -594,9 +594,63 @@ func TestTlsRefresh_Insecure_KeychainDeleteFailure_ExitsCode3(t *testing.T) {
 		},
 		Prompter: &tty.Mock{Terminal: false},
 	}
-	_, err := runTlsRefreshCmd(t, deps, "myprinter", "--insecure", "--yes")
-	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
-		t.Errorf("expected exit 3 for keychain delete failure, got %v", err)
+	out, err := runTlsRefreshCmd(t, deps, "myprinter", "--insecure", "--yes")
+	if err != nil {
+		t.Fatalf("expected success with warning, got %v", err)
+	}
+	if !strings.Contains(out, "TLS certificate verification disabled: myprinter") {
+		t.Errorf("expected success line in output:\n%s", out)
+	}
+	if !strings.Contains(out, "could not be deleted from keychain") {
+		t.Errorf("expected delete-failure warning in output:\n%s", out)
+	}
+	// Config must be switched to insecure despite the keychain failure.
+	cfg, loadErr := config.Load()
+	if loadErr != nil {
+		t.Fatalf("load config: %v", loadErr)
+	}
+	p, ok := cfg.GetProfile("myprinter")
+	if !ok || !p.Insecure {
+		t.Errorf("expected profile switched to insecure, got %+v (found=%v)", p, ok)
+	}
+}
+
+func TestTlsRefresh_Insecure_KeychainDeleteFailure_JSONWarning(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	t.Setenv("POLIMERO_CONFIG_DIR", dir)
+	drv := defaultRefreshDriver()
+	deps := printer.TlsRefreshDeps{
+		KC: &failingDeleteKeychain{inner: kc},
+		GetDriver: func(name string) (driver.Driver, bool) {
+			if name == "bambu-lan" {
+				return drv, true
+			}
+			return nil, false
+		},
+		Prompter: &tty.Mock{Terminal: false},
+	}
+	out, err := runTlsRefreshCmd(t, deps, "myprinter", "--insecure", "--yes", "--output", "json")
+	if err != nil {
+		t.Fatalf("expected success with warning, got %v", err)
+	}
+	var env struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Insecure bool `json:"insecure"`
+			Warnings []struct {
+				Code string `json:"code"`
+			} `json:"warnings"`
+		} `json:"data"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", jsonErr, out)
+	}
+	if !env.OK || !env.Data.Insecure {
+		t.Errorf("expected ok+insecure envelope, got:\n%s", out)
+	}
+	if len(env.Data.Warnings) != 1 || env.Data.Warnings[0].Code != "tls_fingerprint_delete_failed" {
+		t.Errorf("expected tls_fingerprint_delete_failed warning, got:\n%s", out)
 	}
 }
