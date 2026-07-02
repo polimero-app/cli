@@ -42,11 +42,11 @@ type ftpConnAdapter struct {
 	conn *ftp.ServerConn
 }
 
-func (a *ftpConnAdapter) Login(user, password string) error { return a.conn.Login(user, password) }
-func (a *ftpConnAdapter) List(path string) ([]*ftp.Entry, error) { return a.conn.List(path) }
+func (a *ftpConnAdapter) Login(user, password string) error       { return a.conn.Login(user, password) }
+func (a *ftpConnAdapter) List(path string) ([]*ftp.Entry, error)  { return a.conn.List(path) }
 func (a *ftpConnAdapter) Retr(path string) (io.ReadCloser, error) { return a.conn.Retr(path) }
-func (a *ftpConnAdapter) Stor(path string, r io.Reader) error { return a.conn.Stor(path, r) }
-func (a *ftpConnAdapter) Quit() error { return a.conn.Quit() }
+func (a *ftpConnAdapter) Stor(path string, r io.Reader) error     { return a.conn.Stor(path, r) }
+func (a *ftpConnAdapter) Quit() error                             { return a.conn.Quit() }
 
 // ftpDialer creates FTP connections. Injected for testing.
 type ftpDialer func(ctx context.Context, addr string, tlsCfg *tls.Config) (ftpConn, error)

@@ -1,4 +1,4 @@
-.PHONY: help build install clean test test-race lint ci
+.PHONY: help build install clean fmt test test-race lint ci
 
 GO      ?= go
 BINARY  := polimero
@@ -15,6 +15,14 @@ install: ## Install the binary to GOPATH/bin
 
 clean: ## Remove the built binary
 	rm -f $(BINARY)
+
+fmt: ## Check gofmt formatting (fails on unformatted files)
+	@unformatted="$$( gofmt -l . )"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt: the following files are not formatted:"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
 
 test: ## Run tests
 	@packages="$$( $(GO) list ./... )"; \
@@ -41,4 +49,4 @@ lint: ## Run golangci-lint (skipped if not installed)
 		echo "golangci-lint not installed; skipping lint"; \
 	fi
 
-ci: test test-race lint ## Run full CI suite (test + test-race + lint)
+ci: fmt test test-race lint ## Run full CI suite (fmt + test + test-race + lint)

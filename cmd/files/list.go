@@ -143,11 +143,11 @@ func writeListJSON(w io.Writer, name, driverName string, results []pathResult, d
 		Entries    []driver.FileEntry `json:"entries"`
 	}
 	type listData struct {
-		Profile      string   `json:"profile"`
-		Driver       string   `json:"driver"`
+		Profile      string     `json:"profile"`
+		Driver       string     `json:"driver"`
 		Paths        []pathData `json:"paths"`
-		Warnings     []string `json:"warnings"`
-		Capabilities fileCaps `json:"capabilities"`
+		Warnings     []string   `json:"warnings"`
+		Capabilities fileCaps   `json:"capabilities"`
 	}
 	pd := make([]pathData, 0, len(results))
 	for _, r := range results {

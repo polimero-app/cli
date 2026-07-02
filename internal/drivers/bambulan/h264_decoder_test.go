@@ -7,8 +7,10 @@ import (
 
 // Fixture bytes are a real, minimal H.264 elementary stream: a single 16x16
 // black IDR frame encoded with libx264 baseline profile. Generated via:
-//   ffmpeg -f lavfi -i color=c=black:s=16x16:d=0.04 -frames:v 1 \
-//     -c:v libx264 -profile:v baseline -pix_fmt yuv420p -f h264 test.h264
+//
+//	ffmpeg -f lavfi -i color=c=black:s=16x16:d=0.04 -frames:v 1 \
+//	  -c:v libx264 -profile:v baseline -pix_fmt yuv420p -f h264 test.h264
+//
 // and extracting the SPS/PPS/IDR NALUs from the Annex-B output.
 var testH264SPS = []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x1e, 0xc0, 0x44, 0x00, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xc8, 0x3c, 0x48, 0x99, 0x20}
 var testH264PPS = []byte{0x68, 0xcb, 0x83, 0xcb, 0x20}

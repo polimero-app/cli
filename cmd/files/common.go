@@ -21,11 +21,11 @@ const defaultTimeout = "10s"
 
 // resolvedProfile holds everything needed after profile/secret resolution.
 type resolvedProfile struct {
-	name     string
-	driver   driver.FileDriver
-	pi       driver.ProfileInput
-	secrets  driver.SecretsBundle
-	timeout  time.Duration
+	name    string
+	driver  driver.FileDriver
+	pi      driver.ProfileInput
+	secrets driver.SecretsBundle
+	timeout time.Duration
 }
 
 // resolveProfile loads and validates the named printer profile, retrieves secrets,

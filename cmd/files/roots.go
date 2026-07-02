@@ -89,11 +89,11 @@ func writeRootsSuccess(w io.Writer, format output.Format, name, driverName strin
 func writeRootsJSON(w io.Writer, name, driverName string, roots []driver.FileRoot, durationMs int64, caps driver.Capabilities, tracePath *string) error {
 	dm := durationMs
 	type rootsData struct {
-		Profile      string              `json:"profile"`
-		Driver       string              `json:"driver"`
-		Roots        []driver.FileRoot   `json:"roots"`
-		Warnings     []string            `json:"warnings"`
-		Capabilities fileCaps            `json:"capabilities"`
+		Profile      string            `json:"profile"`
+		Driver       string            `json:"driver"`
+		Roots        []driver.FileRoot `json:"roots"`
+		Warnings     []string          `json:"warnings"`
+		Capabilities fileCaps          `json:"capabilities"`
 	}
 	return output.WriteEnvelope(w, output.Envelope{
 		OK: true,

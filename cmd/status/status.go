@@ -221,12 +221,12 @@ func writeSuccess(w io.Writer, format output.Format, name, driverName string, re
 func writeJSONSuccess(w io.Writer, name, driverName string, result *driver.StatusResult, durationMs int64, detailed bool, tracePath *string) error {
 	dm := durationMs
 	type statusData struct {
-		Profile       string              `json:"profile"`
-		Driver        string              `json:"driver"`
-		State         string              `json:"state"`
-		Temperatures  *driver.Temperatures `json:"temperatures"`
-		Job           *driver.Job          `json:"job"`
-		Progress      *driver.Progress     `json:"progress"`
+		Profile       string                 `json:"profile"`
+		Driver        string                 `json:"driver"`
+		State         string                 `json:"state"`
+		Temperatures  *driver.Temperatures   `json:"temperatures"`
+		Job           *driver.Job            `json:"job"`
+		Progress      *driver.Progress       `json:"progress"`
 		Errors        []driver.StatusError   `json:"errors"`
 		Warnings      []driver.StatusWarning `json:"warnings"`
 		Capabilities  driver.Capabilities    `json:"capabilities"`

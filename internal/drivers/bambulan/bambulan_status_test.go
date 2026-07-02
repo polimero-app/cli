@@ -1749,11 +1749,11 @@ func TestSDCardState(t *testing.T) {
 		want     string
 	}{
 		{"nil", nil, ""},
-		{"no sd card (bits 00)", rawPtr("256"), "normal"},  // 256 = 1 << 8 = bits[8:9]=01
+		{"no sd card (bits 00)", rawPtr("256"), "normal"}, // 256 = 1 << 8 = bits[8:9]=01
 		{"has sd card normal", rawPtr("256"), "normal"},
 		{"no sd card", rawPtr("0"), "none"},
-		{"abnormal", rawPtr("512"), "abnormal"},   // 512 = 2 << 8
-		{"readonly", rawPtr("768"), "readonly"},   // 768 = 3 << 8
+		{"abnormal", rawPtr("512"), "abnormal"},           // 512 = 2 << 8
+		{"readonly", rawPtr("768"), "readonly"},           // 768 = 3 << 8
 		{"with other bits set", rawPtr("1280"), "normal"}, // 1280 = 0x500 = bits[8:9]=01, bit 10 set
 	}
 	for _, tt := range tests {
@@ -1780,7 +1780,7 @@ func TestHasEMMC(t *testing.T) {
 		{"nil", nil, false},
 		{"empty", strPtr(""), false},
 		{"no emmc", strPtr("0"), false},
-		{"has emmc (bit 17)", strPtr("20000"), true},   // 0x20000 = 1 << 17
+		{"has emmc (bit 17)", strPtr("20000"), true},         // 0x20000 = 1 << 17
 		{"has emmc with other bits", strPtr("3e0000"), true}, // bit 17 set among others
 		{"just below bit 17", strPtr("1ffff"), false},
 		{"invalid hex", strPtr("xyz"), false},

@@ -18,10 +18,10 @@ const commandSet = "temperature set"
 
 // temperature safety bounds (command-layer enforcement, independent of firmware).
 const (
-	nozzleMin = 0.0
-	nozzleMax = 300.0
-	bedMin    = 0.0
-	bedMax    = 120.0
+	nozzleMin  = 0.0
+	nozzleMax  = 300.0
+	bedMin     = 0.0
+	bedMax     = 120.0
 	chamberMin = 0.0
 	chamberMax = 65.0
 )
@@ -246,9 +246,9 @@ func writeSetJSONSuccess(w io.Writer, name, driverName string, result driver.Tem
 		ChamberCelsius *float64 `json:"chamberCelsius"`
 	}
 	type data struct {
-		Profile      string              `json:"profile"`
-		Driver       string              `json:"driver"`
-		Targets      targetsJSON         `json:"targets"`
+		Profile      string                 `json:"profile"`
+		Driver       string                 `json:"driver"`
+		Targets      targetsJSON            `json:"targets"`
 		Warnings     []driver.StatusWarning `json:"warnings"`
 		Capabilities driver.Capabilities    `json:"capabilities"`
 	}
