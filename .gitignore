@@ -17,3 +17,6 @@ go.work.sum
 # IDEs
 .idea/
 .vscode/
+
+# Agent tooling state
+.claude/
