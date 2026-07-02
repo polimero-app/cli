@@ -259,7 +259,10 @@ func (d *Driver) FileList(
 }
 
 func (d *Driver) listDir(conn ftpConn, root, remotePath string, log *slog.Logger) ([]driver.FileEntry, error) {
-	ftpPath := mapToFTPPath(remotePath)
+	ftpPath, err := mapToFTPPath(remotePath)
+	if err != nil {
+		return nil, err
+	}
 	log.Debug("listing FTP directory", "path", ftpPath)
 
 	rawEntries, err := conn.List(ftpPath)
@@ -341,7 +344,10 @@ func (d *Driver) FileDownload(
 	}
 	defer func() { _ = conn.Quit() }()
 
-	ftpPath := mapToFTPPath(remotePath)
+	ftpPath, err := mapToFTPPath(remotePath)
+	if err != nil {
+		return nil, err
+	}
 	log.Debug("downloading file via FTP", "path", ftpPath)
 
 	resp, err := conn.Retr(ftpPath)
@@ -383,7 +389,10 @@ func (d *Driver) FileUpload(
 	}
 	defer func() { _ = conn.Quit() }()
 
-	ftpPath := mapToFTPPath(remotePath)
+	ftpPath, err := mapToFTPPath(remotePath)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check existence when overwrite is false. The driver spec requires
 	// failing closed when existence cannot be determined safely.
@@ -476,12 +485,25 @@ func (cr *contextReader) Read(p []byte) (int, error) {
 
 // mapToFTPPath converts a normalized device path to an FTP path.
 // sdcard:/ -> /   sdcard:/models/cube.3mf -> /models/cube.3mf
-func mapToFTPPath(devicePath string) string {
+// It defensively re-validates the path per the driver spec: the command layer
+// rejects traversal before dispatch, but the driver must still reject `..`
+// segments, NUL bytes, and control characters.
+func mapToFTPPath(devicePath string) (string, error) {
 	// Device path is already the path portion (e.g. "/" or "/models/cube.3mf")
 	if devicePath == "" || devicePath == "/" {
-		return "/"
+		return "/", nil
 	}
-	return devicePath
+	for _, r := range devicePath {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return "", apperr.Newf(2, "invalid device path: contains control characters")
+		}
+	}
+	for _, seg := range strings.Split(strings.Trim(devicePath, "/"), "/") {
+		if seg == ".." {
+			return "", apperr.Newf(2, "invalid device path: contains traversal segment")
+		}
+	}
+	return devicePath, nil
 }
 
 // mapFTPEntry converts an FTP entry to a driver.FileEntry.

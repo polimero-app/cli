@@ -193,6 +193,33 @@ func TestFileList_UnknownRoot_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestFileList_MaliciousPath_RejectedByDriver(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"traversal", "/models/../../etc/passwd"},
+		{"nul byte", "/models/a\x00b.3mf"},
+		{"c0 control", "/models/a\nb.3mf"},
+		{"c1 control", "/models/a\u009bb.3mf"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := &mockFTPConn{}
+			d := &Driver{dialFTP: mockDialer(conn, nil)}
+
+			ctx := context.Background()
+			_, err := d.FileList(ctx, testProfileInput(), testSecrets(), "sdcard", tc.path, false, slog.Default())
+			var exitErr *apperr.ExitError
+			if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+				t.Fatalf("expected exit 2 for %q, got %v", tc.path, err)
+			}
+			if strings.Contains(err.Error(), tc.path) {
+				t.Errorf("error message echoes raw path: %q", err.Error())
+			}
+		})
+	}
+}
+
 func TestFileUpload_StoresData(t *testing.T) {
 	conn := &mockFTPConn{
 		listResult: []*ftp.Entry{}, // empty - no existing file
