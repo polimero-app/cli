@@ -181,8 +181,22 @@ func Save(dir string, c *Config) error {
 		_ = tmp.Close()
 		return fmt.Errorf("writing config: %w", err)
 	}
+	// Flush file contents to stable storage before the rename so a crash
+	// cannot leave an empty or truncated polimero.yaml in place.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("syncing config: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing temp file: %w", err)
 	}
-	return os.Rename(tmpName, filepath.Join(dir, "polimero.yaml"))
+	if err := os.Rename(tmpName, filepath.Join(dir, "polimero.yaml")); err != nil {
+		return err
+	}
+	// Best-effort directory sync so the rename itself is durable.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
