@@ -6,7 +6,7 @@ Instructions for agents working in this repository.
 
 Polimero is a greenfield Go CLI for interacting with 3D printers through brand-specific drivers behind a stable command surface.
 
-Current phase: initial printer-management and network command slices are implemented (`printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, `files upload`). Keep using accepted ADRs and specs to authorize new behavior before implementation.
+Current phase: printer-management, network read, and control command slices are implemented (`printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, `files upload`, `jobs start`, `jobs pause`, `jobs resume`, `jobs cancel`, `temperature set`, `motion home`, `motion jog`), plus the `--trace` protocol diagnostics flag. Auxiliary control specs (fans, lights, speed) are accepted but not yet implemented. Keep using accepted ADRs and specs to authorize new behavior before implementation.
 
 Primary references:
 
@@ -111,16 +111,14 @@ Initial Bambu scope:
 
 - X1, P1, A1, and H2 families.
 - LAN access code only.
-- Implemented commands: discovery, TLS refresh, read-only status, camera streaming, camera snapshot, and file management (roots, list, download, upload).
+- Implemented commands: discovery, TLS refresh, read-only status, camera streaming, camera snapshot, file management (roots, list, download, upload), job control (start, pause, resume, cancel), temperature targets, and motion (home, jog).
 - Capability-gated behavior.
 
 Out of scope unless a later accepted ADR/spec says otherwise:
 
 - Bambu cloud auth.
 - Bambu cloud APIs.
-- Job upload.
-- Job start.
-- Pause, cancel, movement, heating, or other state-changing commands.
+- Combined upload-and-start in a single command (`jobs start` only starts files already on printer storage; ADR 0012).
 - Authorization bypass.
 
 Protocol research may use official docs, user-owned device observations, and compatible public OSS references with attribution and license review.
