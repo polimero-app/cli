@@ -50,7 +50,7 @@ func uploadCommandWithDeps(deps Deps) *cobra.Command {
 	return cmd
 }
 
-func runUpload(cmd *cobra.Command, nameArg, localPathArg, devicePathArg, timeoutFlag string, insecureFlag, overwriteFlag bool, protocolTrace string, deps Deps) error {
+func runUpload(cmd *cobra.Command, nameArg, localPathArg, devicePathArg, timeoutFlag string, insecureFlag, overwriteFlag bool, protocolTrace string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -61,7 +61,7 @@ func runUpload(cmd *cobra.Command, nameArg, localPathArg, devicePathArg, timeout
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files upload", traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	// Validate local path.
 	info, err := os.Stat(localPathArg)

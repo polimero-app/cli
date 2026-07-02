@@ -88,7 +88,7 @@ func writeAddUsageError(cmd *cobra.Command, message string) error {
 	return writeAddError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message))
 }
 
-func runAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr string, insecure bool, accessCodeFile, protocolTrace string, deps AddDeps) error {
+func runAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr string, insecure bool, accessCodeFile, protocolTrace string, deps AddDeps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -100,7 +100,7 @@ func runAdd(cmd *cobra.Command, nameArg, driverName, host, serial, timeoutStr st
 	if traceErr != nil {
 		return writeAddError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	err := doAdd(cmd, traceCtx, nameArg, driverName, host, serial, timeoutStr, insecure, accessCodeFile, protocolTrace, format, deps)
 	if err == nil {

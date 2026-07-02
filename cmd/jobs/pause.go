@@ -41,7 +41,7 @@ func pauseCommandWithDeps(deps Deps) *cobra.Command {
 	return cmd
 }
 
-func runPause(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) error {
+func runPause(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -53,7 +53,7 @@ func runPause(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string, 
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandPause, traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {

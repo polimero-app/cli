@@ -76,7 +76,7 @@ func writeUsageError(cmd *cobra.Command, message string) error {
 	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), errorContext{})
 }
 
-func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, detailed bool, protocolTrace string, deps Deps) error {
+func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, detailed bool, protocolTrace string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -88,12 +88,8 @@ func runStatus(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, de
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, traceErr, errorContext{})
 	}
-	defer func() {
-		if err := traceCleanup(); err != nil {
-			// Trace close failure after protocol work: exit 1 unless earlier error.
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to close protocol trace: %s\n", err)
-		}
-	}()
+	// Trace close failure after protocol work: exit 1 unless earlier error.
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	name := strings.ToLower(nameArg)
 	verboseFlag, _ := cmd.Root().PersistentFlags().GetBool("verbose")

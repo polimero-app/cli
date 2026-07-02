@@ -41,9 +41,10 @@ func (nopSink) Emit(Event) {}
 // FileSink writes JSON Lines events to an os.File.
 // It is safe for concurrent use.
 type FileSink struct {
-	mu  sync.Mutex
-	w   io.WriteCloser
-	enc *json.Encoder
+	mu       sync.Mutex
+	w        io.WriteCloser
+	enc      *json.Encoder
+	writeErr error // first Emit failure, surfaced by Close
 }
 
 // NewFileSink creates a trace file at path with mode 0600.
@@ -63,17 +64,27 @@ func NewFileSink(path string) (*FileSink, error) {
 }
 
 // Emit writes a single event as one JSON line.
+// The first failure is recorded and reported by Close so the command
+// layer can fail the invocation instead of silently truncating traces.
 func (fs *FileSink) Emit(e Event) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	// Best-effort: if encoding fails we cannot do much without
-	// recursive error handling. The trace file is a diagnostic artifact.
-	_ = fs.enc.Encode(e)
+	if err := fs.enc.Encode(e); err != nil && fs.writeErr == nil {
+		fs.writeErr = err
+	}
 }
 
-// Close flushes and closes the underlying file.
+// Close flushes and closes the underlying file. It returns the first
+// Emit failure, if any, otherwise the close error.
 func (fs *FileSink) Close() error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	return fs.w.Close()
+	closeErr := fs.w.Close()
+	if fs.writeErr != nil {
+		return fmt.Errorf("protocol trace write failed: %w", fs.writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("protocol trace close failed: %w", closeErr)
+	}
+	return nil
 }

@@ -62,7 +62,7 @@ func writeUsageError(cmd *cobra.Command, cmdName, message string) error {
 	return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, cmdName, apperr.New(2, message))
 }
 
-func runHome(cmd *cobra.Command, nameArg, axisFlag string, yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) error {
+func runHome(cmd *cobra.Command, nameArg, axisFlag string, yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -74,7 +74,7 @@ func runHome(cmd *cobra.Command, nameArg, axisFlag string, yes bool, timeoutFlag
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	// Parse and validate axis list.
 	axes, axisNames, err := parseAxes(axisFlag)

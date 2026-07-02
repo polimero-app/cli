@@ -73,7 +73,7 @@ func writeTlsRefreshUsageError(cmd *cobra.Command, message string) error {
 	return writeTlsRefreshError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, apperr.New(2, message), "")
 }
 
-func runTlsRefresh(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, yes bool, protocolTrace string, deps TlsRefreshDeps) error {
+func runTlsRefresh(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag, yes bool, protocolTrace string, deps TlsRefreshDeps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -85,7 +85,7 @@ func runTlsRefresh(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag
 	if traceErr != nil {
 		return writeTlsRefreshError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, traceErr, "")
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	verboseFlag, _ := cmd.Root().PersistentFlags().GetBool("verbose")
 	verbose := verboseFlag && format == output.FormatHuman

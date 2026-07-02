@@ -68,7 +68,7 @@ func writeUsageError(cmd *cobra.Command, cmdName, message string) error {
 
 func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLeveling bool,
 	yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps,
-) error {
+) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -80,7 +80,7 @@ func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLe
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	// Validate device path format.
 	if err := validateDevicePath(devicePath); err != nil {

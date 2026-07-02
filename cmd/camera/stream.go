@@ -49,7 +49,7 @@ func streamCommandWithDeps(deps Deps) *cobra.Command {
 	return cmd
 }
 
-func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) error {
+func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -64,7 +64,7 @@ func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string,
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	result, name, err := openStream(ctx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {

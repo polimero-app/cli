@@ -2,6 +2,8 @@ package protocoltrace
 
 import (
 	"context"
+	"fmt"
+	"io"
 
 	"github.com/polimero-app/cli/internal/apperr"
 )
@@ -25,4 +27,19 @@ func Setup(ctx context.Context, path string) (context.Context, func() error, err
 		return sink.Close()
 	}
 	return ctx, cleanup, nil
+}
+
+// Finish runs a trace cleanup function from a deferred call and applies the
+// ADR 0013 failure rule: a trace write or close failure fails the command
+// with exit code 1 unless an earlier, more specific failure already
+// occurred. The failure is always reported on errOut.
+func Finish(cleanup func() error, errOut io.Writer, retErr *error) {
+	err := cleanup()
+	if err == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(errOut, "Error: %s\n", err)
+	if *retErr == nil {
+		*retErr = apperr.Wrap(1, "", err)
+	}
 }

@@ -50,7 +50,7 @@ func snapshotCommandWithDeps(deps Deps) *cobra.Command {
 	return cmd
 }
 
-func runSnapshot(cmd *cobra.Command, nameArg, toFlag string, overwrite bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) error {
+func runSnapshot(cmd *cobra.Command, nameArg, toFlag string, overwrite bool, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -61,7 +61,7 @@ func runSnapshot(cmd *cobra.Command, nameArg, toFlag string, overwrite bool, tim
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSnapshot, traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	name, err := normalizedProfileName(nameArg)
 	if err != nil {

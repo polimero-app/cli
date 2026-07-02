@@ -39,7 +39,7 @@ func listCommandWithDeps(deps Deps) *cobra.Command {
 	return cmd
 }
 
-func runList(cmd *cobra.Command, nameArg string, pathArgs []string, timeoutFlag string, insecureFlag, recursive bool, protocolTrace string, deps Deps) error {
+func runList(cmd *cobra.Command, nameArg string, pathArgs []string, timeoutFlag string, insecureFlag, recursive bool, protocolTrace string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -50,7 +50,7 @@ func runList(cmd *cobra.Command, nameArg string, pathArgs []string, timeoutFlag 
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files list", traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	rp, err := resolveProfile(traceCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {

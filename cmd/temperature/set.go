@@ -84,7 +84,7 @@ func runSet(cmd *cobra.Command, nameArg string,
 	hasNozzle, hasBed, hasChamber bool,
 	yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string,
 	deps Deps,
-) error {
+) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -96,7 +96,7 @@ func runSet(cmd *cobra.Command, nameArg string,
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	// Step 2: validate that at least one target was given and bounds are safe.
 	if !hasNozzle && !hasBed && !hasChamber {

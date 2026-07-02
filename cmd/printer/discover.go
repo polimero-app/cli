@@ -52,7 +52,7 @@ func DiscoverCommandWithDeps(deps DiscoverDeps) *cobra.Command {
 	return cmd
 }
 
-func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag, protocolTrace string, deps DiscoverDeps) error {
+func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag, protocolTrace string, deps DiscoverDeps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -64,7 +64,7 @@ func runDiscover(cmd *cobra.Command, driverFlag, timeoutFlag, protocolTrace stri
 	if traceErr != nil {
 		return writeDiscoverError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	timeout, err := time.ParseDuration(timeoutFlag)
 	if err != nil {

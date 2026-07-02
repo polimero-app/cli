@@ -49,7 +49,7 @@ func downloadCommandWithDeps(deps Deps) *cobra.Command {
 	return cmd
 }
 
-func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag string, insecureFlag, overwriteFlag bool, protocolTrace string, deps Deps) error {
+func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag string, insecureFlag, overwriteFlag bool, protocolTrace string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -60,7 +60,7 @@ func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag strin
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files download", traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	dp, err := devicepath.Parse(pathArg)
 	if err != nil {

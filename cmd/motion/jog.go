@@ -64,7 +64,7 @@ func runJog(cmd *cobra.Command, nameArg string,
 	x, y, z float64, hasX, hasY, hasZ bool,
 	feedrate int, yes bool, timeoutFlag string, insecureFlag bool, protocolTrace string,
 	deps Deps,
-) error {
+) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -76,7 +76,7 @@ func runJog(cmd *cobra.Command, nameArg string,
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	// Validate at least one axis given.
 	if !hasX && !hasY && !hasZ {

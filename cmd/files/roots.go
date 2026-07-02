@@ -39,7 +39,7 @@ func rootsCommandWithDeps(deps Deps) *cobra.Command {
 	return cmd
 }
 
-func runRoots(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) error {
+func runRoots(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -50,7 +50,7 @@ func runRoots(cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files roots", traceErr)
 	}
-	defer func() { _ = traceCleanup() }()
+	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	rp, err := resolveProfile(traceCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
