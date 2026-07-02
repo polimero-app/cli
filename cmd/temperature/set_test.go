@@ -285,6 +285,44 @@ func TestTemperatureSet_NozzleNegative_UnsafeValue(t *testing.T) {
 	}
 }
 
+func TestTemperatureSet_NozzleNaN_UnsafeValue(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter")
+	deps := makeDeps(t, dir, kc, defaultTempDriver(), &tty.Mock{Terminal: true})
+	out, err := runCmd(t, deps, "set", "myprinter", "--nozzle", "NaN", "--yes", "--output", "json")
+	if err == nil {
+		t.Fatal("expected error for NaN nozzle")
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	errObj := env["error"].(map[string]any)
+	if errObj["code"] != "unsafe_value" {
+		t.Errorf("expected code=unsafe_value, got %v", errObj["code"])
+	}
+}
+
+func TestTemperatureSet_BedInf_UnsafeValue(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter")
+	deps := makeDeps(t, dir, kc, defaultTempDriver(), &tty.Mock{Terminal: true})
+	out, err := runCmd(t, deps, "set", "myprinter", "--bed", "-Inf", "--yes", "--output", "json")
+	if err == nil {
+		t.Fatal("expected error for -Inf bed")
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	errObj := env["error"].(map[string]any)
+	if errObj["code"] != "unsafe_value" {
+		t.Errorf("expected code=unsafe_value, got %v", errObj["code"])
+	}
+}
+
 func TestTemperatureSet_InvalidPrinterState_Fails(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()

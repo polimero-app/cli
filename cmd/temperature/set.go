@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -200,6 +201,17 @@ func runSet(cmd *cobra.Command, nameArg string,
 }
 
 func checkBound(out, errOut io.Writer, format output.Format, target string, value, min, max float64) error {
+	// NaN compares false against any bound, so reject non-finite values first.
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return writeDetailError(out, errOut, format, commandSet, 2, "unsafe_value",
+			fmt.Sprintf("%s target must be a finite number", target),
+			map[string]any{
+				"target":  target,
+				"value":   fmt.Sprintf("%g", value),
+				"minimum": min,
+				"maximum": max,
+			})
+	}
 	if value < min || value > max {
 		return writeDetailError(out, errOut, format, commandSet, 2, "unsafe_value",
 			fmt.Sprintf("%s target out of range", target),

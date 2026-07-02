@@ -261,6 +261,7 @@ JSON precondition error example:
 - Fails with `unsafe_value` for a nozzle value above 300 or below 0.
 - Fails with `unsafe_value` for a bed value above 120 or below 0.
 - Fails with `unsafe_value` for a chamber value above 65 or below 0.
+- Fails with `unsafe_value` for a non-finite target value (`NaN`, `Inf`).
 - Fails with exit code `2` when no target flag is given.
 - Fails with `invalid_printer_state` when current state is not `idle`.
 - Fails with exit code `2` when confirmation is declined.

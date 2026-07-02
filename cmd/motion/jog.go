@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -163,6 +164,17 @@ func runJog(cmd *cobra.Command, nameArg string,
 }
 
 func checkJogBound(out, errOut io.Writer, format output.Format, axis string, value float64) error {
+	// NaN compares false against any bound, so reject non-finite values first.
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return writeDetailError(out, errOut, format, commandJog, 2, "unsafe_value",
+			"jog distance must be a finite number",
+			map[string]any{
+				"axis":    axis,
+				"value":   fmt.Sprintf("%g", value),
+				"minimum": jogMin,
+				"maximum": jogMax,
+			})
+	}
 	if value < jogMin || value > jogMax {
 		return writeDetailError(out, errOut, format, commandJog, 2, "unsafe_value",
 			"jog distance out of range",

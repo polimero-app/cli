@@ -298,6 +298,7 @@ JSON precondition error example:
 - Uses the default feedrate when `--feedrate` is omitted.
 - Uses an explicit feedrate when given.
 - Fails with `unsafe_value` for a jog distance above 10 or below -10 on any axis.
+- Fails with `unsafe_value` for a non-finite jog distance (`NaN`, `Inf`).
 - Fails with exit code `2` when no `--x`/`--y`/`--z` is given for `motion jog`.
 - Fails with exit code `2` for an invalid `--axis` value.
 - Fails with `invalid_printer_state` when current state is not `idle`.

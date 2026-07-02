@@ -398,6 +398,44 @@ func TestMotionJog_ZNegativeTooLarge_UnsafeValue(t *testing.T) {
 	}
 }
 
+func TestMotionJog_XNaN_UnsafeValue(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter")
+	deps := makeDeps(t, dir, kc, defaultMotionDriver(), &tty.Mock{Terminal: true})
+	out, err := runCmd(t, deps, "jog", "myprinter", "--x", "NaN", "--yes", "--output", "json")
+	if err == nil {
+		t.Fatal("expected error for NaN jog distance")
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	errObj := env["error"].(map[string]any)
+	if errObj["code"] != "unsafe_value" {
+		t.Errorf("expected unsafe_value, got %v", errObj["code"])
+	}
+}
+
+func TestMotionJog_YInf_UnsafeValue(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter")
+	deps := makeDeps(t, dir, kc, defaultMotionDriver(), &tty.Mock{Terminal: true})
+	out, err := runCmd(t, deps, "jog", "myprinter", "--y", "Inf", "--yes", "--output", "json")
+	if err == nil {
+		t.Fatal("expected error for Inf jog distance")
+	}
+	var env map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
+		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
+	}
+	errObj := env["error"].(map[string]any)
+	if errObj["code"] != "unsafe_value" {
+		t.Errorf("expected unsafe_value, got %v", errObj["code"])
+	}
+}
+
 func TestMotionJog_InvalidPrinterState_Fails(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()
