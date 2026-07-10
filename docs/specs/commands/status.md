@@ -39,7 +39,7 @@ The profile must include:
 - name
 - driver
 - host
-- serial (used by the driver for TLS SNI and MQTT topic construction)
+- serial when required by the selected driver (for example `bambu-lan`)
 - timeout or default timeout
 
 ## Secret Requirements
@@ -47,15 +47,15 @@ The profile must include:
 The command loads keychain entries using the driver name and profile name from the stored profile:
 
 - Access code: `<driver>:<name>:access-code`
-- TLS fingerprint: `<driver>:<name>:tls-fingerprint` (skipped when `--insecure` or `profile.insecure: true`)
+- TLS fingerprint: `<driver>:<name>:tls-fingerprint` for drivers that use TLS pinning (skipped when `--insecure` or `profile.insecure: true`)
 
 Keychain reads use the same bounded command timeout as the status request.
 
 If the access code is missing or keychain access fails, the command fails with exit code `3`.
 
-If the TLS fingerprint is missing for a secure profile, the command fails with exit code `3`.
+If the TLS fingerprint is missing for a secure profile on a TLS-pinned driver, the command fails with exit code `3`.
 
-If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowercase hex characters>`, the command fails with exit code `3`.
+If the TLS fingerprint is present but empty or not formatted as `sha256:<64 lowercase hex characters>` on a TLS-pinned driver, the command fails with exit code `3`.
 
 ## Behavior
 

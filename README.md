@@ -10,6 +10,8 @@ This repository contains the ADR/spec foundation plus the first implemented prin
 
 Implemented commands currently include `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, top-level `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, `files upload`, `jobs start`, `jobs pause`, `jobs resume`, `jobs cancel`, `temperature set`, `motion home`, and `motion jog`.
 
+Implemented drivers: `bambu-lan`, `moonraker`.
+
 ## Key Decisions
 
 - Language: Go
@@ -58,3 +60,7 @@ H.264 camera snapshots use FFmpeg libraries through cgo for frame decoding and J
 * https://github.com/Doridian/OpenBambuAPI
 * https://github.com/Keralots/BambuHelper
 * https://github.com/maziggy/bambuddy
+
+### Moonraker
+
+* https://moonraker.readthedocs.io/

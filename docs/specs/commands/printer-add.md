@@ -29,9 +29,9 @@ Profile names must:
 
 ## Flags
 
-- `--driver <driver>`: required. Initial accepted value: `bambu-lan`.
+- `--driver <driver>`: required. Accepted values in this slice: `bambu-lan`, `moonraker`.
 - `--host <host>`: required. IP address or DNS hostname. Must be a valid IP address or a conservative ASCII DNS hostname with labels separated by dots; labels must start and end with an ASCII letter or digit and may contain hyphens internally.
-- `--serial <serial>`: required for `bambu-lan`. The printer's serial number, used for TLS SNI and MQTT topic construction. Stored verbatim in the profile; must be non-empty, printable ASCII with no whitespace, and at most 64 characters.
+- `--serial <serial>`: required for `bambu-lan`. The printer's serial number, used for TLS SNI and MQTT topic construction. Stored verbatim in the profile; must be non-empty, printable ASCII with no whitespace, and at most 64 characters. Optional and ignored by `moonraker`.
 - `--timeout <duration>`: optional. Default: `10s`. Must parse as a Go duration and be greater than zero.
 - `--access-code-file <path>`: optional. Reads a secret from a file.
 - `--insecure`: optional. Skips TLS verification and MQTT auth check. Profile is stored with `insecure: true`. No TLS fingerprint is stored. Human output includes a warning.
@@ -62,7 +62,7 @@ The config file must not contain the Bambu LAN access code or the TLS fingerprin
 
 ## Secret Requirements
 
-For `--driver bambu-lan`, an access code is required.
+For `--driver bambu-lan` and `--driver moonraker`, a keychain secret is required.
 
 Secret input order:
 
@@ -73,7 +73,7 @@ Secret input order:
 TTY prompt text:
 
 ```text
-Enter Bambu LAN access code for <name>:
+Enter access code for <name>:
 ```
 
 `--access-code-file` requirements:
@@ -90,8 +90,8 @@ Enter Bambu LAN access code for <name>:
 
 Keychain entries written by this command:
 
-- Access code: service `polimero`, account `bambu-lan:<name>:access-code`.
-- TLS fingerprint: service `polimero`, account `bambu-lan:<name>:tls-fingerprint`. Not written when `--insecure` is used.
+- Access code: service `polimero`, account `<driver>:<name>:access-code`.
+- TLS fingerprint: service `polimero`, account `<driver>:<name>:tls-fingerprint`. Written only for drivers with TLS pinning support (for example `bambu-lan`) and only when not insecure.
 
 If keychain storage is unavailable, the command fails closed. Keychain writes and rollback deletes must use bounded contexts and must not expose raw secret-store backend errors.
 
@@ -100,6 +100,8 @@ If keychain storage is unavailable, the command fails closed. Keychain writes an
 The command performs a driver-defined connectivity check before storing the profile. The profile is not stored if the check fails.
 
 For `--driver bambu-lan` (non-insecure): establishes a full MQTT connection over TLS to the printer. During the TLS handshake, the leaf certificate fingerprint is captured (Trust On First Use per ADR 0007). The MQTT CONNECT packet is sent with username `bblp` and the supplied access code as password. A non-zero CONNACK return code is treated as an authentication failure (exit code `3`). The `--insecure` flag skips TLS verification and the MQTT auth check entirely; the profile is stored without a fingerprint.
+
+For `--driver moonraker`: performs an authenticated Moonraker API connectivity check over HTTP(S) using the keychain access code as API key material. TLS fingerprint pinning is not used for this driver in this slice.
 
 Other drivers define their own connectivity check and transport security requirements in their driver spec.
 

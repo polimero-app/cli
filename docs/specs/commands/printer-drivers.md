@@ -35,6 +35,7 @@ Human success example:
 ```text
 DRIVER     DESCRIPTION
 bambu-lan  Bambu Lab printers over LAN mode
+moonraker  Moonraker-compatible Klipper printers
 ```
 
 JSON success example:
@@ -47,6 +48,10 @@ JSON success example:
       {
         "name": "bambu-lan",
         "description": "Bambu Lab printers over LAN mode"
+      },
+      {
+        "name": "moonraker",
+        "description": "Moonraker-compatible Klipper printers"
       }
     ]
   },
@@ -74,7 +79,7 @@ JSON success example:
 
 ## Test Scenarios
 
-- Lists `bambu-lan` in human output.
+- Lists available drivers, including `bambu-lan` and `moonraker`, in human output.
 - Lists drivers in stable alphabetical order.
 - Emits stable JSON envelope.
 - Rejects invalid output format with exit code `2`.

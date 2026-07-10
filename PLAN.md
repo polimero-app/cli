@@ -18,6 +18,7 @@ The implementation stack is Go with Cobra for CLI structure and `gopkg.in/yaml.v
 - First read command: `polimero status <name>`.
 - First profile commands: `printer add`, `printer list`, and `printer remove`.
 - Implemented command set: `printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, `files upload`, `jobs start`, `jobs pause`, `jobs resume`, `jobs cancel`, `temperature set`, `motion home`, `motion jog`.
+- Implemented drivers: `bambu-lan`, `moonraker`.
 - Config format: versioned YAML at `polimero/polimero.yaml` under `os.UserConfigDir`; profiles stored as a map keyed by name.
 - Secret storage: OS keychain first; fail closed if unavailable.
 - Keychain naming scheme: service `polimero`; accounts `<driver>:<name>:access-code` and `<driver>:<name>:tls-fingerprint`.
@@ -35,14 +36,6 @@ The following drivers are planned but not part of the first implementation slice
 Target families: K1, K1 Max, K1C, K2 Plus.
 
 Transport: HTTP-based LAN API (Creality Print protocol). No TLS in typical LAN mode; transport security requirements will be defined in the driver spec.
-
-### Moonraker (Klipper)
-
-Target devices: Creality Sonic Pad, Creality Nebula Pad, and any Klipper installation running Moonraker.
-
-Transport: HTTP/WebSocket. Authentication via Moonraker API key. No TLS in typical LAN mode.
-
-Note: because Moonraker is a standard Klipper API, this driver may support non-Creality devices as well. Scope will be defined in the ADR.
 
 ## Repository Foundation
 
@@ -146,6 +139,7 @@ Initial ADRs:
 - `docs/adr/0012-printer-control-commands.md`
 - `docs/adr/0013-protocol-trace-diagnostics.md`
 - `docs/adr/0014-auxiliary-printer-controls.md`
+- `docs/adr/0016-moonraker-driver.md`
 
 Command specs:
 
@@ -171,5 +165,6 @@ Driver and security docs:
 
 - `docs/specs/drivers/driver-contract.md`
 - `docs/specs/drivers/bambu-lan.md`
+- `docs/specs/drivers/moonraker.md`
 - `docs/security/threat-model.md`
 - `docs/security/secret-handling.md`
