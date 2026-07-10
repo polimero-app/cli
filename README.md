@@ -66,6 +66,9 @@ This writes raw binaries to `dist/` for:
 
 Artifact names follow `polimero_<os>_<arch>` (`.exe` suffix on Windows). Tag-triggered release builds inject version metadata from the git tag into `cmd.Version`.
 
+For cgo cross-target builds, install target C toolchains or set overrides like
+`CC_LINUX_ARM64`, `CC_WINDOWS_AMD64`, `CC_DARWIN_AMD64`, and `CC_DARWIN_ARM64`.
+
 ## References
 
 ### Bambu LAN

@@ -18,6 +18,17 @@ build: ## Build the binary (output: ./polimero)
 release: ## Build release binaries into ./dist
 	@rm -rf dist && mkdir -p dist
 	@set -e; \
+	host_os="$$(uname -s | tr '[:upper:]' '[:lower:]')"; \
+	case "$$host_os" in \
+		mingw*|msys*|cygwin*) host_os="windows" ;; \
+		darwin*) host_os="darwin" ;; \
+		linux*) host_os="linux" ;; \
+	esac; \
+	host_arch="$$(uname -m)"; \
+	case "$$host_arch" in \
+		x86_64) host_arch="amd64" ;; \
+		aarch64|arm64) host_arch="arm64" ;; \
+	esac; \
 	for target in $(RELEASE_TARGETS); do \
 		goos="$${target%/*}"; \
 		goarch="$${target#*/}"; \
@@ -25,8 +36,31 @@ release: ## Build release binaries into ./dist
 		if [ "$$goos" = "windows" ]; then ext=".exe"; fi; \
 		out="dist/$(BINARY)_$${goos}_$${goarch}$$ext"; \
 		echo "building $$target -> $$out"; \
-		GOOS="$$goos" GOARCH="$$goarch" CGO_ENABLED=1 \
-			$(GO) build -ldflags "-X github.com/polimero-app/cli/cmd.Version=$(VERSION)" -o "$$out" .; \
+		cc_bin="$$CC"; \
+		if [ -z "$$cc_bin" ] && [ "$$goos/$$goarch" != "$$host_os/$$host_arch" ]; then \
+			case "$$goos/$$goarch" in \
+				linux/arm64) cc_bin="$${CC_LINUX_ARM64:-aarch64-linux-gnu-gcc}" ;; \
+				windows/amd64) cc_bin="$${CC_WINDOWS_AMD64:-x86_64-w64-mingw32-gcc}" ;; \
+				darwin/amd64) cc_bin="$${CC_DARWIN_AMD64:-}" ;; \
+				darwin/arm64) cc_bin="$${CC_DARWIN_ARM64:-}" ;; \
+			esac; \
+		fi; \
+		if [ "$$goos" = "darwin" ] && [ "$$host_os" != "darwin" ] && [ -z "$$cc_bin" ]; then \
+			echo "error: $$target cgo build requires macOS runner or CC_DARWIN_* toolchain override"; \
+			exit 1; \
+		fi; \
+		if [ -n "$$cc_bin" ] && ! command -v "$$cc_bin" >/dev/null 2>&1; then \
+			echo "error: C compiler '$$cc_bin' not found for $$target"; \
+			echo "hint: install it or set CC/CC_<OS>_<ARCH> before running make release"; \
+			exit 1; \
+		fi; \
+		if [ -n "$$cc_bin" ]; then \
+			GOOS="$$goos" GOARCH="$$goarch" CGO_ENABLED=1 CC="$$cc_bin" \
+				$(GO) build -ldflags "-X github.com/polimero-app/cli/cmd.Version=$(VERSION)" -o "$$out" .; \
+		else \
+			GOOS="$$goos" GOARCH="$$goarch" CGO_ENABLED=1 \
+				$(GO) build -ldflags "-X github.com/polimero-app/cli/cmd.Version=$(VERSION)" -o "$$out" .; \
+		fi; \
 	done
 
 install: ## Install the binary to GOPATH/bin
