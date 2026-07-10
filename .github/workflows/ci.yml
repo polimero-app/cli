@@ -31,4 +31,27 @@ jobs:
       - name: Install macOS FFmpeg deps
         if: runner.os == 'macOS'
         run: brew install pkg-config ffmpeg
-      - run: make ci
+      - name: Setup MSYS2 and FFmpeg deps
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-ffmpeg
+            mingw-w64-x86_64-libavcodec
+            mingw-w64-x86_64-libavutil
+            mingw-w64-x86_64-libswscale
+      - name: Run make ci (Unix)
+        if: runner.os != 'Windows'
+        run: make ci
+      - name: Run make ci (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export PATH="/mingw64/bin:$PATH"
+          export CC=x86_64-w64-mingw32-gcc
+          export PKG_CONFIG=pkg-config
+          make ci
