@@ -149,12 +149,6 @@ func isASCIILetterOrDigit(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
-// ValidateRootName checks that a root name string is valid according to the
-// device path contract. It is used by drivers to validate root parameters.
-func ValidateRootName(root string) error {
-	return validateRoot(root)
-}
-
 // isControlRune reports whether r is a C0 control, DEL, or C1 control
 // (0x80-0x9F, including U+009B CSI which can start escape sequences).
 func isControlRune(r rune) bool {
