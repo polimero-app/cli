@@ -73,7 +73,7 @@ func runDownload(cmd *cobra.Command, nameArg, pathArg, toFlag, timeoutFlag strin
 			apperr.New(2, "cannot download a directory; specify a file path"))
 	}
 
-	rp, err := resolveProfile(traceCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files download", err)
 	}

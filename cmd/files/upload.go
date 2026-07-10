@@ -95,7 +95,7 @@ func runUpload(cmd *cobra.Command, nameArg, localPathArg, devicePathArg, timeout
 		}
 	}
 
-	rp, err := resolveProfile(traceCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files upload", err)
 	}

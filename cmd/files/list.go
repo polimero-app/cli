@@ -52,7 +52,7 @@ func runList(cmd *cobra.Command, nameArg string, pathArgs []string, timeoutFlag 
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
-	rp, err := resolveProfile(traceCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, "files list", err)
 	}
