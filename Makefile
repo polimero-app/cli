@@ -1,7 +1,9 @@
-.PHONY: help build install clean fmt test test-race lint ci
+.PHONY: help build build-release install clean fmt test test-race lint ci
 
 GO      ?= go
 BINARY  := polimero
+VERSION ?= dev
+RELEASE_TARGETS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | \
@@ -9,6 +11,20 @@ help: ## Show available targets
 
 build: ## Build the binary (output: ./polimero)
 	$(GO) build -o $(BINARY) .
+
+build-release: ## Build release binaries into ./dist
+	@rm -rf dist && mkdir -p dist
+	@set -e; \
+	for target in $(RELEASE_TARGETS); do \
+		goos="$${target%/*}"; \
+		goarch="$${target#*/}"; \
+		ext=""; \
+		if [ "$$goos" = "windows" ]; then ext=".exe"; fi; \
+		out="dist/$(BINARY)_$${goos}_$${goarch}$$ext"; \
+		echo "building $$target -> $$out"; \
+		GOOS="$$goos" GOARCH="$$goarch" CGO_ENABLED=1 \
+			$(GO) build -ldflags "-X github.com/polimero-app/cli/cmd.Version=$(VERSION)" -o "$$out" .; \
+	done
 
 install: ## Install the binary to GOPATH/bin
 	$(GO) install .

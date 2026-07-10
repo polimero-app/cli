@@ -51,6 +51,21 @@ make ci
 
 H.264 camera snapshots use FFmpeg libraries through cgo for frame decoding and JPEG encoding. Development builds of that path require `pkg-config`, a C compiler, and FFmpeg development packages for `libavcodec`, `libavutil`, and `libswscale`. The project links against system FFmpeg libraries rather than vendoring codec code, so packagers should use maintained distro packages and verify their selected FFmpeg license configuration.
 
+Release builds:
+
+```sh
+make build-release
+```
+
+This writes raw binaries to `dist/` for:
+- `linux/amd64`
+- `linux/arm64`
+- `darwin/amd64`
+- `darwin/arm64`
+- `windows/amd64`
+
+Artifact names follow `polimero_<os>_<arch>` (`.exe` suffix on Windows). Tag-triggered release builds inject version metadata from the git tag into `cmd.Version`.
+
 ## References
 
 ### Bambu LAN

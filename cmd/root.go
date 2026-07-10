@@ -23,6 +23,7 @@ func NewRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "polimero",
 		Short:         "CLI for interacting with 3D printers",
+		Version:       Version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
