@@ -19,6 +19,7 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 )
 
 const (
@@ -56,7 +57,7 @@ func (d *Driver) Capabilities() driver.Capabilities {
 func (d *Driver) ValidateProfile(_ driver.ProfileInput) error { return nil }
 
 func (d *Driver) ConnectCheck(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle) (string, error) {
-	if err := d.requestJSON(ctx, p, s, http.MethodGet, "/server/info", nil, nil); err != nil {
+	if err := d.requestJSON(ctx, p, s, "ConnectCheck", http.MethodGet, "/server/info", nil, nil); err != nil {
 		return "", err
 	}
 	return "", nil
@@ -92,6 +93,7 @@ func (d *Driver) Status(ctx context.Context, p driver.ProfileInput, s driver.Sec
 		ctx,
 		p,
 		s,
+		"Status",
 		http.MethodGet,
 		"/printer/objects/query",
 		q,
@@ -137,7 +139,7 @@ func (d *Driver) FileList(ctx context.Context, p driver.ProfileInput, s driver.S
 		q := url.Values{}
 		q.Set("root", "gcodes")
 		var files []map[string]any
-		if err := d.requestJSON(ctx, p, s, http.MethodGet, "/server/files/list", q, &files); err != nil {
+		if err := d.requestJSON(ctx, p, s, "FileList", http.MethodGet, "/server/files/list", q, &files); err != nil {
 			return nil, err
 		}
 		for _, raw := range files {
@@ -156,7 +158,7 @@ func (d *Driver) FileList(ctx context.Context, p driver.ProfileInput, s driver.S
 		Dirs  []map[string]any `json:"dirs"`
 		Files []map[string]any `json:"files"`
 	}
-	if err := d.requestJSON(ctx, p, s, http.MethodGet, "/server/files/directory", q, &payload); err != nil {
+	if err := d.requestJSON(ctx, p, s, "FileList", http.MethodGet, "/server/files/directory", q, &payload); err != nil {
 		return nil, err
 	}
 	for _, raw := range payload.Dirs {
@@ -182,21 +184,27 @@ func (d *Driver) FileDownload(ctx context.Context, p driver.ProfileInput, s driv
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
 	resp, err := d.client.Do(req)
 	if err != nil {
+		d.emitHTTPTrace(ctx, "FileDownload", req, start, nil, 0, classifyTraceError(err))
 		return nil, classifyHTTPError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		d.emitHTTPTrace(ctx, "FileDownload", req, start, nil, resp.StatusCode, "auth_rejected")
 		return nil, apperr.New(3, "Moonraker authentication rejected")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		d.emitHTTPTrace(ctx, "FileDownload", req, start, nil, resp.StatusCode, "protocol_error")
 		return nil, apperr.Newf(1, "moonraker request failed with status %d", resp.StatusCode)
 	}
 	n, err := io.Copy(dst, resp.Body)
 	if err != nil {
+		d.emitHTTPTrace(ctx, "FileDownload", req, start, nil, resp.StatusCode, classifyTraceError(err))
 		return nil, classifyHTTPError(err)
 	}
+	d.emitHTTPTrace(ctx, "FileDownload", req, start, &n, resp.StatusCode, "")
 	return &driver.FileTransferResult{BytesTransferred: &n}, nil
 }
 
@@ -242,17 +250,22 @@ func (d *Driver) FileUpload(ctx context.Context, p driver.ProfileInput, s driver
 		return nil, err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	start := time.Now()
 	resp, err := d.client.Do(req)
 	if err != nil {
+		d.emitHTTPTrace(ctx, "FileUpload", req, start, nil, 0, classifyTraceError(err))
 		return nil, classifyHTTPError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		d.emitHTTPTrace(ctx, "FileUpload", req, start, nil, resp.StatusCode, "auth_rejected")
 		return nil, apperr.New(3, "Moonraker authentication rejected")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		d.emitHTTPTrace(ctx, "FileUpload", req, start, nil, resp.StatusCode, "protocol_error")
 		return nil, apperr.Newf(1, "moonraker request failed with status %d", resp.StatusCode)
 	}
+	d.emitHTTPTrace(ctx, "FileUpload", req, start, &n, resp.StatusCode, "")
 	return &driver.FileTransferResult{BytesTransferred: &n}, nil
 }
 
@@ -266,28 +279,28 @@ func (d *Driver) JobStart(ctx context.Context, p driver.ProfileInput, s driver.S
 	}
 	q := url.Values{}
 	q.Set("filename", rel)
-	if err := d.requestJSON(ctx, p, s, http.MethodPost, "/printer/print/start", q, nil); err != nil {
+	if err := d.requestJSON(ctx, p, s, "JobStart", http.MethodPost, "/printer/print/start", q, nil); err != nil {
 		return driver.JobActionResult{}, err
 	}
 	return d.waitForState(ctx, p, s, "printing")
 }
 
 func (d *Driver) JobPause(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger) (driver.JobActionResult, error) {
-	if err := d.requestJSON(ctx, p, s, http.MethodPost, "/printer/print/pause", nil, nil); err != nil {
+	if err := d.requestJSON(ctx, p, s, "JobPause", http.MethodPost, "/printer/print/pause", nil, nil); err != nil {
 		return driver.JobActionResult{}, err
 	}
 	return d.waitForState(ctx, p, s, "paused")
 }
 
 func (d *Driver) JobResume(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger) (driver.JobActionResult, error) {
-	if err := d.requestJSON(ctx, p, s, http.MethodPost, "/printer/print/resume", nil, nil); err != nil {
+	if err := d.requestJSON(ctx, p, s, "JobResume", http.MethodPost, "/printer/print/resume", nil, nil); err != nil {
 		return driver.JobActionResult{}, err
 	}
 	return d.waitForState(ctx, p, s, "printing")
 }
 
 func (d *Driver) JobCancel(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger) (driver.JobActionResult, error) {
-	if err := d.requestJSON(ctx, p, s, http.MethodPost, "/printer/print/cancel", nil, nil); err != nil {
+	if err := d.requestJSON(ctx, p, s, "JobCancel", http.MethodPost, "/printer/print/cancel", nil, nil); err != nil {
 		return driver.JobActionResult{}, err
 	}
 	return d.waitForState(ctx, p, s, "idle")
@@ -307,7 +320,7 @@ func (d *Driver) TemperatureSet(ctx context.Context, p driver.ProfileInput, s dr
 	if len(lines) == 0 {
 		return driver.TemperatureResult{}, apperr.New(2, "at least one target must be set")
 	}
-	if err := d.runGCodeScript(ctx, p, s, strings.Join(lines, "\n")); err != nil {
+	if err := d.runGCodeScript(ctx, p, s, "TemperatureSet", strings.Join(lines, "\n")); err != nil {
 		return driver.TemperatureResult{}, err
 	}
 	return driver.TemperatureResult{
@@ -334,7 +347,7 @@ func (d *Driver) MotionHome(ctx context.Context, p driver.ProfileInput, s driver
 		}
 		gcode = b.String()
 	}
-	if err := d.runGCodeScript(ctx, p, s, gcode); err != nil {
+	if err := d.runGCodeScript(ctx, p, s, "MotionHome", gcode); err != nil {
 		return driver.MotionResult{}, err
 	}
 	return driver.MotionResult{
@@ -362,7 +375,7 @@ func (d *Driver) MotionJog(ctx context.Context, p driver.ProfileInput, s driver.
 		parts = append(parts, fmt.Sprintf("F%d", delta.FeedrateMmPerMin))
 	}
 	script := "G91\nG1 " + strings.Join(parts, " ") + "\nG90"
-	if err := d.runGCodeScript(ctx, p, s, script); err != nil {
+	if err := d.runGCodeScript(ctx, p, s, "MotionJog", script); err != nil {
 		return driver.MotionResult{}, err
 	}
 	return driver.MotionResult{
@@ -372,10 +385,10 @@ func (d *Driver) MotionJog(ctx context.Context, p driver.ProfileInput, s driver.
 	}, nil
 }
 
-func (d *Driver) runGCodeScript(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, script string) error {
+func (d *Driver) runGCodeScript(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, operation, script string) error {
 	q := url.Values{}
 	q.Set("script", script)
-	return d.requestJSON(ctx, p, s, http.MethodPost, "/printer/gcode/script", q, nil)
+	return d.requestJSON(ctx, p, s, operation, http.MethodPost, "/printer/gcode/script", q, nil)
 }
 
 func (d *Driver) waitForState(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, expected string) (driver.JobActionResult, error) {
@@ -401,23 +414,33 @@ func (d *Driver) waitForState(ctx context.Context, p driver.ProfileInput, s driv
 	}
 }
 
-func (d *Driver) requestJSON(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, method, endpoint string, query url.Values, out any) error {
+func (d *Driver) requestJSON(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, operation, method, endpoint string, query url.Values, out any) error {
 	req, err := d.newRequest(ctx, p, s, method, endpoint, query, nil)
 	if err != nil {
 		return err
 	}
+	start := time.Now()
 	resp, err := d.client.Do(req)
 	if err != nil {
+		d.emitHTTPTrace(ctx, operation, req, start, nil, 0, classifyTraceError(err))
 		return classifyHTTPError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		d.emitHTTPTrace(ctx, operation, req, start, nil, resp.StatusCode, "auth_rejected")
 		return apperr.New(3, "Moonraker authentication rejected")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		d.emitHTTPTrace(ctx, operation, req, start, nil, resp.StatusCode, "protocol_error")
 		return apperr.Newf(1, "moonraker request failed with status %d", resp.StatusCode)
 	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		d.emitHTTPTrace(ctx, operation, req, start, nil, resp.StatusCode, classifyTraceError(err))
+		return classifyHTTPError(err)
+	}
+	bc := int64(len(body))
 
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
@@ -425,26 +448,83 @@ func (d *Driver) requestJSON(ctx context.Context, p driver.ProfileInput, s drive
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		d.emitHTTPTrace(ctx, operation, req, start, &bc, resp.StatusCode, "parse_error")
 		return apperr.New(1, "invalid response from printer")
 	}
 	if envelope.Error != nil {
 		msg := strings.ToLower(envelope.Error.Message)
 		if strings.Contains(msg, "unauthorized") || strings.Contains(msg, "forbidden") {
+			d.emitHTTPTrace(ctx, operation, req, start, &bc, resp.StatusCode, "auth_rejected")
 			return apperr.New(3, "Moonraker authentication rejected")
 		}
+		d.emitHTTPTrace(ctx, operation, req, start, &bc, resp.StatusCode, "protocol_error")
 		return apperr.New(1, "moonraker API returned an error")
 	}
 	if out == nil {
+		d.emitHTTPTrace(ctx, operation, req, start, &bc, resp.StatusCode, "")
 		return nil
 	}
 	if len(envelope.Result) == 0 {
+		d.emitHTTPTrace(ctx, operation, req, start, &bc, resp.StatusCode, "parse_error")
 		return apperr.New(1, "moonraker response missing result")
 	}
 	if err := json.Unmarshal(envelope.Result, out); err != nil {
+		d.emitHTTPTrace(ctx, operation, req, start, &bc, resp.StatusCode, "parse_error")
 		return apperr.New(1, "invalid response payload from printer")
 	}
+	d.emitHTTPTrace(ctx, operation, req, start, &bc, resp.StatusCode, "")
 	return nil
+}
+
+func (d *Driver) emitHTTPTrace(
+	ctx context.Context,
+	operation string,
+	req *http.Request,
+	start time.Time,
+	byteCount *int64,
+	statusCode int,
+	errorCategory string,
+) {
+	trace := protocoltrace.FromContext(ctx)
+	dur := time.Since(start).Milliseconds()
+	detail := map[string]any{
+		"method": req.Method,
+		"path":   req.URL.Path,
+	}
+	if statusCode > 0 {
+		detail["status"] = statusCode
+	}
+	ev := protocoltrace.Event{
+		Timestamp:     time.Now().UTC(),
+		Driver:        driverName,
+		Operation:     operation,
+		Phase:         "request",
+		Transport:     "http",
+		Endpoint:      req.URL.Host,
+		DurationMs:    &dur,
+		ByteCount:     byteCount,
+		ErrorCategory: errorCategory,
+		Detail:        detail,
+	}
+	trace.Emit(ev)
+}
+
+func classifyTraceError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	return "connection_error"
 }
 
 func (d *Driver) newRequest(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, method, endpoint string, query url.Values, body io.Reader) (*http.Request, error) {

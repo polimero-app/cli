@@ -140,3 +140,22 @@ Errors must be sanitized and must not include API keys or raw backend payloads.
 - Do not perform discovery/network scanning during ordinary commands.
 - Keep upload/start as separate operations.
 
+## Protocol Trace
+
+When `--protocol-trace <file>` is enabled by the command layer, the driver
+emits sanitized JSON Lines events for Moonraker HTTP operations.
+
+- Driver: `moonraker`
+- Transport: `http`
+- Phase: `request`
+- Operations: `ConnectCheck`, `Status`, `FileList`, `FileDownload`,
+  `FileUpload`, `JobStart`, `JobPause`, `JobResume`, `JobCancel`,
+  `TemperatureSet`, `MotionHome`, `MotionJog`
+
+Each event includes safe request metadata (`method`, path, optional HTTP
+status), duration, and optional byte counts. Errors are emitted as sanitized
+categories (`auth_rejected`, `protocol_error`, `parse_error`, `timeout`,
+`cancelled`, `connection_error`).
+
+The driver must not emit access codes, auth headers, unsanitized backend
+errors, or raw payloads containing credential material.

@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
+	"github.com/polimero-app/cli/internal/protocoltrace"
 )
 
 func testProfile(host string) driver.ProfileInput {
@@ -24,6 +26,25 @@ func testProfile(host string) driver.ProfileInput {
 
 func testSecrets() driver.SecretsBundle {
 	return driver.SecretsBundle{AccessCode: "secret-key"}
+}
+
+type captureTraceSink struct {
+	mu     sync.Mutex
+	events []protocoltrace.Event
+}
+
+func (s *captureTraceSink) Emit(e protocoltrace.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, e)
+}
+
+func (s *captureTraceSink) Events() []protocoltrace.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]protocoltrace.Event, len(s.events))
+	copy(out, s.events)
+	return out
 }
 
 func TestConnectCheck_UsesAPIKey(t *testing.T) {
@@ -108,6 +129,32 @@ func TestStatus_MapsCoreFields(t *testing.T) {
 	}
 }
 
+func TestStatus_EmitsProtocolTrace(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"result":{"status":{"print_stats":{"state":"idle"}}}}`))
+	}))
+	defer srv.Close()
+
+	drv := New()
+	sink := &captureTraceSink{}
+	ctx := protocoltrace.WithSink(context.Background(), sink)
+	_, err := drv.Status(ctx, testProfile(srv.URL), testSecrets(), nil)
+	if err != nil {
+		t.Fatalf("Status error: %v", err)
+	}
+	events := sink.Events()
+	if len(events) == 0 {
+		t.Fatal("expected protocol trace event")
+	}
+	last := events[len(events)-1]
+	if last.Driver != "moonraker" || last.Operation != "Status" || last.Transport != "http" {
+		t.Fatalf("unexpected trace event: %+v", last)
+	}
+	if last.ErrorCategory != "" {
+		t.Fatalf("unexpected trace error category: %q", last.ErrorCategory)
+	}
+}
+
 func TestFileDownload_StreamsBody(t *testing.T) {
 	const payload = "gcode-bytes"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,5 +176,30 @@ func TestFileDownload_StreamsBody(t *testing.T) {
 	}
 	if out == nil || out.BytesTransferred == nil || *out.BytesTransferred != int64(len(payload)) {
 		t.Fatalf("bytes transferred = %+v", out)
+	}
+}
+
+func TestFileDownload_EmitsProtocolTrace(t *testing.T) {
+	const payload = "gcode-bytes"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, payload)
+	}))
+	defer srv.Close()
+
+	drv := New()
+	var dst strings.Builder
+	sink := &captureTraceSink{}
+	ctx := protocoltrace.WithSink(context.Background(), sink)
+	_, err := drv.FileDownload(ctx, testProfile(srv.URL), testSecrets(), "gcodes", "/cube.gcode", &dst, nil)
+	if err != nil {
+		t.Fatalf("FileDownload error: %v", err)
+	}
+	events := sink.Events()
+	if len(events) == 0 {
+		t.Fatal("expected protocol trace event")
+	}
+	last := events[len(events)-1]
+	if last.Operation != "FileDownload" || last.ByteCount == nil || *last.ByteCount != int64(len(payload)) {
+		t.Fatalf("unexpected trace event: %+v", last)
 	}
 }
