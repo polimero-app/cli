@@ -54,7 +54,7 @@ jobs:
 
       - name: Build artifact (Unix)
         if: runner.os != 'Windows'
-        run: make build-release RELEASE_TARGETS=${{ matrix.target }} VERSION=${{ github.ref_name }}
+        run: make release RELEASE_TARGETS=${{ matrix.target }} VERSION=${{ github.ref_name }}
 
       - name: Build artifact (Windows)
         if: runner.os == 'Windows'
@@ -63,7 +63,7 @@ jobs:
           export PATH="/mingw64/bin:$PATH"
           export CC=x86_64-w64-mingw32-gcc
           export PKG_CONFIG=pkg-config
-          make build-release RELEASE_TARGETS=${{ matrix.target }} VERSION=${{ github.ref_name }}
+          make release RELEASE_TARGETS=${{ matrix.target }} VERSION=${{ github.ref_name }}
 
       - uses: actions/upload-artifact@v4
         with:

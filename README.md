@@ -54,7 +54,7 @@ H.264 camera snapshots use FFmpeg libraries through cgo for frame decoding and J
 Release builds:
 
 ```sh
-make build-release
+make release
 ```
 
 This writes raw binaries to `dist/` for:
