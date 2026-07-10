@@ -7,6 +7,7 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/cmderr"
+	"github.com/polimero-app/cli/internal/devicepath"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
 	"github.com/polimero-app/cli/internal/protocoltrace"
@@ -71,16 +72,21 @@ func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLe
 		return apperr.New(2, "")
 	}
 
+	dp, err := devicepath.Parse(devicePath)
+	if err != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
+	}
+	if dp.BaseName() == "" {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart,
+			apperr.New(2, "device path must name a file"))
+	}
+	devicePath = dp.String()
+
 	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
-
-	// Validate device path format.
-	if err := validateDevicePath(devicePath); err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
-	}
 
 	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {

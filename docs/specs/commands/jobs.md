@@ -71,9 +71,9 @@ The command must not prompt for new secrets.
 
 Every subcommand follows this sequence:
 
-1. Resolve profile and load secrets.
-2. Validate `<device-path>` format for `jobs start` (exit code `2` on malformed input; no network call).
-3. If `--protocol-trace` is set, create the trace file before any protocol work.
+1. For `jobs start`, validate and normalize `<device-path>` using the shared device-path contract (exit code `2` on malformed input; no profile, keychain, trace, or network work).
+2. If `--protocol-trace` is set, create the trace file before any protocol work.
+3. Resolve the profile and load secrets.
 4. Query current status via the driver-neutral status operation.
 5. Check the state precondition for the subcommand (see below). Fail with exit code `2` and error code `invalid_printer_state` if not met.
 6. Prompt for confirmation unless `--yes` is set.
@@ -265,6 +265,8 @@ JSON action-failed error example:
 ## Test Scenarios
 
 - Starts a job from a valid device path when idle; confirms resulting state `printing`.
+- Normalizes the device path before driver dispatch and JSON output.
+- Rejects traversal, controls, invalid UTF-8, malformed roots, and directory-only paths before profile, keychain, trace, or network work.
 - Starts a job with `--plate` and `--skip-leveling` set.
 - Pauses a job when printing; confirms resulting state `paused`.
 - Resumes a job when paused; confirms resulting state `printing`.

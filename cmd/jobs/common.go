@@ -251,15 +251,6 @@ func writeActionHumanSuccess(w io.Writer, profileName, action string) error {
 	return err
 }
 
-// validateDevicePath ensures a device path has a named-root format ("root:/path").
-func validateDevicePath(path string) error {
-	idx := strings.Index(path, ":/")
-	if idx <= 0 {
-		return apperr.Newf(2, "invalid device path %q: must use format root:/path (e.g. sdcard:/models/cube.3mf)", path)
-	}
-	return nil
-}
-
 func writeError(out, errOut io.Writer, format output.Format, cmdName string, err error) error {
 	detail := output.ErrDetail{Code: cmderr.Code(err, true), Message: cmderr.CommandMessage(err)}
 	return cmderr.Write(out, errOut, format, cmdName, detail, err)

@@ -266,6 +266,34 @@ func TestParseJobDevicePath_InvalidFormat_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestParseJobDevicePath_RejectsUnsafeOrUnsupportedPaths(t *testing.T) {
+	tests := []string{
+		"sdcard:/models/../cube.3mf",
+		"other:/cube.3mf",
+		"sdcard:/",
+		"sdcard:/notes.txt",
+		"sdcard:/bad\x00name.gcode",
+		"sdcard:/\xff.gcode",
+	}
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			if _, _, err := parseJobDevicePath(input); err == nil {
+				t.Fatalf("expected %q to be rejected", input)
+			}
+		})
+	}
+}
+
+func TestParseJobDevicePath_NormalizesPath(t *testing.T) {
+	remotePath, filename, err := parseJobDevicePath("sdcard:/models//./cube.3mf")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if remotePath != "/models/cube.3mf" || filename != "cube.3mf" {
+		t.Fatalf("got path=%q filename=%q", remotePath, filename)
+	}
+}
+
 func TestIsJobState_MatchesExpected(t *testing.T) {
 	pred := isJobState("PAUSED")
 	data := pushallResponse("PAUSED")

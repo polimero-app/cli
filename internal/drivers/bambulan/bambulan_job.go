@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/devicepath"
 	"github.com/polimero-app/cli/internal/driver"
 )
 
@@ -224,19 +225,27 @@ func plateParam(plate int) string {
 
 // parseJobDevicePath splits "sdcard:/models/cube.3mf" into path="/models/cube.3mf"
 // and filename="cube.3mf". The root prefix is stripped.
-func parseJobDevicePath(devicePath string) (path string, filename string, err error) {
-	idx := strings.Index(devicePath, ":/")
-	if idx <= 0 {
-		return "", "", apperr.Newf(2, "invalid device path %q: must use format root:/path", devicePath)
+func parseJobDevicePath(raw string) (remotePath string, filename string, err error) {
+	dp, err := devicepath.Parse(raw)
+	if err != nil {
+		return "", "", err
 	}
-	path = devicePath[idx+1:] // "/models/cube.3mf"
-	filename = filepath.Base(path)
-	return path, filename, nil
+	if dp.Root != ftpRootName {
+		return "", "", apperr.Newf(2, "unknown root %q", dp.Root)
+	}
+	if dp.BaseName() == "" {
+		return "", "", apperr.New(2, "device path must name a file")
+	}
+	ext := strings.ToLower(path.Ext(dp.Path))
+	if ext != ".3mf" && ext != ".gcode" {
+		return "", "", apperr.Newf(2, "unsupported print file extension %q", ext)
+	}
+	return dp.Path, path.Base(dp.Path), nil
 }
 
 // jobCommandForPath returns "project_file" for .3mf files and "gcode_file" otherwise.
-func jobCommandForPath(path string) string {
-	if strings.EqualFold(filepath.Ext(path), ".3mf") {
+func jobCommandForPath(remotePath string) string {
+	if strings.EqualFold(path.Ext(remotePath), ".3mf") {
 		return "project_file"
 	}
 	return "gcode_file"

@@ -22,17 +22,19 @@ const testFingerprint = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 // stubJobDriver satisfies driver.Driver and driver.JobDriver.
 type stubJobDriver struct {
-	caps      driver.Capabilities
-	statusRes *driver.StatusResult
-	statusErr error
-	startRes  *driver.JobActionResult
-	startErr  error
-	pauseRes  *driver.JobActionResult
-	pauseErr  error
-	resumeRes *driver.JobActionResult
-	resumeErr error
-	cancelRes *driver.JobActionResult
-	cancelErr error
+	caps        driver.Capabilities
+	statusRes   *driver.StatusResult
+	statusErr   error
+	startRes    *driver.JobActionResult
+	startErr    error
+	pauseRes    *driver.JobActionResult
+	pauseErr    error
+	resumeRes   *driver.JobActionResult
+	resumeErr   error
+	cancelRes   *driver.JobActionResult
+	cancelErr   error
+	statusCalls int
+	startPath   string
 }
 
 func (s *stubJobDriver) Name() string                      { return "bambu-lan" }
@@ -44,6 +46,7 @@ func (s *stubJobDriver) ConnectCheck(_ context.Context, _ driver.ProfileInput, _
 	return "", nil
 }
 func (s *stubJobDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
+	s.statusCalls++
 	return s.statusRes, s.statusErr
 }
 func (s *stubJobDriver) CameraStream(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
@@ -58,7 +61,8 @@ func (s *stubJobDriver) CaptureFingerprint(_ context.Context, _ driver.ProfileIn
 func (s *stubJobDriver) Discover(_ context.Context) ([]driver.DiscoveredPrinter, error) {
 	return []driver.DiscoveredPrinter{}, nil
 }
-func (s *stubJobDriver) JobStart(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger, _ string, _ driver.JobStartOptions) (driver.JobActionResult, error) {
+func (s *stubJobDriver) JobStart(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger, devicePath string, _ driver.JobStartOptions) (driver.JobActionResult, error) {
+	s.startPath = devicePath
 	if s.startErr != nil {
 		return driver.JobActionResult{}, s.startErr
 	}
@@ -433,6 +437,56 @@ func TestJobsStart_InvalidDevicePath_Fails(t *testing.T) {
 	_, err := runCmd(t, deps, "start", "myprinter", "notapath", "--yes")
 	if err == nil {
 		t.Fatal("expected error for invalid device path")
+	}
+}
+
+func TestJobsStart_InvalidDevicePathsFailBeforeNetwork(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "traversal", path: "sdcard:/models/../cube.3mf"},
+		{name: "control", path: "sdcard:/models/\x1bcube.3mf"},
+		{name: "invalid root", path: "bad root:/cube.3mf"},
+		{name: "root only", path: "sdcard:/"},
+		{name: "invalid UTF-8", path: "sdcard:/\xff.gcode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			kc := keychain.NewMock()
+			seedProfile(t, dir, kc, "myprinter")
+			drv := idleDriver()
+			deps := makeDeps(t, dir, kc, drv, &tty.Mock{Terminal: true})
+
+			_, err := runCmd(t, deps, "start", "myprinter", tt.path, "--yes")
+			if err == nil {
+				t.Fatal("expected invalid device path error")
+			}
+			if drv.statusCalls != 0 {
+				t.Fatalf("status called %d times for invalid path", drv.statusCalls)
+			}
+			if drv.startPath != "" {
+				t.Fatalf("job start received invalid path %q", drv.startPath)
+			}
+		})
+	}
+}
+
+func TestJobsStart_NormalizesDevicePathBeforeDispatch(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter")
+	drv := idleDriver()
+	deps := makeDeps(t, dir, kc, drv, &tty.Mock{Terminal: true})
+
+	_, err := runCmd(t, deps, "start", "myprinter", "sdcard:/models//./cube.3mf", "--yes")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if drv.startPath != "sdcard:/models/cube.3mf" {
+		t.Fatalf("dispatched path = %q, want normalized path", drv.startPath)
 	}
 }
 
