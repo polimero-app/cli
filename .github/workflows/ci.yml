@@ -41,9 +41,6 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-ffmpeg
-            mingw-w64-x86_64-libavcodec
-            mingw-w64-x86_64-libavutil
-            mingw-w64-x86_64-libswscale
       - name: Run make ci (Unix)
         if: runner.os != 'Windows'
         run: make ci
