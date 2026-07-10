@@ -61,19 +61,30 @@ func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string,
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
 	}
 
-	ctx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
+	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
-	result, name, err := openStream(ctx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
+	signalCtx, signalStop := signal.NotifyContext(traceCtx, syscall.SIGINT, syscall.SIGTERM)
+	defer signalStop()
+	streamCtx, streamCancel := context.WithCancel(signalCtx)
+	defer streamCancel()
+
+	result, name, err := openStream(streamCtx, cmd, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
 	}
 	defer func() { _ = result.Stream.Close() }()
 
-	return serve(cmd, name, port, timeoutFlag, format, result)
+	if timeoutFlag != "" {
+		duration, _ := time.ParseDuration(timeoutFlag)
+		timer := time.AfterFunc(duration, streamCancel)
+		defer timer.Stop()
+	}
+
+	return serve(cmd, streamCtx, name, port, format, result)
 }
 
 func validateFlags(port int, timeoutFlag string) error {
@@ -101,12 +112,12 @@ func openStream(ctx context.Context, cmd *cobra.Command, nameArg, timeoutFlag st
 		return nil, "", apperr.Newf(5, "driver %q does not support camera streaming", rp.input.Driver)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, rp.timeout)
-	defer cancel()
-
 	result, err := rp.driver.CameraStream(ctx, rp.input, rp.secrets, deps.Log)
 	if err != nil {
 		return nil, "", err
+	}
+	if result == nil || result.Stream == nil {
+		return nil, "", apperr.New(1, "driver returned an invalid camera stream")
 	}
 	return result, rp.name, nil
 }
@@ -148,7 +159,7 @@ func streamHandler(stream io.Reader, contentType string) http.Handler {
 	})
 }
 
-func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format output.Format, result *driver.CameraStreamResult) error {
+func serve(cmd *cobra.Command, ctx context.Context, name string, port int, format output.Format, result *driver.CameraStreamResult) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
 	// Check port availability before starting the server.
@@ -161,13 +172,10 @@ func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format
 
 	url := fmt.Sprintf("http://%s/stream", addr)
 
-	// Content-Type based on format.
-	var contentType string
-	switch result.Format {
-	case driver.CameraFormatMJPEG:
-		contentType = "multipart/x-mixed-replace; boundary=frame"
-	case driver.CameraFormatH264:
-		contentType = "video/mp2t"
+	contentType, err := streamContentType(result.Format)
+	if err != nil {
+		_ = ln.Close()
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
 	}
 
 	mux := http.NewServeMux()
@@ -185,16 +193,6 @@ func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format
 		writeHumanStart(cmd.OutOrStdout(), name, result.Format, url)
 	}
 
-	// Set up signal handling and optional timeout.
-	sigCtx, sigStop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
-	defer sigStop()
-
-	var timeoutCh <-chan time.Time
-	if timeoutFlag != "" {
-		d, _ := time.ParseDuration(timeoutFlag) // already validated
-		timeoutCh = time.After(d)
-	}
-
 	// Start server in background.
 	serverErr := make(chan error, 1)
 	go func() {
@@ -203,10 +201,8 @@ func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format
 
 	// Wait for signal, timeout, or server error.
 	select {
-	case <-sigCtx.Done():
-		// Clean exit on signal.
-	case <-timeoutCh:
-		// Clean exit on timeout.
+	case <-ctx.Done():
+		// Clean exit on signal, caller cancellation, or auto-stop timeout.
 	case err := <-serverErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return apperr.Wrap(1, "HTTP server error", err)
@@ -223,6 +219,17 @@ func serve(cmd *cobra.Command, name string, port int, timeoutFlag string, format
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Stream stopped.")
 	}
 	return nil
+}
+
+func streamContentType(format driver.CameraFormat) (string, error) {
+	switch format {
+	case driver.CameraFormatMJPEG:
+		return "multipart/x-mixed-replace; boundary=frame", nil
+	case driver.CameraFormatH264:
+		return "video/h264", nil
+	default:
+		return "", apperr.Newf(1, "driver returned unsupported camera format %q", format)
+	}
 }
 
 func writeHumanStart(w io.Writer, name string, format driver.CameraFormat, url string) {

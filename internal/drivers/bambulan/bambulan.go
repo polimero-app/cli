@@ -1694,12 +1694,18 @@ func (d *Driver) CameraStream(ctx context.Context, p driver.ProfileInput, s driv
 	if err != nil {
 		return nil, err
 	}
+	connectTimeout := p.Timeout
+	if connectTimeout <= 0 {
+		connectTimeout = 10 * time.Second
+	}
+	connectCtx, connectCancel := context.WithTimeout(ctx, connectTimeout)
+	defer connectCancel()
 
 	// Try port 322 (RTSPS / H.264) first.
 	rtspEndpoint := fmt.Sprintf("%s:322", p.Host)
 	rtspStart := time.Now()
 	rtspTLS := tlsCfg.Clone()
-	rtspStream, rtspErr := d.dialRTSPSFn(ctx, rtspTLS, p.Host, s.AccessCode)
+	rtspStream, rtspErr := d.dialRTSPSFn(connectCtx, rtspTLS, p.Host, s.AccessCode)
 	if rtspErr == nil {
 		dur := time.Since(rtspStart).Milliseconds()
 		trace.Emit(protocoltrace.Event{
@@ -1714,7 +1720,7 @@ func (d *Driver) CameraStream(ctx context.Context, p driver.ProfileInput, s driv
 		})
 		return &driver.CameraStreamResult{
 			Format:       driver.CameraFormatH264,
-			Stream:       rtspStream,
+			Stream:       bindStreamToContext(ctx, rtspStream),
 			Capabilities: d.Capabilities(),
 		}, nil
 	}
@@ -1734,7 +1740,7 @@ func (d *Driver) CameraStream(ctx context.Context, p driver.ProfileInput, s driv
 	// Fall back to port 6000 (MJPEG) with a short timeout.
 	mjpegEndpoint := fmt.Sprintf("%s:%d", p.Host, cameraPortMJPEG)
 	mjpegStart := time.Now()
-	mjpegCtx, mjpegCancel := context.WithTimeout(ctx, cameraProbeTimeout)
+	mjpegCtx, mjpegCancel := context.WithTimeout(connectCtx, cameraProbeTimeout)
 	conn, mjpegErr := d.dialTLS(mjpegCtx, mjpegEndpoint, tlsCfg.Clone())
 	mjpegCancel()
 
@@ -1752,6 +1758,9 @@ func (d *Driver) CameraStream(ctx context.Context, p driver.ProfileInput, s driv
 			ErrorCategory: "connection_error",
 		})
 		return nil, apperr.New(4, "camera endpoint unreachable: both ports 322 and 6000 failed")
+	}
+	if deadline, ok := connectCtx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
 	}
 
 	if authErr := sendCameraAuth(conn, s.AccessCode); authErr != nil {
@@ -1771,6 +1780,7 @@ func (d *Driver) CameraStream(ctx context.Context, p driver.ProfileInput, s driv
 		return nil, apperr.Wrap(4, "camera authentication failed", authErr)
 	}
 
+	_ = conn.SetDeadline(time.Time{})
 	dur := time.Since(mjpegStart).Milliseconds()
 	trace.Emit(protocoltrace.Event{
 		Timestamp:  time.Now().UTC(),
@@ -1783,7 +1793,7 @@ func (d *Driver) CameraStream(ctx context.Context, p driver.ProfileInput, s driv
 		DurationMs: &dur,
 	})
 
-	stream := newMJPEGStream(conn)
+	stream := bindStreamToContext(ctx, newMJPEGStream(conn))
 	return &driver.CameraStreamResult{
 		Format:       driver.CameraFormatMJPEG,
 		Stream:       stream,

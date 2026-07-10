@@ -1,6 +1,7 @@
 package bambulan
 
 import (
+	"bytes"
 	"crypto/tls"
 	"net"
 	"strconv"
@@ -14,6 +15,42 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/pion/rtp"
 )
+
+func TestPrepareAnnexBAccessUnit_StartsWithParameterSetsAndIDR(t *testing.T) {
+	sps := []byte{0x67, 0x64}
+	pps := []byte{0x68, 0xee}
+	started := false
+
+	if data := prepareAnnexBAccessUnit([][]byte{{0x41, 0x01}}, &sps, &pps, &started); data != nil {
+		t.Fatalf("non-IDR access unit unexpectedly started stream: %x", data)
+	}
+	data := prepareAnnexBAccessUnit([][]byte{{0x65, 0xaa}}, &sps, &pps, &started)
+	want := []byte{
+		0, 0, 0, 1, 0x67, 0x64,
+		0, 0, 0, 1, 0x68, 0xee,
+		0, 0, 0, 1, 0x65, 0xaa,
+	}
+	if !bytes.Equal(data, want) {
+		t.Fatalf("Annex-B data = %x, want %x", data, want)
+	}
+	if !started {
+		t.Fatal("stream was not marked started")
+	}
+	if bytes.HasPrefix(data, []byte{0x47}) {
+		t.Fatal("stream contains an MPEG-TS sync byte")
+	}
+}
+
+func TestPrepareAnnexBAccessUnit_UpdatesParameterSetsBeforeFirstIDR(t *testing.T) {
+	var sps, pps []byte
+	started := false
+	data := prepareAnnexBAccessUnit([][]byte{
+		{0x67, 0x01}, {0x68, 0x02}, {0x65, 0x03},
+	}, &sps, &pps, &started)
+	if bytes.Count(data, []byte{0, 0, 0, 1}) != 3 {
+		t.Fatalf("expected exactly three Annex-B NALUs, got %x", data)
+	}
+}
 
 // rtspTestHandler serves a single pre-built H.264 stream to any reader and
 // signals on playCh once a client has entered the PLAY state.

@@ -60,6 +60,7 @@ If the TLS fingerprint is missing for a secure profile, the command fails with e
 - The upstream camera feed cannot be duplicated: `/stream` serves at most one client at a time. Additional concurrent requests receive `503 Service Unavailable` until the active client disconnects.
 - All other HTTP paths return `404`.
 - The HTTP server runs until Ctrl+C is received or `--timeout` elapses (exit code `0`).
+- The command owns the stream-lifetime context. Canceling the command, receiving a termination signal, or reaching `--timeout` closes the upstream driver stream and the local HTTP server.
 - If the stream errors after serving has started, the command exits with code `1`.
 - Default timeout used for the initial camera connection is the profile or command `--timeout` value.
 - When `--protocol-trace` is set, the trace file is created before connecting to the camera endpoint and closed before command exit. If the trace file cannot be created, the command fails before protocol work with exit code `2`. If trace writing or closing fails after protocol work starts, the command fails with exit code `1` unless an earlier, more specific failure already occurred.
@@ -68,9 +69,9 @@ If the TLS fingerprint is missing for a secure profile, the command fails with e
 
 The Bambu LAN driver auto-detects the camera protocol:
 
-1. Attempt TLS connection to port `6000` (MJPEG, A1/A1 mini families). Probe timeout: 2s.
-2. If port `6000` is refused or times out, attempt TLS connection to port `322` (H.264 Annex-B, X1/P1/P2/H-series/X2D families).
-3. Whichever port connects first determines the `format` in the result.
+1. Attempt RTSPS connection to port `322` (H.264 Annex-B, X1/P1/P2/H-series/X2D families).
+2. If port `322` is unavailable, attempt TLS connection to port `6000` (MJPEG, A1/A1 mini families). Probe timeout: 2s.
+3. The first successful endpoint determines the `format` in the result.
 
 The driver owns the TLS connection and returns an `io.ReadCloser` over the raw stream. The command layer owns the HTTP server.
 
@@ -186,7 +187,7 @@ JSON error example:
 
 - Starts HTTP server and serves MJPEG stream from mock A1-family driver.
 - Starts HTTP server and serves H.264 stream from mock X1-family driver.
-- Protocol auto-detection: port 6000 refused → falls back to port 322.
+- Protocol auto-detection: port 322 unavailable -> falls back to port 6000.
 - Fails with exit `2` when profile is not found.
 - Fails with exit `2` when `--port` is already in use.
 - Fails with exit `2` when `--timeout` is invalid or zero.

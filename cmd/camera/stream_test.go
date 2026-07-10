@@ -31,6 +31,7 @@ type stubDriver struct {
 	streamErr   error
 	snapshotRes *driver.CameraSnapshotResult
 	snapshotErr error
+	ctxCanceled chan time.Time
 }
 
 func (s *stubDriver) Name() string                      { return "bambu-lan" }
@@ -44,7 +45,13 @@ func (s *stubDriver) ConnectCheck(_ context.Context, _ driver.ProfileInput, _ dr
 func (s *stubDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
 	return nil, nil
 }
-func (s *stubDriver) CameraStream(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
+func (s *stubDriver) CameraStream(ctx context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraStreamResult, error) {
+	if s.ctxCanceled != nil {
+		go func() {
+			<-ctx.Done()
+			s.ctxCanceled <- time.Now()
+		}()
+	}
 	return s.streamRes, s.streamErr
 }
 func (s *stubDriver) CameraSnapshot(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.CameraSnapshotResult, error) {
@@ -376,6 +383,31 @@ func TestStream_H264_HumanOutput(t *testing.T) {
 	}
 	if !strings.Contains(out, "H.264 (open with VLC or mpv)") {
 		t.Errorf("expected H.264 format description, got:\n%s", out)
+	}
+}
+
+func TestStream_ContextLivesUntilAutoStop(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	canceled := make(chan time.Time, 1)
+	drv := defaultDriver()
+	drv.ctxCanceled = canceled
+	deps := makeDeps(t, dir, kc, drv)
+	port := freePort(t)
+	started := time.Now()
+
+	_, err := runCmd(t, deps, "myprinter", "--timeout", "40ms", "--port", portStr(port))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	select {
+	case canceledAt := <-canceled:
+		if elapsed := canceledAt.Sub(started); elapsed < 20*time.Millisecond {
+			t.Fatalf("stream context canceled immediately after open: %s", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream context was not canceled at auto-stop")
 	}
 }
 

@@ -1,7 +1,6 @@
 package bambulan
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -15,15 +14,13 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
-	"github.com/bluenviron/mediacommon/v2/pkg/formats/mpegts"
-	"github.com/bluenviron/mediacommon/v2/pkg/formats/mpegts/codecs"
 	"github.com/pion/rtp"
 )
 
-// rtspStream implements io.ReadCloser, emitting an MPEG-TS byte stream
-// containing H.264 video from an RTSPS source via gortsplib.
+// rtspStream implements io.ReadCloser, emitting an H.264 Annex-B byte stream
+// from an RTSPS source via gortsplib.
 //
-// Architecture: RTP callback → MPEG-TS mux → channel → Read().
+// Architecture: RTP callback → H.264 depacketizer → Annex-B channel → Read().
 // The channel decouples the callback (must never block) from the reader
 // (may block waiting for an HTTP client). No intermediate pipe or pump.
 type rtspStream struct {
@@ -98,7 +95,7 @@ func connectRTSPSH264(tlsCfg *tls.Config, host, accessCode string, port int, tim
 }
 
 // dialRTSPS connects to a Bambu RTSPS camera endpoint and returns an
-// io.ReadCloser that emits an MPEG-TS stream containing H.264 video.
+// io.ReadCloser that emits an H.264 Annex-B stream.
 func dialRTSPS(ctx context.Context, tlsCfg *tls.Config, host, accessCode string) (io.ReadCloser, error) {
 	timeout := rtspTimeout(ctx)
 	c, medi, forma, rtpDec, err := connectRTSPSH264(tlsCfg, host, accessCode, cameraPortH264, timeout)
@@ -108,7 +105,7 @@ func dialRTSPS(ctx context.Context, tlsCfg *tls.Config, host, accessCode string)
 	return newRTSPStream(c, medi, forma, rtpDec)
 }
 
-// newRTSPStream registers the RTP-to-MPEG-TS pipeline on a connected client,
+// newRTSPStream registers the RTP-to-Annex-B pipeline on a connected client,
 // starts playback, and returns the resulting stream. On error the client has
 // been closed.
 func newRTSPStream(c *gortsplib.Client, medi *description.Media, forma *format.H264, rtpDec *rtph264.Decoder) (io.ReadCloser, error) {
@@ -118,20 +115,9 @@ func newRTSPStream(c *gortsplib.Client, medi *description.Media, forma *format.H
 		dataCh: dataCh,
 	}
 
-	// MPEG-TS muxer writes to an intermediate buffer per callback invocation.
-	var tsBuf bytes.Buffer
-	track := &mpegts.Track{Codec: &codecs.H264{}}
-	tsWriter := &mpegts.Writer{
-		W:      &tsBuf,
-		Tracks: []*mpegts.Track{track},
-	}
-	if initErr := tsWriter.Initialize(); initErr != nil {
-		c.Close()
-		return nil, fmt.Errorf("MPEG-TS init: %w", initErr)
-	}
-
-	var ptsOffset int64
-	var ptsInited bool
+	sps := cloneH264NALU(forma.SPS)
+	pps := cloneH264NALU(forma.PPS)
+	streamStarted := false
 
 	// fatalCh carries at most one fatal error out of the RTP callback.
 	// The callback must never call client.Close itself: with TCP-interleaved
@@ -157,28 +143,14 @@ func newRTSPStream(c *gortsplib.Client, medi *description.Media, forma *format.H
 			return
 		}
 
-		// Use RTP timestamp directly as PTS (both use 90kHz clock).
-		rtpTS := int64(pkt.Timestamp)
-		if !ptsInited {
-			ptsOffset = rtpTS
-			ptsInited = true
-		}
-		pts := rtpTS - ptsOffset
-
-		tsBuf.Reset()
-		if writeErr := tsWriter.WriteH264(track, pts, pts, au); writeErr != nil {
-			reportFatal(fmt.Errorf("MPEG-TS write: %w", writeErr))
+		data := prepareAnnexBAccessUnit(au, &sps, &pps, &streamStarted)
+		if len(data) == 0 {
 			return
 		}
-
-		if tsBuf.Len() > 0 {
-			data := make([]byte, tsBuf.Len())
-			copy(data, tsBuf.Bytes())
-			// Non-blocking send: drop frame if channel is full (reader too slow).
-			select {
-			case dataCh <- data:
-			default:
-			}
+		// Non-blocking send: drop frame if channel is full (reader too slow).
+		select {
+		case dataCh <- data:
+		default:
 		}
 	})
 
@@ -211,6 +183,55 @@ func newRTSPStream(c *gortsplib.Client, medi *description.Media, forma *format.H
 	}()
 
 	return s, nil
+}
+
+func prepareAnnexBAccessUnit(au [][]byte, sps, pps *[]byte, started *bool) []byte {
+	hasIDR := false
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		switch nalu[0] & 0x1f {
+		case 5:
+			hasIDR = true
+		case 7:
+			*sps = cloneH264NALU(nalu)
+		case 8:
+			*pps = cloneH264NALU(nalu)
+		}
+	}
+
+	nalus := au
+	if !*started {
+		if !hasIDR || len(*sps) == 0 || len(*pps) == 0 {
+			return nil
+		}
+		nalus = make([][]byte, 0, len(au)+2)
+		nalus = append(nalus, *sps, *pps)
+		for _, nalu := range au {
+			if len(nalu) == 0 || nalu[0]&0x1f == 7 || nalu[0]&0x1f == 8 {
+				continue
+			}
+			nalus = append(nalus, nalu)
+		}
+		*started = true
+	}
+
+	size := 0
+	for _, nalu := range nalus {
+		if len(nalu) > 0 {
+			size += 4 + len(nalu)
+		}
+	}
+	data := make([]byte, 0, size)
+	for _, nalu := range nalus {
+		if len(nalu) == 0 {
+			continue
+		}
+		data = append(data, 0, 0, 0, 1)
+		data = append(data, nalu...)
+	}
+	return data
 }
 
 func (s *rtspStream) Read(p []byte) (int, error) {
