@@ -33,7 +33,6 @@ type Capabilities struct {
 	FileList         bool `json:"fileList"`
 	FileDownload     bool `json:"fileDownload"`
 	FileUpload       bool `json:"fileUpload"`
-	JobUpload        bool `json:"jobUpload"`
 	JobStart         bool `json:"jobStart"`
 	JobPause         bool `json:"jobPause"`
 	JobResume        bool `json:"jobResume"`

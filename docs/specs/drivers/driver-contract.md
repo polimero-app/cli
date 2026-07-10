@@ -40,7 +40,6 @@ Capabilities {
     FileList         bool
     FileDownload     bool
     FileUpload       bool
-    JobUpload        bool
     JobStart         bool
     JobPause         bool
     JobResume        bool
