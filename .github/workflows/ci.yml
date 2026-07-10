@@ -13,6 +13,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Normalize line endings on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git reset --hard HEAD
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
