@@ -48,7 +48,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          export PATH="/mingw64/bin:$PATH"
+          export PATH="$(cygpath -u "$GOROOT")/bin:/mingw64/bin:$PATH"
           export CC=x86_64-w64-mingw32-gcc
           export PKG_CONFIG=pkg-config
           make ci
