@@ -49,16 +49,51 @@ release: ## Build release binaries into ./dist
 			echo "error: $$target cgo build requires macOS runner or CC_DARWIN_* toolchain override"; \
 			exit 1; \
 		fi; \
+		pkgconf_bin="$$PKG_CONFIG"; \
+		if [ -z "$$pkgconf_bin" ] && [ "$$goos/$$goarch" != "$$host_os/$$host_arch" ]; then \
+			case "$$goos/$$goarch" in \
+				linux/arm64) pkgconf_bin="$${PKG_CONFIG_LINUX_ARM64:-aarch64-linux-gnu-pkg-config}" ;; \
+				windows/amd64) pkgconf_bin="$${PKG_CONFIG_WINDOWS_AMD64:-x86_64-w64-mingw32-pkg-config}" ;; \
+				darwin/amd64) pkgconf_bin="$${PKG_CONFIG_DARWIN_AMD64:-pkg-config}" ;; \
+				darwin/arm64) pkgconf_bin="$${PKG_CONFIG_DARWIN_ARM64:-pkg-config}" ;; \
+			esac; \
+		fi; \
+		if [ -z "$$pkgconf_bin" ]; then pkgconf_bin="pkg-config"; fi; \
+		if [ "$$pkgconf_bin" != "pkg-config" ] && ! command -v "$$pkgconf_bin" >/dev/null 2>&1; then \
+			pkgconf_bin="pkg-config"; \
+		fi; \
 		if [ -n "$$cc_bin" ] && ! command -v "$$cc_bin" >/dev/null 2>&1; then \
 			echo "error: C compiler '$$cc_bin' not found for $$target"; \
 			echo "hint: install it or set CC/CC_<OS>_<ARCH> before running make release"; \
 			exit 1; \
 		fi; \
+		if ! command -v "$$pkgconf_bin" >/dev/null 2>&1; then \
+			echo "error: pkg-config tool '$$pkgconf_bin' not found for $$target"; \
+			echo "hint: install it or set PKG_CONFIG/PKG_CONFIG_<OS>_<ARCH> before running make release"; \
+			exit 1; \
+		fi; \
+		if ! "$$pkgconf_bin" --exists libavcodec libavutil libswscale; then \
+			echo "error: missing FFmpeg dev packages for $$target (libavcodec/libavutil/libswscale)"; \
+			echo "hint: install target FFmpeg headers and .pc files, and set PKG_CONFIG_* if cross-building"; \
+			exit 1; \
+		fi; \
+		if [ -n "$$cc_bin" ] && [ "$$goos/$$goarch" != "$$host_os/$$host_arch" ]; then \
+			ff_flags="$$( "$$pkgconf_bin" --cflags --libs libavcodec libavutil libswscale )"; \
+			tmp_src="dist/.ffmpeg-check-$${goos}-$${goarch}.c"; \
+			tmp_bin="dist/.ffmpeg-check-$${goos}-$${goarch}"; \
+			printf '#include <libavcodec/avcodec.h>\nint main(void){return 0;}\n' > "$$tmp_src"; \
+			if ! "$$cc_bin" "$$tmp_src" $$ff_flags -o "$$tmp_bin" >/dev/null 2>&1; then \
+				echo "error: FFmpeg headers/libs are not usable for $$target with CC=$$cc_bin"; \
+				echo "hint: install target-arch FFmpeg dev packages and point PKG_CONFIG_* to their .pc files"; \
+				exit 1; \
+			fi; \
+			rm -f "$$tmp_src" "$$tmp_bin"; \
+		fi; \
 		if [ -n "$$cc_bin" ]; then \
-			GOOS="$$goos" GOARCH="$$goarch" CGO_ENABLED=1 CC="$$cc_bin" \
+			GOOS="$$goos" GOARCH="$$goarch" CGO_ENABLED=1 CC="$$cc_bin" PKG_CONFIG="$$pkgconf_bin" \
 				$(GO) build -ldflags "-X github.com/polimero-app/cli/cmd.Version=$(VERSION)" -o "$$out" .; \
 		else \
-			GOOS="$$goos" GOARCH="$$goarch" CGO_ENABLED=1 \
+			GOOS="$$goos" GOARCH="$$goarch" CGO_ENABLED=1 PKG_CONFIG="$$pkgconf_bin" \
 				$(GO) build -ldflags "-X github.com/polimero-app/cli/cmd.Version=$(VERSION)" -o "$$out" .; \
 		fi; \
 	done

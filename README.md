@@ -68,6 +68,8 @@ Artifact names follow `polimero_<os>_<arch>` (`.exe` suffix on Windows). Tag-tri
 
 For cgo cross-target builds, install target C toolchains or set overrides like
 `CC_LINUX_ARM64`, `CC_WINDOWS_AMD64`, `CC_DARWIN_AMD64`, and `CC_DARWIN_ARM64`.
+If target FFmpeg pkg-config metadata is not on the default lookup path, set
+`PKG_CONFIG_<OS>_<ARCH>` (or `PKG_CONFIG`) accordingly.
 
 ## References
 
