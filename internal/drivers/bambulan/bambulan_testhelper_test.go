@@ -16,12 +16,16 @@ type fakeCommandClient struct {
 	responses    [][]byte // responses[i] delivered to subscribe handler after Publish i (nil = no delivery)
 
 	mu           sync.Mutex
+	connectCalls int
 	published    []string // captured payloads as strings
 	handler      mqtt.MessageHandler
 	handlerTopic string
 }
 
 func (f *fakeCommandClient) Connect() mqtt.Token {
+	f.mu.Lock()
+	f.connectCalls++
+	f.mu.Unlock()
 	return newFakeToken(f.connectErr)
 }
 
@@ -78,6 +82,12 @@ func (f *fakeCommandClient) getPublished() []string {
 	out := make([]string, len(f.published))
 	copy(out, f.published)
 	return out
+}
+
+func (f *fakeCommandClient) getConnectCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.connectCalls
 }
 
 // newCommandDriver returns a Driver that uses fc for its MQTT client.

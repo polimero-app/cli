@@ -62,6 +62,9 @@ func TestMqttCommand_ConnectFails_ReturnsError(t *testing.T) {
 	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
 		t.Errorf("expected exit code 4, got %v", err)
 	}
+	if calls := fc.getConnectCalls(); calls != 1 {
+		t.Fatalf("connect attempts = %d, want exactly 1", calls)
+	}
 }
 
 func TestMqttCommand_SubscribeFails_ReturnsError(t *testing.T) {

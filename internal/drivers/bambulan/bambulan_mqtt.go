@@ -64,7 +64,7 @@ func (d *Driver) mqttCommand(
 	opts.SetAutoReconnect(false)
 	opts.SetKeepAlive(60)
 
-	client, err := d.connectMQTTWithRetry(ctx, opts, trace, "Command", endpoint)
+	client, err := d.connectMQTT(ctx, opts, trace, "Command", endpoint)
 	if err != nil {
 		if isContextDoneErr(err) {
 			return nil, mqttContextError(err)
