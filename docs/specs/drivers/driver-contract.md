@@ -222,7 +222,7 @@ Contract:
 - Upload operations store files only and must not start prints.
 - Return a non-nil empty `Entries` slice when the directory has no visible entries.
 - Do not delete, rename, move, create directories, or start prints.
-- Respect context cancellation and command timeouts.
+- Respect context cancellation and command timeouts. Cancellation must interrupt control and data I/O that is already blocked; checking the context only before an I/O call is insufficient.
 - Return `unsupported_capability` when the driver does not support the requested file operation.
 - Return a typed path error when the normalized root/path does not exist or is incompatible with the requested operation.
 - Sanitize transport and parser errors before they reach CLI output.

@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jlaffaye/ftp"
@@ -55,8 +57,6 @@ type ftpDialer func(ctx context.Context, addr string, tlsCfg *tls.Config) (ftpCo
 
 // realFTPDial creates a real FTPS connection to a Bambu printer.
 func realFTPDial(ctx context.Context, addr string, tlsCfg *tls.Config) (ftpConn, error) {
-	// DialWithContext governs the initial control connection.
-	// DialWithTimeout sets net.Dialer.Timeout for passive data connections.
 	timeout := 10 * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
 		timeout = time.Until(deadline)
@@ -65,15 +65,72 @@ func realFTPDial(ctx context.Context, addr string, tlsCfg *tls.Config) (ftpConn,
 		}
 	}
 
+	dialer := &net.Dialer{Timeout: timeout}
+	dialTLS := func(network, address string) (net.Conn, error) {
+		raw, err := dialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		conn := newContextBoundConn(ctx, tls.Client(raw, tlsCfg))
+		if deadline, ok := ctx.Deadline(); ok {
+			if err := conn.SetDeadline(deadline); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+		}
+		return conn, nil
+	}
+
 	conn, err := ftp.Dial(addr,
-		ftp.DialWithContext(ctx),
-		ftp.DialWithTimeout(timeout),
+		ftp.DialWithDialFunc(dialTLS),
 		ftp.DialWithTLS(tlsCfg),
+		ftp.DialWithShutTimeout(timeout),
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &ftpConnAdapter{conn: conn}, nil
+}
+
+// contextBoundConn closes an FTP control or data connection when ctx is
+// canceled. Closing the socket is required to interrupt reads and writes that
+// are already blocked inside the FTP library.
+type contextBoundConn struct {
+	net.Conn
+	done     chan struct{}
+	closeErr error
+	once     sync.Once
+}
+
+func newContextBoundConn(ctx context.Context, conn net.Conn) *contextBoundConn {
+	bound := &contextBoundConn{Conn: conn, done: make(chan struct{})}
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = bound.SetDeadline(time.Now())
+			_ = bound.Close()
+		case <-bound.done:
+		}
+	}()
+	return bound
+}
+
+func (c *contextBoundConn) Close() error {
+	c.once.Do(func() {
+		close(c.done)
+		c.closeErr = c.Conn.Close()
+	})
+	return c.closeErr
+}
+
+// Handshake preserves the optional TLS handshake method used by the FTP
+// library for zero-byte uploads.
+func (c *contextBoundConn) Handshake() error {
+	handshaker, ok := c.Conn.(interface{ Handshake() error })
+	if !ok {
+		return nil
+	}
+	return handshaker.Handshake()
 }
 
 // ftpDial is the driver's FTP dialer, overridable in tests.

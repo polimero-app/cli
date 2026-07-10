@@ -394,6 +394,7 @@ Mapping rules:
 - `sdcard:/models/cube.3mf` maps to FTP path `/models/cube.3mf`.
 - The command layer rejects traversal before dispatch. The driver must still defensively reject `..`, NUL bytes, and control characters.
 - The driver must not expose local host filesystem paths.
+- FTPS control and passive data sockets inherit the command deadline and close when the command context is canceled, including while a read or write is blocked.
 
 ### Listing
 

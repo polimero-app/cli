@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,52 @@ func (m *mockFTPConn) Quit() error { return m.quitErr }
 func mockDialer(conn ftpConn, err error) ftpDialer {
 	return func(_ context.Context, _ string, _ *tls.Config) (ftpConn, error) {
 		return conn, err
+	}
+}
+
+func TestContextBoundConn_CancelInterruptsBlockedRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client, server := net.Pipe()
+	defer func() { _ = server.Close() }()
+	conn := newContextBoundConn(ctx, client)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := conn.Read(make([]byte, 1))
+		errCh <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected canceled read to fail")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked read was not interrupted by cancellation")
+	}
+}
+
+func TestContextBoundConn_CancelInterruptsBlockedWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client, server := net.Pipe()
+	defer func() { _ = server.Close() }()
+	conn := newContextBoundConn(ctx, client)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := conn.Write(make([]byte, 64*1024))
+		errCh <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected canceled write to fail")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked write was not interrupted by cancellation")
 	}
 }
 
