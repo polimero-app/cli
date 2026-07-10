@@ -52,6 +52,9 @@ func TestDrivers_WiredUnderPrinter(t *testing.T) {
 	if !strings.Contains(out, "bambu-lan") {
 		t.Fatalf("missing bambu-lan from wired command:\n%s", out)
 	}
+	if !strings.Contains(out, "moonraker") {
+		t.Fatalf("missing moonraker from wired command:\n%s", out)
+	}
 }
 
 func TestDrivers_Human_AlphabeticalOrder(t *testing.T) {

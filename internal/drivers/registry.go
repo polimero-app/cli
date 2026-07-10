@@ -5,6 +5,7 @@ import (
 
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/drivers/bambulan"
+	"github.com/polimero-app/cli/internal/drivers/moonraker"
 )
 
 // Info describes a registered driver for user-facing listings.
@@ -22,6 +23,10 @@ var registry = map[string]registration{
 	"bambu-lan": {
 		driver:      bambulan.New(),
 		description: "Bambu Lab printers over LAN mode",
+	},
+	"moonraker": {
+		driver:      moonraker.New(),
+		description: "Moonraker-compatible Klipper printers",
 	},
 }
 

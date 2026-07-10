@@ -195,6 +195,7 @@ func doAdd(cmd *cobra.Command, ctx context.Context, nameArg, driverName, host, s
 	connectSecrets := driver.SecretsBundle{AccessCode: accessCode}
 
 	var fingerprint string
+	usesTLSPinning := drv.Capabilities().TLSRefresh
 	opCtx, opCancel := context.WithTimeout(ctx, timeout)
 	defer opCancel()
 	if !insecure {
@@ -204,10 +205,13 @@ func doAdd(cmd *cobra.Command, ctx context.Context, nameArg, driverName, host, s
 		if err != nil {
 			return err // already an *apperr.ExitError with code 3 or 4
 		}
-		if !driver.ValidTLSFingerprint(fingerprint) {
+		if usesTLSPinning && !driver.ValidTLSFingerprint(fingerprint) {
 			return apperr.New(4, "driver returned invalid TLS fingerprint")
 		}
-		output.Verbose(w, verbose, fmt.Sprintf("Connection verified. TLS fingerprint: %s", fingerprint))
+		output.Verbose(w, verbose, "Connection verified.")
+		if usesTLSPinning {
+			output.Verbose(w, verbose, fmt.Sprintf("TLS fingerprint: %s", fingerprint))
+		}
 
 		// 4. Store access code
 		output.Verbose(w, verbose, "Storing credentials in keychain...")
@@ -215,12 +219,14 @@ func doAdd(cmd *cobra.Command, ctx context.Context, nameArg, driverName, host, s
 			return apperr.Wrap(3, "cannot store access code in keychain", err)
 		}
 
-		// 5. Store TLS fingerprint; rollback access code on failure
-		if err := deps.KC.Set(opCtx, "polimero", kcFpAcct, fingerprint); err != nil {
-			cleanupCtx, cleanupCancel := secretStoreContext(ctx)
-			_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
-			cleanupCancel()
-			return apperr.Wrap(3, "cannot store TLS fingerprint in keychain", err)
+		// 5. Store TLS fingerprint when driver uses TLS pinning.
+		if usesTLSPinning {
+			if err := deps.KC.Set(opCtx, "polimero", kcFpAcct, fingerprint); err != nil {
+				cleanupCtx, cleanupCancel := secretStoreContext(ctx)
+				_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
+				cleanupCancel()
+				return apperr.Wrap(3, "cannot store TLS fingerprint in keychain", err)
+			}
 		}
 	} else {
 		// Insecure: store access code (no connectivity check, no fingerprint)
@@ -246,7 +252,7 @@ func doAdd(cmd *cobra.Command, ctx context.Context, nameArg, driverName, host, s
 	if err := cfg.AddProfile(name, p); err != nil {
 		cleanupCtx, cleanupCancel := secretStoreContext(ctx)
 		_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
-		if !insecure {
+		if !insecure && usesTLSPinning {
 			_ = deps.KC.Delete(cleanupCtx, "polimero", kcFpAcct)
 		}
 		cleanupCancel()
@@ -255,7 +261,7 @@ func doAdd(cmd *cobra.Command, ctx context.Context, nameArg, driverName, host, s
 	if err := config.Save(dir, cfg); err != nil {
 		cleanupCtx, cleanupCancel := secretStoreContext(ctx)
 		_ = deps.KC.Delete(cleanupCtx, "polimero", kcAcct)
-		if !insecure {
+		if !insecure && usesTLSPinning {
 			_ = deps.KC.Delete(cleanupCtx, "polimero", kcFpAcct)
 		}
 		cleanupCancel()
@@ -263,13 +269,13 @@ func doAdd(cmd *cobra.Command, ctx context.Context, nameArg, driverName, host, s
 	}
 
 	// 7. Output success
-	return writeAddSuccess(cmd.OutOrStdout(), format, name, p, fingerprint, protocolTrace)
+	return writeAddSuccess(cmd.OutOrStdout(), format, name, p, usesTLSPinning, fingerprint, protocolTrace)
 }
 
-func writeAddSuccess(w io.Writer, format output.Format, name string, p config.Profile, fingerprint, tracePath string) error {
+func writeAddSuccess(w io.Writer, format output.Format, name string, p config.Profile, usesTLSPinning bool, fingerprint, tracePath string) error {
 	if format == output.FormatJSON {
 		var fp any
-		if fingerprint != "" {
+		if usesTLSPinning && fingerprint != "" {
 			fp = fingerprint
 		}
 		meta := output.Meta{Command: "printer add"}
@@ -297,11 +303,13 @@ func writeAddSuccess(w io.Writer, format output.Format, name string, p config.Pr
 		fmt.Sprintf("Printer profile added: %s", name),
 		fmt.Sprintf("Driver: %s", p.Driver),
 		fmt.Sprintf("Host: %s", p.Host),
-		fmt.Sprintf("Serial: %s", p.Serial),
+	}
+	if p.Serial != "" {
+		lines = append(lines, fmt.Sprintf("Serial: %s", p.Serial))
 	}
 	if p.Insecure {
 		lines = append(lines, "Warning: TLS verification is disabled for this profile.")
-	} else {
+	} else if usesTLSPinning {
 		lines = append(lines, fmt.Sprintf("TLS: %s", fingerprint))
 	}
 	for _, l := range lines {
@@ -335,6 +343,9 @@ func addErrorMessage(err error) string {
 	code := addErrorCode(err)
 	switch code {
 	case "authentication_failed":
+		if strings.Contains(err.Error(), "Moonraker authentication rejected") {
+			return "Moonraker authentication rejected"
+		}
 		return "MQTT authentication rejected"
 	case "connection_failed":
 		if strings.Contains(err.Error(), "connection cancelled") {
@@ -366,7 +377,7 @@ func addErrorCode(err error) string {
 		}
 	case 3:
 		msg := err.Error()
-		if strings.Contains(msg, "MQTT authentication") {
+		if strings.Contains(msg, "MQTT authentication") || strings.Contains(msg, "Moonraker authentication") {
 			return "authentication_failed"
 		}
 		return "secret_not_found"

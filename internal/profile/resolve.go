@@ -73,6 +73,11 @@ func Resolve(
 	defer cancel()
 
 	insecure := p.Insecure || insecureFlag
+	drv, ok := getDriver(p.Driver)
+	if !ok {
+		return nil, apperr.Newf(2, "unknown driver %q", p.Driver)
+	}
+
 	kcAcct := fmt.Sprintf("%s:%s:access-code", p.Driver, name)
 	accessCode, err := kc.Get(kcCtx, "polimero", kcAcct)
 	if err != nil {
@@ -83,7 +88,7 @@ func Resolve(
 	}
 
 	var tlsFingerprint string
-	if !insecure {
+	if !insecure && drv.Capabilities().TLSRefresh {
 		kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
 		tlsFingerprint, err = kc.Get(kcCtx, "polimero", kcFpAcct)
 		if err != nil {
@@ -95,11 +100,6 @@ func Resolve(
 		if !driver.ValidTLSFingerprint(tlsFingerprint) {
 			return nil, apperr.Newf(3, "invalid TLS fingerprint in keychain for %q", name)
 		}
-	}
-
-	drv, ok := getDriver(p.Driver)
-	if !ok {
-		return nil, apperr.Newf(2, "unknown driver %q", p.Driver)
 	}
 
 	return &Resolved{

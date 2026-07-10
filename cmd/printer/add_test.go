@@ -24,19 +24,29 @@ import (
 type stubDriver struct {
 	fingerprint string
 	err         error
+	name        string
+	caps        driver.Capabilities
+	requireSN   bool
 }
 
-func (s *stubDriver) Name() string { return "bambu-lan" }
+func (s *stubDriver) Name() string {
+	if s.name != "" {
+		return s.name
+	}
+	return "bambu-lan"
+}
 func (s *stubDriver) ValidateProfile(p driver.ProfileInput) error {
-	if p.Serial == "" {
+	if s.requireSN && p.Serial == "" {
 		return apperr.New(2, "--serial is required for bambu-lan driver")
 	}
-	if len(p.Serial) > 64 {
+	if s.requireSN && len(p.Serial) > 64 {
 		return apperr.New(2, "--serial too long (max 64 chars)")
 	}
-	for _, c := range p.Serial {
-		if c < 0x21 || c > 0x7E {
-			return apperr.New(2, "--serial contains invalid character (must be printable ASCII with no whitespace)")
+	if s.requireSN {
+		for _, c := range p.Serial {
+			if c < 0x21 || c > 0x7E {
+				return apperr.New(2, "--serial contains invalid character (must be printable ASCII with no whitespace)")
+			}
 		}
 	}
 	return nil
@@ -45,9 +55,12 @@ func (s *stubDriver) ConnectCheck(_ context.Context, p driver.ProfileInput, _ dr
 	if p.Insecure {
 		return "", nil
 	}
-	return s.fingerprint, s.err
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.fingerprint, nil
 }
-func (s *stubDriver) Capabilities() driver.Capabilities { return driver.Capabilities{} }
+func (s *stubDriver) Capabilities() driver.Capabilities { return s.caps }
 func (s *stubDriver) Status(_ context.Context, _ driver.ProfileInput, _ driver.SecretsBundle, _ *slog.Logger) (*driver.StatusResult, error) {
 	return nil, nil
 }
@@ -74,7 +87,18 @@ func defaultAddDeps(kc *keychain.Mock, p *tty.Mock) printer.AddDeps {
 		Prompter: p,
 		GetDriver: func(name string) (driver.Driver, bool) {
 			if name == "bambu-lan" {
-				return &stubDriver{fingerprint: testFingerprint}, true
+				return &stubDriver{
+					fingerprint: testFingerprint,
+					name:        "bambu-lan",
+					requireSN:   true,
+					caps:        driver.Capabilities{TLSRefresh: true},
+				}, true
+			}
+			if name == "moonraker" {
+				return &stubDriver{
+					name:      "moonraker",
+					requireSN: false,
+				}, true
 			}
 			return nil, false
 		},
@@ -232,6 +256,26 @@ func TestAdd_JSON_Insecure_NullFingerprint(t *testing.T) {
 	}
 	if fp != nil {
 		t.Errorf("tlsFingerprint = %v, want null for insecure", fp)
+	}
+}
+
+func TestAdd_Moonraker_DoesNotRequireSerialOrTLSPinning(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	p := &tty.Mock{Terminal: true, HiddenVal: "moonkey"}
+	out, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+		"mk", "--driver", "moonraker", "--host", "192.0.2.20")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "Serial:") {
+		t.Fatalf("moonraker output should not print empty serial:\n%s", out)
+	}
+	if strings.Contains(out, "TLS:") {
+		t.Fatalf("moonraker output should not print TLS fingerprint:\n%s", out)
+	}
+	if _, err := kc.Get(context.Background(), "polimero", "moonraker:mk:tls-fingerprint"); err == nil {
+		t.Fatal("moonraker should not persist TLS fingerprint")
 	}
 }
 
@@ -612,7 +656,12 @@ func TestAdd_RollbackOnFingerprintFail(t *testing.T) {
 		KC:       kc,
 		Prompter: p,
 		GetDriver: func(name string) (driver.Driver, bool) {
-			return &stubDriver{fingerprint: testFingerprint}, true
+			return &stubDriver{
+				fingerprint: testFingerprint,
+				name:        "bambu-lan",
+				requireSN:   true,
+				caps:        driver.Capabilities{TLSRefresh: true},
+			}, true
 		},
 	}
 	_, err := runAddCmd(t, dir, deps,
@@ -674,7 +723,12 @@ func TestAdd_Verbose_ShowsProgressSteps(t *testing.T) {
 		KC:       kc,
 		Prompter: p,
 		GetDriver: func(name string) (driver.Driver, bool) {
-			return &stubDriver{fingerprint: testFingerprint}, name == "bambu-lan"
+			return &stubDriver{
+				fingerprint: testFingerprint,
+				name:        "bambu-lan",
+				requireSN:   true,
+				caps:        driver.Capabilities{TLSRefresh: true},
+			}, name == "bambu-lan"
 		},
 	}
 
@@ -691,7 +745,8 @@ func TestAdd_Verbose_ShowsProgressSteps(t *testing.T) {
 
 	wantLines := []string{
 		"Connecting to 192.0.2.10...",
-		"Connection verified. TLS fingerprint: sha256:",
+		"Connection verified.",
+		"TLS fingerprint: sha256:",
 		"Storing credentials in keychain...",
 		"Saving profile",
 	}
@@ -712,7 +767,12 @@ func TestAdd_Verbose_SuppressedInJSONMode(t *testing.T) {
 		KC:       kc,
 		Prompter: p,
 		GetDriver: func(name string) (driver.Driver, bool) {
-			return &stubDriver{fingerprint: testFingerprint}, name == "bambu-lan"
+			return &stubDriver{
+				fingerprint: testFingerprint,
+				name:        "bambu-lan",
+				requireSN:   true,
+				caps:        driver.Capabilities{TLSRefresh: true},
+			}, name == "bambu-lan"
 		},
 	}
 

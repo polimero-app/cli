@@ -34,8 +34,12 @@ type stubDriver struct {
 	ctxCanceled chan time.Time
 }
 
-func (s *stubDriver) Name() string                      { return "bambu-lan" }
-func (s *stubDriver) Capabilities() driver.Capabilities { return s.caps }
+func (s *stubDriver) Name() string { return "bambu-lan" }
+func (s *stubDriver) Capabilities() driver.Capabilities {
+	c := s.caps
+	c.TLSRefresh = true
+	return c
+}
 func (s *stubDriver) ValidateProfile(_ driver.ProfileInput) error {
 	return nil
 }

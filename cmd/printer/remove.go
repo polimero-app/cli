@@ -9,6 +9,7 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/config"
+	"github.com/polimero-app/cli/internal/drivers"
 	"github.com/polimero-app/cli/internal/keychain"
 	"github.com/polimero-app/cli/internal/output"
 	"github.com/polimero-app/cli/internal/tty"
@@ -128,6 +129,10 @@ func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format
 
 	accessCode := storedSecret{account: fmt.Sprintf("%s:%s:access-code", p.Driver, name)}
 	tlsFingerprint := storedSecret{account: fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)}
+	driverUsesTLSPinning := false
+	if drv, ok := drivers.Get(p.Driver); ok {
+		driverUsesTLSPinning = drv.Capabilities().TLSRefresh
+	}
 
 	if err := loadStoredSecret(kcCtx, deps.KC, &accessCode); err != nil {
 		return apperr.Wrap(3, "cannot read stored access code from keychain", err)
@@ -142,7 +147,7 @@ func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format
 	if err := loadStoredSecret(kcCtx, deps.KC, &tlsFingerprint); err != nil {
 		return apperr.Wrap(3, "cannot read stored TLS fingerprint from keychain", err)
 	}
-	if !tlsFingerprint.present && !p.Insecure {
+	if !tlsFingerprint.present && !p.Insecure && driverUsesTLSPinning {
 		warnings = append(warnings, removeWarning{
 			Code:    "tls_fingerprint_not_found",
 			Message: "profile was removed, but no stored TLS fingerprint was found",

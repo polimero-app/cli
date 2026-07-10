@@ -144,6 +144,14 @@ func doStatus(cmd *cobra.Command, ctx context.Context, name, timeoutFlag string,
 
 	insecure := p.Insecure || insecureFlag
 
+	drv, ok := deps.GetDriver(p.Driver)
+	if !ok {
+		return nil, 0, "", errCtx, apperr.Newf(2, "unknown driver %q", p.Driver)
+	}
+	if !drv.Capabilities().Status {
+		return nil, 0, "", errCtx, apperr.Newf(5, "driver %q does not support the status command", p.Driver)
+	}
+
 	kcAcct := fmt.Sprintf("%s:%s:access-code", p.Driver, name)
 	accessCode, err := deps.KC.Get(ctx, "polimero", kcAcct)
 	if err != nil {
@@ -154,7 +162,7 @@ func doStatus(cmd *cobra.Command, ctx context.Context, name, timeoutFlag string,
 	}
 
 	var tlsFingerprint string
-	if !insecure {
+	if !insecure && drv.Capabilities().TLSRefresh {
 		kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
 		tlsFingerprint, err = deps.KC.Get(ctx, "polimero", kcFpAcct)
 		if err != nil {
@@ -166,14 +174,6 @@ func doStatus(cmd *cobra.Command, ctx context.Context, name, timeoutFlag string,
 		if !driver.ValidTLSFingerprint(tlsFingerprint) {
 			return nil, 0, "", errCtx, apperr.Newf(3, "invalid TLS fingerprint in keychain for %q", name)
 		}
-	}
-
-	drv, ok := deps.GetDriver(p.Driver)
-	if !ok {
-		return nil, 0, "", errCtx, apperr.Newf(2, "unknown driver %q", p.Driver)
-	}
-	if !drv.Capabilities().Status {
-		return nil, 0, "", errCtx, apperr.Newf(5, "driver %q does not support the status command", p.Driver)
 	}
 
 	pi := driver.ProfileInput{

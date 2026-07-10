@@ -61,7 +61,7 @@ func defaultDriver() *stubDriver {
 	layer := 10
 	total := 50
 	return &stubDriver{
-		caps: driver.Capabilities{Status: true},
+		caps: driver.Capabilities{Status: true, TLSRefresh: true},
 		result: &driver.StatusResult{
 			State: "printing",
 			Temperatures: &driver.Temperatures{
@@ -72,7 +72,7 @@ func defaultDriver() *stubDriver {
 			Progress:     &driver.Progress{Percent: 42, CurrentLayer: &layer, TotalLayers: &total},
 			Errors:       []driver.StatusError{},
 			Warnings:     []driver.StatusWarning{},
-			Capabilities: driver.Capabilities{Status: true},
+			Capabilities: driver.Capabilities{Status: true, TLSRefresh: true},
 		},
 	}
 }

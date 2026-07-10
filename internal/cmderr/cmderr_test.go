@@ -35,6 +35,7 @@ func TestCode(t *testing.T) {
 		{"secret missing", apperr.New(3, "access code not found"), false, "secret_not_found"},
 		{"tls mismatch", apperr.New(3, "TLS fingerprint mismatch"), false, "authentication_failed"},
 		{"mqtt auth", apperr.New(3, "MQTT authentication rejected"), false, "authentication_failed"},
+		{"moonraker auth", apperr.New(3, "Moonraker authentication rejected"), false, "authentication_failed"},
 		{"network", apperr.New(4, "connection failed"), false, "connection_failed"},
 		{"timeout unclassified", apperr.New(4, "request timed out"), false, "connection_failed"},
 		{"timeout classified", apperr.New(4, "request timed out"), true, "timeout"},
@@ -71,6 +72,7 @@ func TestCommandMessage(t *testing.T) {
 		want string
 	}{
 		{apperr.New(3, "MQTT authentication rejected by printer: TLS fingerprint mismatch"), "MQTT authentication rejected"},
+		{apperr.New(3, "Moonraker authentication rejected"), "Moonraker authentication rejected"},
 		{apperr.New(3, "TLS fingerprint mismatch"), "TLS fingerprint mismatch"},
 		{apperr.New(3, "access code not found"), "secret not found"},
 		{apperr.New(4, "command was cancelled"), "request cancelled"},

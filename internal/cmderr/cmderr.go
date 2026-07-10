@@ -52,6 +52,7 @@ func Code(err error, classifyTimeout bool) string {
 	case 3:
 		msg := err.Error()
 		if strings.Contains(msg, "MQTT authentication") ||
+			strings.Contains(msg, "Moonraker authentication") ||
 			strings.Contains(msg, "TLS fingerprint mismatch") {
 			return "authentication_failed"
 		}
@@ -78,6 +79,8 @@ func CommandMessage(err error) string {
 		switch {
 		case strings.Contains(msg, "MQTT authentication rejected"):
 			return "MQTT authentication rejected"
+		case strings.Contains(msg, "Moonraker authentication rejected"):
+			return "Moonraker authentication rejected"
 		case strings.Contains(msg, "TLS fingerprint mismatch"):
 			return "TLS fingerprint mismatch"
 		default:

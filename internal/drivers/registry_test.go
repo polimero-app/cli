@@ -32,6 +32,15 @@ func TestNames_ContainsBambuLan(t *testing.T) {
 	t.Error("bambu-lan missing from Names()")
 }
 
+func TestNames_ContainsMoonraker(t *testing.T) {
+	for _, n := range drivers.Names() {
+		if n == "moonraker" {
+			return
+		}
+	}
+	t.Error("moonraker missing from Names()")
+}
+
 func TestNames_Sorted(t *testing.T) {
 	names := drivers.Names()
 	if !slices.IsSorted(names) {
@@ -41,13 +50,24 @@ func TestNames_Sorted(t *testing.T) {
 
 func TestList_IncludesDescriptions(t *testing.T) {
 	infos := drivers.List()
+	var foundMoonraker bool
 	for _, info := range infos {
 		if info.Name == "bambu-lan" {
 			if info.Description == "" {
 				t.Fatal("bambu-lan description is empty")
 			}
+		}
+		if info.Name == "moonraker" {
+			if info.Description == "" {
+				t.Fatal("moonraker description is empty")
+			}
+			foundMoonraker = true
+		}
+	}
+	for _, info := range infos {
+		if info.Name == "bambu-lan" && foundMoonraker {
 			return
 		}
 	}
-	t.Fatal("bambu-lan missing from List()")
+	t.Fatal("driver list missing expected entries")
 }
