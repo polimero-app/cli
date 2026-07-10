@@ -1,6 +1,7 @@
 package printer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,14 +17,16 @@ import (
 
 // RemoveDeps holds injectable dependencies for the printer remove command.
 type RemoveDeps struct {
-	KC       keychain.Keychain
-	Prompter tty.Prompter
+	KC         keychain.Keychain
+	Prompter   tty.Prompter
+	SaveConfig func(string, *config.Config) error
 }
 
 func removeCommand() *cobra.Command {
 	return RemoveCommandWithDeps(RemoveDeps{
-		KC:       keychain.NewReal(),
-		Prompter: tty.NewReal(),
+		KC:         keychain.NewReal(),
+		Prompter:   tty.NewReal(),
+		SaveConfig: config.Save,
 	})
 }
 
@@ -60,6 +63,13 @@ func writeRemoveUsageError(cmd *cobra.Command, message string) error {
 type removeWarning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+type storedSecret struct {
+	account string
+	value   string
+	present bool
+	deleted bool
 }
 
 func runRemove(cmd *cobra.Command, nameArg string, yes bool, deps RemoveDeps) error {
@@ -112,59 +122,98 @@ func doRemove(cmd *cobra.Command, nameArg string, yes bool, format output.Format
 		}
 	}
 
-	// Remove profile and save config first to avoid orphaning keychain entries.
-	if _, err := cfg.RemoveProfile(name); err != nil {
-		return apperr.Newf(1, "cannot remove profile: %s", err)
-	}
-	if err := config.Save(dir, cfg); err != nil {
-		return apperr.Newf(1, "cannot save config: %s", err)
-	}
-
 	var warnings []removeWarning
-	accessCodeRemoved := false
-	tlsFingerprintRemoved := false
 	kcCtx, kcCancel := secretStoreContext(cmd.Context())
 	defer kcCancel()
 
-	// Delete access code (best-effort: missing = warning, failure = warning)
-	kcAcct := fmt.Sprintf("%s:%s:access-code", p.Driver, name)
-	if err := deps.KC.Delete(kcCtx, "polimero", kcAcct); err != nil {
-		if errors.Is(err, keychain.ErrNotFound) {
-			warnings = append(warnings, removeWarning{
-				Code:    "access_code_not_found",
-				Message: "profile was removed, but no stored access code was found",
-			})
-		} else {
-			warnings = append(warnings, removeWarning{
-				Code:    "access_code_delete_failed",
-				Message: "profile was removed, but the stored access code could not be deleted from keychain",
-			})
-		}
-	} else {
-		accessCodeRemoved = true
+	accessCode := storedSecret{account: fmt.Sprintf("%s:%s:access-code", p.Driver, name)}
+	tlsFingerprint := storedSecret{account: fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)}
+
+	if err := loadStoredSecret(kcCtx, deps.KC, &accessCode); err != nil {
+		return apperr.Wrap(3, "cannot read stored access code from keychain", err)
+	}
+	if !accessCode.present {
+		warnings = append(warnings, removeWarning{
+			Code:    "access_code_not_found",
+			Message: "profile was removed, but no stored access code was found",
+		})
 	}
 
-	// Delete TLS fingerprint (best-effort: missing on insecure profile = expected)
-	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", p.Driver, name)
-	if err := deps.KC.Delete(kcCtx, "polimero", kcFpAcct); err != nil {
-		if errors.Is(err, keychain.ErrNotFound) {
-			if !p.Insecure {
-				warnings = append(warnings, removeWarning{
-					Code:    "tls_fingerprint_not_found",
-					Message: "profile was removed, but no stored TLS fingerprint was found",
-				})
+	if err := loadStoredSecret(kcCtx, deps.KC, &tlsFingerprint); err != nil {
+		return apperr.Wrap(3, "cannot read stored TLS fingerprint from keychain", err)
+	}
+	if !tlsFingerprint.present && !p.Insecure {
+		warnings = append(warnings, removeWarning{
+			Code:    "tls_fingerprint_not_found",
+			Message: "profile was removed, but no stored TLS fingerprint was found",
+		})
+	}
+
+	secrets := []*storedSecret{&accessCode, &tlsFingerprint}
+	for _, secret := range secrets {
+		if !secret.present {
+			continue
+		}
+		if err := deps.KC.Delete(kcCtx, "polimero", secret.account); err != nil {
+			if errors.Is(err, keychain.ErrNotFound) {
+				secret.present = false
+				continue
 			}
-		} else {
-			warnings = append(warnings, removeWarning{
-				Code:    "tls_fingerprint_delete_failed",
-				Message: "profile was removed, but the stored TLS fingerprint could not be deleted from keychain",
-			})
+			if restoreErr := restoreStoredSecrets(cmd.Context(), deps.KC, secrets); restoreErr != nil {
+				return apperr.Wrap(3, "cannot delete stored secrets and could not restore prior keychain state", err)
+			}
+			return apperr.Wrap(3, "cannot delete stored secrets from keychain", err)
 		}
-	} else {
-		tlsFingerprintRemoved = true
+		secret.deleted = true
 	}
 
-	return writeRemoveSuccess(cmd.OutOrStdout(), format, name, accessCodeRemoved, tlsFingerprintRemoved, warnings)
+	if _, err := cfg.RemoveProfile(name); err != nil {
+		if restoreErr := restoreStoredSecrets(cmd.Context(), deps.KC, secrets); restoreErr != nil {
+			return apperr.Wrap(1, "cannot remove profile and could not restore stored secrets", err)
+		}
+		return apperr.Newf(1, "cannot remove profile: %s", err)
+	}
+	saveConfig := deps.SaveConfig
+	if saveConfig == nil {
+		saveConfig = config.Save
+	}
+	if err := saveConfig(dir, cfg); err != nil {
+		if restoreErr := restoreStoredSecrets(cmd.Context(), deps.KC, secrets); restoreErr != nil {
+			return apperr.Wrap(1, "cannot save config and could not restore stored secrets", err)
+		}
+		return apperr.Newf(1, "cannot save config: %s", err)
+	}
+
+	return writeRemoveSuccess(cmd.OutOrStdout(), format, name, accessCode.deleted, tlsFingerprint.deleted, warnings)
+}
+
+func loadStoredSecret(ctx context.Context, kc keychain.Keychain, secret *storedSecret) error {
+	value, err := kc.Get(ctx, "polimero", secret.account)
+	if errors.Is(err, keychain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	secret.value = value
+	secret.present = true
+	return nil
+}
+
+func restoreStoredSecrets(parent context.Context, kc keychain.Keychain, secrets []*storedSecret) error {
+	ctx, cancel := secretStoreContext(context.WithoutCancel(parent))
+	defer cancel()
+
+	var firstErr error
+	for _, secret := range secrets {
+		if !secret.deleted {
+			continue
+		}
+		if err := kc.Set(ctx, "polimero", secret.account, secret.value); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func writeRemoveSuccess(w io.Writer, format output.Format, name string, accessCodeRemoved, tlsFingerprintRemoved bool, warnings []removeWarning) error {

@@ -36,7 +36,9 @@ The command removes both keychain entries using the driver name and profile name
 
 If either entry is missing from the keychain, the command still removes the profile and returns a separate warning per missing entry. If the profile was created with `--insecure`, the TLS fingerprint entry will not be present; this is not a warning condition.
 
-Keychain deletion uses a bounded internal timeout and must not expose raw secret-store backend errors.
+Before mutating state, the command reads the existing entries so they can be restored if a later step fails. It deletes present secrets before saving the profile removal. An operational keychain deletion failure prevents profile removal and returns exit code `3`; any secret already deleted during that attempt is restored before returning. If the config save fails after deletion, the command restores both secrets before returning the config error.
+
+Keychain reads, deletions, and rollback writes use bounded internal timeouts and must not expose raw secret-store backend errors or secret values.
 
 ## Confirmation
 
@@ -126,7 +128,7 @@ JSON success example with warnings (access code missing):
 - Never print or log secret values.
 - Remove the secret before or during profile removal.
 - Use bounded keychain operations.
-- If config write fails after secret deletion, return a clear warning that manual recovery may be needed.
+- If config writing or a later secret deletion fails, restore any secrets already deleted before returning an error.
 - Use atomic config writes where practical.
 
 ## Test Scenarios
@@ -140,6 +142,8 @@ JSON success example with warnings (access code missing):
 - Requires `--yes` in non-interactive mode.
 - Emits stable JSON envelope with granular `accessCodeRemoved` and `tlsFingerprintRemoved` fields.
 - Sanitizes secret-store errors.
+- Keeps the profile and restores prior secrets when an operational keychain deletion fails.
+- Restores deleted secrets when the config save fails.
 
 ## Non-goals
 

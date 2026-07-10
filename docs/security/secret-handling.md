@@ -77,6 +77,8 @@ Profiles created with `--insecure` do not store a TLS fingerprint entry.
 
 Secret-store operations must accept `context.Context`. Commands with explicit timeouts must use those timeouts for secret-store reads or writes on the critical path; commands without a user-facing timeout must still use a bounded internal timeout for secret cleanup.
 
+Destructive profile workflows must not report success after an operational secret-store deletion failure. When multiple secret and config mutations form one logical removal, snapshot existing secret values, restore already-deleted entries after a later failure, and keep rollback bounded and fully redacted.
+
 ## TLS Fingerprint
 
 The TLS fingerprint is the SHA-256 digest of the DER-encoded leaf certificate, formatted as:

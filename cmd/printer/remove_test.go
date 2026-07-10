@@ -357,27 +357,94 @@ func TestRemove_JSON_KeychainErrorIsSanitized(t *testing.T) {
 
 	out, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: &tty.Mock{Terminal: false}},
 		"myprinter", "--yes", "--output", "json")
-	if err != nil {
-		t.Fatalf("expected success (keychain cleanup is best-effort), got %v", err)
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Fatalf("expected exit 3 for keychain failure, got %v", err)
 	}
 	var env map[string]any
 	if jsonErr := json.Unmarshal([]byte(out), &env); jsonErr != nil {
 		t.Fatalf("invalid JSON: %v\n%s", jsonErr, out)
 	}
-	if env["ok"] != true {
-		t.Fatalf("expected ok=true, got %v", env["ok"])
-	}
-	data := env["data"].(map[string]any)
-	warnings := data["warnings"].([]any)
-	if len(warnings) < 1 {
-		t.Fatal("expected at least one warning for keychain delete failure")
-	}
-	w0 := warnings[0].(map[string]any)
-	if w0["code"] != "access_code_delete_failed" {
-		t.Fatalf("warning code = %v, want access_code_delete_failed", w0["code"])
+	if env["ok"] != false {
+		t.Fatalf("expected ok=false, got %v", env["ok"])
 	}
 	if bytes.Contains([]byte(out), []byte("secret-token")) {
 		t.Fatalf("raw keychain detail leaked in output:\n%s", out)
+	}
+	cfg, cfgErr := config.Open(dir)
+	if cfgErr != nil {
+		t.Fatal(cfgErr)
+	}
+	if _, ok := cfg.GetProfile("myprinter"); !ok {
+		t.Fatal("profile must remain when secret deletion fails")
+	}
+	if _, getErr := inner.Get(context.Background(), "polimero", "bambu-lan:myprinter:access-code"); getErr != nil {
+		t.Fatalf("access code must remain after failed removal: %v", getErr)
+	}
+}
+
+func TestRemove_SecondSecretDeleteFailureRestoresFirstSecret(t *testing.T) {
+	dir := t.TempDir()
+	inner := keychain.NewMock()
+	seedProfile(t, dir, inner, "myprinter", false)
+	kc := &accountFailingDeleteKeychain{
+		inner:       inner,
+		failAccount: "bambu-lan:myprinter:tls-fingerprint",
+	}
+
+	_, err := runRemoveCmd(t, dir, printer.RemoveDeps{KC: kc, Prompter: &tty.Mock{Terminal: false}},
+		"myprinter", "--yes")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Fatalf("expected exit 3, got %v", err)
+	}
+	for _, account := range []string{
+		"bambu-lan:myprinter:access-code",
+		"bambu-lan:myprinter:tls-fingerprint",
+	} {
+		if _, getErr := inner.Get(context.Background(), "polimero", account); getErr != nil {
+			t.Fatalf("secret %q was not restored: %v", account, getErr)
+		}
+	}
+	cfg, cfgErr := config.Open(dir)
+	if cfgErr != nil {
+		t.Fatal(cfgErr)
+	}
+	if _, ok := cfg.GetProfile("myprinter"); !ok {
+		t.Fatal("profile must remain when secret deletion fails")
+	}
+}
+
+func TestRemove_ConfigSaveFailureRestoresSecrets(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+
+	_, err := runRemoveCmd(t, dir, printer.RemoveDeps{
+		KC:       kc,
+		Prompter: &tty.Mock{Terminal: false},
+		SaveConfig: func(string, *config.Config) error {
+			return errors.New("disk unavailable")
+		},
+	}, "myprinter", "--yes")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("expected exit 1, got %v", err)
+	}
+	for _, account := range []string{
+		"bambu-lan:myprinter:access-code",
+		"bambu-lan:myprinter:tls-fingerprint",
+	} {
+		if _, getErr := kc.Get(context.Background(), "polimero", account); getErr != nil {
+			t.Fatalf("secret %q was not restored: %v", account, getErr)
+		}
+	}
+	cfg, cfgErr := config.Open(dir)
+	if cfgErr != nil {
+		t.Fatal(cfgErr)
+	}
+	if _, ok := cfg.GetProfile("myprinter"); !ok {
+		t.Fatal("profile must remain after config save failure")
 	}
 }
 
@@ -430,6 +497,26 @@ func (k *failingDeleteKeychain) Set(ctx context.Context, service, account, secre
 
 func (k *failingDeleteKeychain) Delete(context.Context, string, string) error {
 	return fmt.Errorf("dbus failure secret-token")
+}
+
+type accountFailingDeleteKeychain struct {
+	inner       *keychain.Mock
+	failAccount string
+}
+
+func (k *accountFailingDeleteKeychain) Get(ctx context.Context, service, account string) (string, error) {
+	return k.inner.Get(ctx, service, account)
+}
+
+func (k *accountFailingDeleteKeychain) Set(ctx context.Context, service, account, secret string) error {
+	return k.inner.Set(ctx, service, account, secret)
+}
+
+func (k *accountFailingDeleteKeychain) Delete(ctx context.Context, service, account string) error {
+	if account == k.failAccount {
+		return errors.New("delete failed")
+	}
+	return k.inner.Delete(ctx, service, account)
 }
 
 type trackingPrompter struct {
