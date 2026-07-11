@@ -13,27 +13,32 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Normalize line endings on Windows
         if: runner.os == 'Windows'
         shell: bash
         run: |
           git config --global core.autocrlf false
           git reset --hard HEAD
+
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
+
       - name: Install Linux FFmpeg deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libavcodec-dev libavutil-dev libswscale-dev
+
       - name: Install macOS FFmpeg deps
         if: runner.os == 'macOS'
         run: brew install pkg-config ffmpeg
+
       - name: Setup MSYS2 and FFmpeg deps
         if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
           path-type: inherit
           update: true
@@ -42,9 +47,11 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-ffmpeg
+
       - name: Run make ci (Unix)
         if: runner.os != 'Windows'
         run: make ci
+
       - name: Run make ci (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
