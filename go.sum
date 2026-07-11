@@ -1,7 +1,7 @@
 github.com/bluenviron/gortsplib/v5 v5.6.0 h1:pLEIifcDFRCTMjXyppmXoYBF5Z0ct9Kyc0DyjKrJqeg=
 github.com/bluenviron/gortsplib/v5 v5.6.0/go.mod h1:x2ULFBWPxZbuHjxNnGIBGr15O+/VB+p3TsJWQyshV50=
-github.com/bluenviron/mediacommon/v2 v2.9.0 h1:8gBeby10B/qD8ctnesKTHx3pgdsxiZcaQZe+RR6Djx4=
-github.com/bluenviron/mediacommon/v2 v2.9.0/go.mod h1:syqw4j2RmBCKZgUtGFtB/7gcnh1aaX8I3vd24+bgXWc=
+github.com/bluenviron/mediacommon/v2 v2.9.1 h1:GpNnZgBwAamQO9ZE+JbNkQo82N1Jh/koSSfg7mf6QQk=
+github.com/bluenviron/mediacommon/v2 v2.9.1/go.mod h1:jMf/OJDaJl02xRgkLM2zbidUHnDYqLnO1dMMveCmyyU=
 github.com/cenkalti/backoff v2.2.1+incompatible h1:tNowT99t7UNflLxfYYSlKYsBpXdEet03Pg2g16Swow4=
 github.com/cenkalti/backoff v2.2.1+incompatible/go.mod h1:90ReRw6GdpyfrHakVjL/QHaoyV4aDUVVkXQJJJ3NXXM=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=

@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/bluenviron/gortsplib/v5 v5.6.0
-	github.com/bluenviron/mediacommon/v2 v2.9.0
+	github.com/bluenviron/mediacommon/v2 v2.9.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/jlaffaye/ftp v0.2.1
