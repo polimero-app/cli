@@ -19,10 +19,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          args: --timeout=5m ./...
-
       - name: Install Linux FFmpeg deps
         if: runner.os == 'Linux'
         run: |
@@ -44,6 +40,10 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-ffmpeg
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          args: --timeout=5m ./...
 
       - name: Run make ci (Unix)
         if: runner.os != 'Windows'
