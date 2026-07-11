@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,10 @@ import (
 )
 
 func TestNewFileSink_CreatesFileWithPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not enforced on Windows")
+	}
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "trace.jsonl")
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -116,6 +117,10 @@ func TestSave_RoundTrip(t *testing.T) {
 }
 
 func TestSave_FilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not enforced on Windows")
+	}
+
 	dir := t.TempDir()
 	cfg, _ := config.Open(dir)
 	if err := config.Save(dir, cfg); err != nil {
@@ -160,6 +165,10 @@ func TestSave_RemovePreservesOthers(t *testing.T) {
 }
 
 func TestSave_ReadOnlyDir_ReturnsError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory chmod semantics differ on Windows")
+	}
+
 	dir := t.TempDir()
 	cfg, _ := config.Open(dir)
 	_ = cfg.AddProfile("test", config.Profile{

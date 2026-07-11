@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -601,6 +602,10 @@ func TestAdd_AuthFailure_ExitsCode3(t *testing.T) {
 }
 
 func TestAdd_AccessCodeFile_InsecurePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not enforced on Windows")
+	}
+
 	dir := t.TempDir()
 	codeFile := filepath.Join(dir, "code.txt")
 	if err := os.WriteFile(codeFile, []byte("secret"), 0644); err != nil { // group-readable

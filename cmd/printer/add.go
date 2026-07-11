@@ -455,7 +455,7 @@ func readAccessCodeFile(path string) (string, error) {
 	if info.Size() > 4096 {
 		return "", apperr.Newf(2, "--access-code-file %q exceeds 4 KiB limit", path)
 	}
-	if info.Mode().Perm()&0077 != 0 {
+	if accessCodeFileHasInsecurePermissions(info.Mode()) {
 		return "", apperr.Newf(2, "--access-code-file %q has insecure permissions: group or other access detected", path)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, 4097))
