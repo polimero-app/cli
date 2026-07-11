@@ -1,4 +1,4 @@
-.PHONY: help build release install clean fmt test test-race lint ci
+.PHONY: help build release install clean fmt test coverage test-race lint ci
 
 GO      ?= go
 BINARY  := polimero
@@ -118,6 +118,14 @@ test: ## Run tests
 		$(GO) test $$packages; \
 	else \
 		echo "no Go packages yet; skipping tests"; \
+	fi
+
+coverage: ## Run tests with coverage profile (output: coverage.out)
+	@packages="$$( $(GO) list ./... )"; \
+	if [ -n "$$packages" ]; then \
+		$(GO) test -coverprofile=coverage.out $$packages && $(GO) tool cover -func=coverage.out; \
+	else \
+		echo "no Go packages yet; skipping coverage"; \
 	fi
 
 test-race: ## Run tests with race detector
