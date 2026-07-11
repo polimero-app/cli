@@ -3,7 +3,7 @@ module github.com/polimero-app/cli
 go 1.26.4
 
 require (
-	github.com/bluenviron/gortsplib/v5 v5.6.0
+	github.com/bluenviron/gortsplib/v5 v5.6.1
 	github.com/bluenviron/mediacommon/v2 v2.9.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/grandcat/zeroconf v1.0.0
@@ -28,8 +28,8 @@ require (
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.16 // indirect
-	github.com/pion/sdp/v3 v3.0.18 // indirect
-	github.com/pion/srtp/v3 v3.0.11 // indirect
+	github.com/pion/sdp/v3 v3.0.19 // indirect
+	github.com/pion/srtp/v3 v3.0.12 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
