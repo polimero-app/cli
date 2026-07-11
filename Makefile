@@ -1,4 +1,4 @@
-.PHONY: help build release install clean fmt test coverage test-race lint ci
+.PHONY: help build release install clean fmt test coverage test-race lint govulncheck ci
 
 GO      ?= go
 BINARY  := polimero
@@ -143,6 +143,14 @@ lint: ## Run golangci-lint (skipped if not installed)
 		golangci-lint run ./...; \
 	else \
 		echo "golangci-lint not installed; skipping lint"; \
+	fi
+
+govulncheck: ## Run govulncheck on all Go packages
+	@packages="$$( $(GO) list ./... )"; \
+	if [ -n "$$packages" ]; then \
+		$(GO) run golang.org/x/vuln/cmd/govulncheck@latest $$packages; \
+	else \
+		echo "no Go packages yet; skipping govulncheck"; \
 	fi
 
 ci: fmt test test-race lint ## Run full CI suite (fmt + test + test-race + lint)
