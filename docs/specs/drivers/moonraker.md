@@ -85,6 +85,8 @@ Transport hardening:
 - HTTP redirects are not followed; a redirect response is treated as a failed
   request so the API key is never resent to another host and `https` cannot be
   silently downgraded.
+- JSON API responses are capped at 8 MiB; larger responses fail with a
+  sanitized error. File downloads stream and are not subject to the cap.
 
 Authentication:
 

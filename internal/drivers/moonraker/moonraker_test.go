@@ -229,6 +229,23 @@ func TestRequest_DoesNotFollowRedirect(t *testing.T) {
 	}
 }
 
+func TestRequestJSON_RejectsOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		big := strings.Repeat(" ", maxJSONResponseBytes)
+		_, _ = io.WriteString(w, `{"result":{}}`+big)
+	}))
+	defer srv.Close()
+
+	drv := New()
+	_, err := drv.ConnectCheck(context.Background(), testProfile(srv.URL), testSecrets())
+	if err == nil {
+		t.Fatal("expected error for oversized response")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("error = %v, want response-too-large", err)
+	}
+}
+
 func TestNormalizeBaseURL_SchemeValidation(t *testing.T) {
 	cases := []struct {
 		host    string

@@ -25,6 +25,11 @@ import (
 const (
 	driverName  = "moonraker"
 	defaultPort = "7125"
+
+	// maxJSONResponseBytes bounds JSON API response reads so a malicious or
+	// broken endpoint cannot exhaust memory. File downloads stream and are
+	// exempt.
+	maxJSONResponseBytes = 8 << 20
 )
 
 // Driver implements the Moonraker HTTP API.
@@ -441,7 +446,11 @@ func (d *Driver) requestJSON(ctx context.Context, p driver.ProfileInput, s drive
 		d.emitHTTPTrace(ctx, operation, req, start, nil, resp.StatusCode, "protocol_error")
 		return apperr.Newf(1, "moonraker request failed with status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJSONResponseBytes+1))
+	if err == nil && int64(len(body)) > maxJSONResponseBytes {
+		d.emitHTTPTrace(ctx, operation, req, start, nil, resp.StatusCode, "protocol_error")
+		return apperr.New(1, "moonraker response too large")
+	}
 	if err != nil {
 		d.emitHTTPTrace(ctx, operation, req, start, nil, resp.StatusCode, classifyTraceError(err))
 		return classifyHTTPError(err)
