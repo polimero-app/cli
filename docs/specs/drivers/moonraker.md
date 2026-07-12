@@ -77,6 +77,7 @@ HTTP(S) API with bounded request timeouts inherited from `context.Context`.
 Base URL rules:
 
 - If `host` includes scheme, use it as provided (`http://` or `https://`).
+- Any other scheme is rejected as a usage error (exit code `2`).
 - Otherwise default to `http://<host>:7125`.
 
 Transport hardening:

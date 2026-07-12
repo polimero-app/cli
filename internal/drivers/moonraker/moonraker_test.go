@@ -228,3 +228,32 @@ func TestRequest_DoesNotFollowRedirect(t *testing.T) {
 		t.Fatalf("error leaks API key: %v", err)
 	}
 }
+
+func TestNormalizeBaseURL_SchemeValidation(t *testing.T) {
+	cases := []struct {
+		host    string
+		want    string
+		wantErr bool
+	}{
+		{host: "printer.local", want: "http://printer.local:7125"},
+		{host: "http://printer.local:7125", want: "http://printer.local:7125"},
+		{host: "https://printer.local:443", want: "https://printer.local:443"},
+		{host: "ftp://printer.local", wantErr: true},
+		{host: "file:///etc/passwd", wantErr: true},
+	}
+	for _, tc := range cases {
+		got, err := normalizeBaseURL(tc.host)
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("normalizeBaseURL(%q) = %q, want error", tc.host, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("normalizeBaseURL(%q) error: %v", tc.host, err)
+		}
+		if got != tc.want {
+			t.Fatalf("normalizeBaseURL(%q) = %q, want %q", tc.host, got, tc.want)
+		}
+	}
+}

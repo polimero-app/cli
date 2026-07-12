@@ -569,6 +569,9 @@ func normalizeBaseURL(host string) (string, error) {
 	if err != nil {
 		return "", apperr.Newf(2, "invalid --host %q: %s", host, err)
 	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", apperr.Newf(2, "invalid --host %q: scheme must be http or https", host)
+	}
 	if u.Host == "" {
 		return "", apperr.Newf(2, "invalid --host %q", host)
 	}
