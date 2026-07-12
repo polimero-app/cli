@@ -79,6 +79,12 @@ Base URL rules:
 - If `host` includes scheme, use it as provided (`http://` or `https://`).
 - Otherwise default to `http://<host>:7125`.
 
+Transport hardening:
+
+- HTTP redirects are not followed; a redirect response is treated as a failed
+  request so the API key is never resent to another host and `https` cannot be
+  silently downgraded.
+
 Authentication:
 
 - Send `X-Api-Key: <access-code>` header on requests.

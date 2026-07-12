@@ -203,3 +203,28 @@ func TestFileDownload_EmitsProtocolTrace(t *testing.T) {
 		t.Fatalf("unexpected trace event: %+v", last)
 	}
 }
+
+func TestRequest_DoesNotFollowRedirect(t *testing.T) {
+	redirectTargetHit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/stolen" {
+			redirectTargetHit = true
+			_, _ = w.Write([]byte(`{"result":{}}`))
+			return
+		}
+		http.Redirect(w, r, "/stolen", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	drv := New()
+	_, err := drv.ConnectCheck(context.Background(), testProfile(srv.URL), testSecrets())
+	if err == nil {
+		t.Fatal("expected error for redirect response")
+	}
+	if redirectTargetHit {
+		t.Fatal("client followed redirect; X-Api-Key could leak to redirect target")
+	}
+	if strings.Contains(err.Error(), "secret-key") {
+		t.Fatalf("error leaks API key: %v", err)
+	}
+}

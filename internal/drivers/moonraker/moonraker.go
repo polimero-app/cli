@@ -34,7 +34,13 @@ type Driver struct {
 
 // New returns a moonraker driver.
 func New() *Driver {
-	return &Driver{client: &http.Client{}}
+	return &Driver{client: &http.Client{
+		// Redirects are refused: following one could resend X-Api-Key to a
+		// different host or silently downgrade https to http.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}}
 }
 
 func (d *Driver) Name() string { return driverName }
