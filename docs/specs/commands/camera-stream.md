@@ -82,7 +82,7 @@ The driver owns the TLS connection and returns an `io.ReadCloser` over the raw s
 | `mjpeg` | `multipart/x-mixed-replace; boundary=frame` |
 | `h264` | `video/h264` |
 
-The HTTP server binds to `127.0.0.1` only. It is not accessible from other hosts on the network.
+The HTTP server binds to `127.0.0.1` only. It is not accessible from other hosts on the network. Requests whose `Host` header does not name a loopback address (`localhost`, `127.0.0.1`, `::1`) are rejected with `403 Forbidden` to block DNS-rebinding access from web pages.
 
 ## Output
 

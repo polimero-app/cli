@@ -7,7 +7,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -122,6 +124,32 @@ func openStream(ctx context.Context, cmd *cobra.Command, nameArg, timeoutFlag st
 	return result, rp.name, nil
 }
 
+// requireLoopbackHost rejects requests whose Host header does not name a
+// loopback address. The server only listens on 127.0.0.1, but a DNS-rebinding
+// attack (a hostile domain resolving to 127.0.0.1) would otherwise let a web
+// page read the camera feed through the victim's browser.
+func requireLoopbackHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if !isLoopbackHost(host) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	return err == nil && ip.IsLoopback()
+}
+
 // streamHandler serves the single upstream camera feed to at most one HTTP
 // client at a time. The feed cannot be duplicated, so concurrent requests
 // receive 503 Service Unavailable until the active client disconnects.
@@ -182,7 +210,7 @@ func serve(cmd *cobra.Command, ctx context.Context, name string, port int, forma
 	mux.Handle("/stream", streamHandler(result.Stream, contentType))
 
 	srv := &http.Server{
-		Handler:     mux,
+		Handler:     requireLoopbackHost(mux),
 		ReadTimeout: 5 * time.Second,
 	}
 

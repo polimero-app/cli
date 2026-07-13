@@ -21,6 +21,32 @@ func TestStreamContentType_H264IsRawVideo(t *testing.T) {
 	}
 }
 
+func TestRequireLoopbackHost(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := requireLoopbackHost(ok)
+	cases := []struct {
+		host string
+		want int
+	}{
+		{"127.0.0.1:8080", http.StatusOK},
+		{"localhost:8080", http.StatusOK},
+		{"localhost", http.StatusOK},
+		{"[::1]:8080", http.StatusOK},
+		{"attacker.example.com", http.StatusForbidden},
+		{"attacker.example.com:8080", http.StatusForbidden},
+		{"192.0.2.7:8080", http.StatusForbidden},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/stream", nil)
+		req.Host = c.host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("Host %q: status = %d, want %d", c.host, rec.Code, c.want)
+		}
+	}
+}
+
 // blockingReader emits one chunk, then blocks until released, then returns EOF.
 type blockingReader struct {
 	once    sync.Once
