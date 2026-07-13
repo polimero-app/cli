@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -45,13 +48,15 @@ func connectRTSPSH264(tlsCfg *tls.Config, host, accessCode string, port int, tim
 	rtpDec *rtph264.Decoder,
 	err error,
 ) {
-	rtspURL := fmt.Sprintf("rtsps://%s:%s@%s:%d/streaming/live/1",
-		cameraUsername, accessCode, host, port)
-
-	u, err := base.ParseURL(rtspURL)
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("invalid RTSP URL: %w", err)
-	}
+	// Build the URL as a struct rather than parsing a formatted string:
+	// a parse error on a string URL would embed the access code in the
+	// returned error, and credentials in the User field need no escaping.
+	u := (*base.URL)(&url.URL{
+		Scheme: "rtsps",
+		User:   url.UserPassword(cameraUsername, accessCode),
+		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Path:   "/streaming/live/1",
+	})
 
 	proto := gortsplib.ProtocolTCP
 	c := &gortsplib.Client{
