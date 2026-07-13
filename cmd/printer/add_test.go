@@ -529,6 +529,23 @@ func TestAdd_EmptyAccessCodeRejected(t *testing.T) {
 	}
 }
 
+func TestAdd_ControlCharAccessCodeRejected(t *testing.T) {
+	for _, code := range []string{"pass\r\nDELE evil", "code\x00", "code\x1b[31m"} {
+		dir := t.TempDir()
+		kc := keychain.NewMock()
+		p := &tty.Mock{Terminal: true, HiddenVal: code}
+		_, err := runAddCmd(t, dir, defaultAddDeps(kc, p),
+			"myprinter", "--driver", "bambu-lan", "--host", "192.0.2.10", "--serial", "SN001", "--insecure")
+		var exitErr *apperr.ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+			t.Errorf("expected exit 2 for control chars in access code %q, got %v", code, err)
+		}
+		if _, err := kc.Get(context.Background(), "polimero", "bambu-lan:myprinter:access-code"); err == nil {
+			t.Errorf("access code %q with control chars should not be stored", code)
+		}
+	}
+}
+
 func TestAdd_ConnectivityFailure_ExitsCode4(t *testing.T) {
 	dir := t.TempDir()
 	kc := keychain.NewMock()

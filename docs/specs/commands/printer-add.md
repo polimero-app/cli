@@ -86,6 +86,7 @@ Enter access code for <name>:
 - One trailing `\n` or `\r\n` is trimmed.
 - Other leading or trailing whitespace is preserved.
 - Empty access-code input after trailing newline trimming is rejected.
+- Access codes containing control characters (C0 controls or DEL) are rejected with exit code `2`, regardless of input source. This prevents CR/LF smuggling into line-based protocols (for example FTP authentication) and escape-sequence injection into terminal output.
 - The path may be shown in diagnostics, but file contents must never be logged or printed.
 
 Keychain entries written by this command:

@@ -176,6 +176,9 @@ func doAdd(cmd *cobra.Command, ctx context.Context, nameArg, driverName, host, s
 	if accessCode == "" {
 		return apperr.New(2, "access code must not be empty")
 	}
+	if err := validateAccessCode(accessCode); err != nil {
+		return err
+	}
 
 	kcAcct := fmt.Sprintf("%s:%s:access-code", driverName, name)
 	kcFpAcct := fmt.Sprintf("%s:%s:tls-fingerprint", driverName, name)
@@ -478,4 +481,16 @@ func trimTrailingNewline(s string) string {
 		return s[:len(s)-1]
 	}
 	return s
+}
+
+// validateAccessCode rejects access codes containing control characters,
+// which could be smuggled into line-based protocols (e.g. an embedded CRLF
+// injecting commands after FTP PASS) or into terminal output.
+func validateAccessCode(code string) error {
+	for _, r := range code {
+		if r < 0x20 || r == 0x7f {
+			return apperr.New(2, "access code must not contain control characters")
+		}
+	}
+	return nil
 }

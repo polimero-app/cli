@@ -45,6 +45,7 @@ Requirements:
 - Owner-only permissions where POSIX-like modes are available.
 - Trim one trailing newline.
 - Preserve other whitespace.
+- Reject access codes containing control characters (C0 controls or DEL); an embedded CR/LF could otherwise be smuggled into line-based protocols such as FTP authentication. This applies to prompted input as well.
 - Never log file contents.
 
 Command-line secret flags such as `--access-code` are prohibited.
