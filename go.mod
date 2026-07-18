@@ -8,7 +8,7 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/jlaffaye/ftp v0.2.1
-	github.com/pion/rtp v1.10.3
+	github.com/pion/rtp v1.10.4
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/net v0.57.0
