@@ -34,7 +34,7 @@ release: ## Build release binaries into ./dist
 		goarch="$${target#*/}"; \
 		ext=""; \
 		if [ "$$goos" = "windows" ]; then ext=".exe"; fi; \
-		out="dist/$(BINARY)_$${goos}_$${goarch}$$ext"; \
+		out="dist/$(BINARY)-$${goos}-$${goarch}$$ext"; \
 		echo "building $$target -> $$out"; \
 		cc_bin="$$CC"; \
 		if [ -z "$$cc_bin" ] && [ "$$goos/$$goarch" != "$$host_os/$$host_arch" ]; then \
