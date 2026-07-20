@@ -2,23 +2,29 @@ package bambulan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
+	"strconv"
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
 )
 
-// FanSet sends M106 G-code to set a fan speed and waits for a full status
-// report to confirm the command was accepted.
+// fanAckTolerancePercent absorbs Bambu's fan speed quantization. The printer
+// reports fan speeds on a 0-15 gear scale, so a requested percentage echoes
+// back rounded to the nearest gear step (~6.7%); half a step plus integer
+// rounding is at most 4 points.
+const fanAckTolerancePercent = 4
+
+// FanSet sends M106 G-code to set a fan speed and waits for a status report
+// that echoes the requested speed on the requested fan.
 func (d *Driver) FanSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, target driver.FanTarget) (driver.FanControlResult, error) {
-	// Validate capability and fan key
 	if !d.Capabilities().FanControl {
 		return driver.FanControlResult{}, apperr.New(5, "fan control is not supported by this printer")
 	}
 
-	// Validate fan key is supported
 	fanGcode, supported := fanKeyToGcode(target.Fan)
 	if !supported {
 		return driver.FanControlResult{}, apperr.New(5, fmt.Sprintf("unsupported fan key: %s", target.Fan))
@@ -33,30 +39,58 @@ func (d *Driver) FanSet(ctx context.Context, p driver.ProfileInput, s driver.Sec
 		return driver.FanControlResult{}, apperr.Wrap(4, "failed to build fan command", err)
 	}
 
-	data, err := d.mqttCommand(ctx, p, s, payload, isPushallReport)
+	// Acknowledgment: a report whose fan reading echoes the requested speed
+	// within gear-quantization tolerance. A full report that lacks the fan key
+	// means the connected model does not expose that fan; stop and report
+	// unsupported instead of waiting for an echo that can never arrive.
+	unsupportedOnModel := false
+	predicate := func(data []byte) bool {
+		status, perr := parseReport(data)
+		if perr != nil || status == nil {
+			return false
+		}
+		got, present := status.Fans[target.Fan]
+		if present {
+			return absInt(got-target.SpeedPercent) <= fanAckTolerancePercent
+		}
+		if isPushallReport(data) {
+			unsupportedOnModel = true
+			return true
+		}
+		return false // delta report without fan fields; keep waiting
+	}
+
+	data, err := d.mqttCommand(ctx, p, s, payload, predicate)
+	if err != nil {
+		return driver.FanControlResult{}, err
+	}
+	if unsupportedOnModel {
+		return driver.FanControlResult{}, apperr.New(5, fmt.Sprintf("fan %q is not available on this printer model", target.Fan))
+	}
+
+	status, err := parseReport(data)
 	if err != nil {
 		return driver.FanControlResult{}, err
 	}
 
-	_, err = parseReport(data)
-	if err != nil {
-		return driver.FanControlResult{}, err
+	warnings := status.Warnings
+	if warnings == nil {
+		warnings = []driver.StatusWarning{}
 	}
 
-	// ponytail: driver doesn't read back fan PWM from status (Bambu doesn't expose it).
-	// Success is a fresh pushall report post-command; we echo back the requested speed.
+	// The echo is quantized to gear steps, so report the requested percentage
+	// once it is confirmed within tolerance.
 	return driver.FanControlResult{
 		Fan:          target.Fan,
 		SpeedPercent: target.SpeedPercent,
-		Warnings:     []driver.StatusWarning{},
+		Warnings:     warnings,
 		Capabilities: d.Capabilities(),
 	}, nil
 }
 
-// LightSet sends M960 G-code to control a light and waits for a full status
-// report where lights_report[] contains the matching state.
+// LightSet sends M960 G-code to control the chamber light and waits for a
+// status report where lights_report shows the requested state.
 func (d *Driver) LightSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, target driver.LightTarget) (driver.LightControlResult, error) {
-	// Validate capability and light key
 	if !d.Capabilities().LightControl {
 		return driver.LightControlResult{}, apperr.New(5, "light control is not supported by this printer")
 	}
@@ -65,7 +99,6 @@ func (d *Driver) LightSet(ctx context.Context, p driver.ProfileInput, s driver.S
 		return driver.LightControlResult{}, apperr.New(5, fmt.Sprintf("unsupported light key: %s", target.Light))
 	}
 
-	// Build M960 command based on state
 	var gcode string
 	if target.State == driver.LightStateOn {
 		gcode = "M960 S1\n"
@@ -78,7 +111,18 @@ func (d *Driver) LightSet(ctx context.Context, p driver.ProfileInput, s driver.S
 		return driver.LightControlResult{}, apperr.Wrap(4, "failed to build light command", err)
 	}
 
-	data, err := d.mqttCommand(ctx, p, s, payload, isPushallReport)
+	// Acknowledgment: a report whose lights_report contains the chamber light
+	// in the requested state.
+	wantMode := string(target.State)
+	predicate := func(data []byte) bool {
+		status, perr := parseReport(data)
+		if perr != nil || status == nil {
+			return false
+		}
+		return status.Lights["chamber_light"] == wantMode
+	}
+
+	data, err := d.mqttCommand(ctx, p, s, payload, predicate)
 	if err != nil {
 		return driver.LightControlResult{}, err
 	}
@@ -88,55 +132,87 @@ func (d *Driver) LightSet(ctx context.Context, p driver.ProfileInput, s driver.S
 		return driver.LightControlResult{}, err
 	}
 
-	// Verify lights_report[] reflects the requested state
-	// ponytail: report doesn't always include lights_report, but we got a pushall.
-	// If it's absent, trust that the command was accepted (same pattern as fan).
+	warnings := status.Warnings
+	if warnings == nil {
+		warnings = []driver.StatusWarning{}
+	}
 
 	return driver.LightControlResult{
 		Light:        "chamber",
 		State:        target.State,
-		Warnings:     status.Warnings,
+		Warnings:     warnings,
 		Capabilities: d.Capabilities(),
 	}, nil
 }
 
-// SpeedSet sends M220 G-code to set a print speed profile and waits for a
-// full status report to confirm the command was accepted.
+// SpeedSet sends the Bambu print_speed command to select a speed level and
+// waits for a status report where spd_lvl echoes the requested level.
 func (d *Driver) SpeedSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, profile string) (driver.SpeedControlResult, error) {
-	// Validate capability and profile
 	if !d.Capabilities().SpeedControl {
 		return driver.SpeedControlResult{}, apperr.New(5, "speed control is not supported by this printer")
 	}
 
-	speedPercent, supported := speedProfileToPercent(profile)
+	level, supported := speedProfileToLevel(profile)
 	if !supported {
 		return driver.SpeedControlResult{}, apperr.New(5, fmt.Sprintf("unsupported speed profile: %s", profile))
 	}
 
-	gcode := fmt.Sprintf("M220 S%d\n", speedPercent)
-
-	payload, err := buildGcodeLinePayload(gcode)
+	payload, err := buildPrintSpeedPayload(level)
 	if err != nil {
 		return driver.SpeedControlResult{}, apperr.Wrap(4, "failed to build speed command", err)
 	}
 
-	data, err := d.mqttCommand(ctx, p, s, payload, isPushallReport)
+	// Acknowledgment: a report whose spd_lvl maps back to the requested profile.
+	predicate := func(data []byte) bool {
+		status, perr := parseReport(data)
+		if perr != nil || status == nil {
+			return false
+		}
+		return status.SpeedLevel != nil && *status.SpeedLevel == profile
+	}
+
+	data, err := d.mqttCommand(ctx, p, s, payload, predicate)
 	if err != nil {
 		return driver.SpeedControlResult{}, err
 	}
 
-	_, err = parseReport(data)
+	status, err := parseReport(data)
 	if err != nil {
 		return driver.SpeedControlResult{}, err
 	}
 
-	// ponytail: driver doesn't verify speed level bits in home_flag from status.
-	// Success is a fresh pushall report post-command; we echo back the profile.
+	warnings := status.Warnings
+	if warnings == nil {
+		warnings = []driver.StatusWarning{}
+	}
+
 	return driver.SpeedControlResult{
 		SpeedProfile: profile,
-		Warnings:     []driver.StatusWarning{},
+		Warnings:     warnings,
 		Capabilities: d.Capabilities(),
 	}, nil
+}
+
+// buildPrintSpeedPayload constructs the Bambu print_speed MQTT payload JSON.
+func buildPrintSpeedPayload(level int) (string, error) {
+	type printSpeedCmd struct {
+		SequenceID string `json:"sequence_id"`
+		Command    string `json:"command"`
+		Param      string `json:"param"`
+	}
+	type payload struct {
+		Print printSpeedCmd `json:"print"`
+	}
+	pl := payload{Print: printSpeedCmd{
+		SequenceID: nextSequenceID(),
+		Command:    "print_speed",
+		Param:      strconv.Itoa(level),
+	}}
+	b, err := json.Marshal(pl)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // fanKeyToGcode maps a canonical fan key to its M106 G-code prefix.
@@ -154,19 +230,21 @@ func fanKeyToGcode(fan string) (string, bool) {
 	}
 }
 
-// speedProfileToPercent maps a speed profile to its M220 S percentage.
-// Returns (percent, supported).
-func speedProfileToPercent(profile string) (int, bool) {
-	switch profile {
-	case "silent":
-		return 20, true
-	case "standard":
-		return 100, true
-	case "sport":
-		return 150, true
-	case "ludicrous":
-		return 300, true
-	default:
-		return 0, false
+// speedProfileToLevel maps a portable speed profile to the Bambu print_speed
+// level, the inverse of bambuSpeedLevels used for status mapping.
+// Returns (level, supported).
+func speedProfileToLevel(profile string) (int, bool) {
+	for level, name := range bambuSpeedLevels {
+		if name == profile {
+			return level, true
+		}
 	}
+	return 0, false
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }

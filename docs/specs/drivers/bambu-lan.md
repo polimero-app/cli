@@ -241,9 +241,9 @@ Firmware with command-signature enforcement may reject unsigned `print` commands
 
 Percent conversion: speed = round(percent × 255 / 100), clamped to 0–255.
 
-Supported on all initial families (X1, P1, A1, H2) for `partCooling`. Model-specific variants (`auxiliary`, `chamber`) return `unsupported_capability` when unavailable.
+Supported on all initial families (X1, P1, A1, H2) for `partCooling`. Model-specific variants (`auxiliary`, `chamber`) return `unsupported_capability` when unavailable: if a full status report does not contain the requested fan's speed field (`cooling_fan_speed`, `big_fan1_speed`, `big_fan2_speed`), the driver stops and fails with exit code `5`.
 
-The driver waits for a full status report. Acknowledgment is NOT speed echo (Bambu does not report fan PWM targets in status); confirmation is receipt of a fresh status report post-command.
+Acknowledgment: the driver waits, bounded by the command timeout, for a status report (full or delta) whose reading for the requested fan echoes the requested percentage. Bambu reports fan speeds on a 0–15 gear scale, so the echo is quantized; the driver accepts an echo within 4 percentage points and reports the requested percentage on success. No matching echo before the timeout fails with exit code `4`.
 
 #### Light Control
 
@@ -254,24 +254,22 @@ The driver waits for a full status report. Acknowledgment is NOT speed echo (Bam
 | `chamber` | `M960 S0` | Chamber light off |
 | `chamber` | `M960 S1` | Chamber light on |
 
-The driver waits for a full status report. Acknowledgment is a fresh full status report where `lights_report[]` contains an entry with `node == "chamber_light"` and `mode` matching the requested state (`off` or `on`).
+The driver waits, bounded by the command timeout, for a status report (full or delta) where `lights_report[]` contains an entry with `node == "chamber_light"` and `mode` matching the requested state (`off` or `on`). No matching entry before the timeout fails with exit code `4`.
 
 Supported on all initial families for chamber light.
 
 #### Speed Control
 
-`speed set` publishes `print.command: "gcode_line"` with M220 G-code:
+`speed set` publishes `print.command: "print_speed"` with the speed level as the string `param`, the same command Bambu's own tooling uses:
 
-| Profile | G-code | Notes |
+| Profile | `param` | Notes |
 |---|---|---|
-| `silent` | `M220 S20` | 20% speed (slowest, quietest) |
-| `standard` | `M220 S100` | 100% speed (normal, balanced) |
-| `sport` | `M220 S150` | 150% speed (faster) |
-| `ludicrous` | `M220 S300` | 300% speed (fastest) |
+| `silent` | `1` | Slowest, quietest |
+| `standard` | `2` | Normal, balanced |
+| `sport` | `3` | Faster |
+| `ludicrous` | `4` | Fastest |
 
-Drivers may define additional profiles. The portable speed profiles map to percentage G-code values (S parameter).
-
-The driver waits for a full status report. Acknowledgment happens when a fresh full status report is observed where the speed-level bits in `home_flag` (bits 8–10) match the active print speed level corresponding to the requested profile.
+Acknowledgment: the driver waits, bounded by the command timeout, for a status report (full or delta) where `spd_lvl` echoes the requested level. This is the same field the status mapping uses for `speedLevel`. No matching echo before the timeout fails with exit code `4`.
 
 Supported on all initial families while printing or paused.
 

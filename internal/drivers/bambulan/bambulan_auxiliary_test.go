@@ -6,15 +6,34 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
 )
 
+// auxPushall returns a pushall-style report with extra fields spliced into the
+// print object, e.g. `"cooling_fan_speed":"9"`.
+func auxPushall(gcodeState, extraFields string) []byte {
+	fields := `"gcode_state":"` + gcodeState + `","hms":[]`
+	if extraFields != "" {
+		fields += "," + extraFields
+	}
+	return []byte(`{"print":{` + fields + `}}`)
+}
+
+func shortCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	t.Cleanup(cancel)
+	return ctx
+}
+
 // FanSet tests
 
-func TestFanSet_PartCooling_Success(t *testing.T) {
-	response := pushallResponse("IDLE")
+func TestFanSet_PartCooling_EchoConfirms(t *testing.T) {
+	// gear 9 -> 9*100/15 = 60%
+	response := auxPushall("IDLE", `"cooling_fan_speed":"9"`)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 
@@ -31,15 +50,14 @@ func TestFanSet_PartCooling_Success(t *testing.T) {
 		t.Errorf("expected speedPercent=60, got %d", result.SpeedPercent)
 	}
 
-	// Check that M106 S<pwm> was sent (60% = ~153 PWM)
 	pubs := fc.getPublished()
-	if !strings.Contains(pubs[0], "M106 S") {
-		t.Errorf("expected M106 S command, got: %s", pubs[0])
+	if !strings.Contains(pubs[0], "M106 S153") {
+		t.Errorf("expected M106 S153 command, got: %s", pubs[0])
 	}
 }
 
-func TestFanSet_Auxiliary_Success(t *testing.T) {
-	response := pushallResponse("IDLE")
+func TestFanSet_Auxiliary_EchoConfirms(t *testing.T) {
+	response := auxPushall("IDLE", `"big_fan1_speed":"15"`)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 
@@ -53,15 +71,15 @@ func TestFanSet_Auxiliary_Success(t *testing.T) {
 		t.Errorf("expected fan=auxiliary, got %q", result.Fan)
 	}
 
-	// Check that M106 P2 S255 was sent
 	pubs := fc.getPublished()
 	if !strings.Contains(pubs[0], "M106 P2 S255") {
 		t.Errorf("expected M106 P2 S255, got: %s", pubs[0])
 	}
 }
 
-func TestFanSet_Chamber_Success(t *testing.T) {
-	response := pushallResponse("IDLE")
+func TestFanSet_Chamber_EchoWithinGearTolerance(t *testing.T) {
+	// Request 50%; gear 8 echoes as 8*100/15 = 53%, within tolerance.
+	response := auxPushall("IDLE", `"big_fan2_speed":"8"`)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 
@@ -71,11 +89,10 @@ func TestFanSet_Chamber_Success(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if result.Fan != "chamber" {
-		t.Errorf("expected fan=chamber, got %q", result.Fan)
+	if result.SpeedPercent != 50 {
+		t.Errorf("expected requested speedPercent=50 reported, got %d", result.SpeedPercent)
 	}
 
-	// Check that M106 P3 S<pwm> was sent
 	pubs := fc.getPublished()
 	if !strings.Contains(pubs[0], "M106 P3 S") {
 		t.Errorf("expected M106 P3 S command, got: %s", pubs[0])
@@ -83,7 +100,7 @@ func TestFanSet_Chamber_Success(t *testing.T) {
 }
 
 func TestFanSet_ZeroPercent(t *testing.T) {
-	response := pushallResponse("IDLE")
+	response := auxPushall("IDLE", `"cooling_fan_speed":"0"`)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 
@@ -100,6 +117,60 @@ func TestFanSet_ZeroPercent(t *testing.T) {
 	pubs := fc.getPublished()
 	if !strings.Contains(pubs[0], "M106 S0") {
 		t.Errorf("expected M106 S0, got: %s", pubs[0])
+	}
+}
+
+func TestFanSet_DeltaReportEchoConfirms(t *testing.T) {
+	// Delta report (no gcode_state) carrying the fan echo must be accepted:
+	// P1/A1 printers push value changes as deltas.
+	delta := []byte(`{"print":{"cooling_fan_speed":"9"}}`)
+	fc := &fakeCommandClient{responses: [][]byte{nil, delta}}
+	drv := newCommandDriver(fc)
+
+	target := driver.FanTarget{Fan: "partCooling", SpeedPercent: 60}
+	result, err := drv.FanSet(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), target)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SpeedPercent != 60 {
+		t.Errorf("expected speedPercent=60, got %d", result.SpeedPercent)
+	}
+}
+
+func TestFanSet_FanMissingFromFullReport_Unsupported(t *testing.T) {
+	// A full report without the requested fan key means the model does not
+	// expose that fan: exit code 5, not a timeout.
+	response := auxPushall("IDLE", `"cooling_fan_speed":"0"`)
+	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
+	drv := newCommandDriver(fc)
+
+	target := driver.FanTarget{Fan: "chamber", SpeedPercent: 50}
+	_, err := drv.FanSet(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), target)
+	if err == nil {
+		t.Fatal("expected error for fan unavailable on model")
+	}
+
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
+		t.Errorf("expected exit code 5, got %v", err)
+	}
+}
+
+func TestFanSet_NoEcho_TimesOut(t *testing.T) {
+	// Fan present but stuck at the old speed: no acknowledgment, exit code 4.
+	response := auxPushall("IDLE", `"cooling_fan_speed":"0"`)
+	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
+	drv := newCommandDriver(fc)
+
+	target := driver.FanTarget{Fan: "partCooling", SpeedPercent: 60}
+	_, err := drv.FanSet(shortCtx(t), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), target)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit code 4, got %v", err)
 	}
 }
 
@@ -137,8 +208,8 @@ func TestFanSet_ConnectFails(t *testing.T) {
 
 // LightSet tests
 
-func TestLightSet_ChamberOn_Success(t *testing.T) {
-	response := pushallResponse("IDLE")
+func TestLightSet_ChamberOn_EchoConfirms(t *testing.T) {
+	response := auxPushall("IDLE", `"lights_report":[{"node":"chamber_light","mode":"on"}]`)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 
@@ -155,15 +226,14 @@ func TestLightSet_ChamberOn_Success(t *testing.T) {
 		t.Errorf("expected state=on, got %q", result.State)
 	}
 
-	// Check that M960 S1 was sent
 	pubs := fc.getPublished()
 	if !strings.Contains(pubs[0], "M960 S1") {
 		t.Errorf("expected M960 S1, got: %s", pubs[0])
 	}
 }
 
-func TestLightSet_ChamberOff_Success(t *testing.T) {
-	response := pushallResponse("IDLE")
+func TestLightSet_ChamberOff_EchoConfirms(t *testing.T) {
+	response := auxPushall("IDLE", `"lights_report":[{"node":"chamber_light","mode":"off"}]`)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 
@@ -177,10 +247,27 @@ func TestLightSet_ChamberOff_Success(t *testing.T) {
 		t.Errorf("expected state=off, got %q", result.State)
 	}
 
-	// Check that M960 S0 was sent
 	pubs := fc.getPublished()
 	if !strings.Contains(pubs[0], "M960 S0") {
 		t.Errorf("expected M960 S0, got: %s", pubs[0])
+	}
+}
+
+func TestLightSet_WrongStateEcho_TimesOut(t *testing.T) {
+	// Report shows the opposite state: no acknowledgment, exit code 4.
+	response := auxPushall("IDLE", `"lights_report":[{"node":"chamber_light","mode":"off"}]`)
+	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
+	drv := newCommandDriver(fc)
+
+	target := driver.LightTarget{Light: "chamber", State: driver.LightStateOn}
+	_, err := drv.LightSet(shortCtx(t), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), target)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit code 4, got %v", err)
 	}
 }
 
@@ -218,79 +305,54 @@ func TestLightSet_ConnectFails(t *testing.T) {
 
 // SpeedSet tests
 
-func TestSpeedSet_Silent_Success(t *testing.T) {
-	response := pushallResponse("PRINTING")
-	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
-	drv := newCommandDriver(fc)
-
-	result, err := drv.SpeedSet(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), "silent")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestSpeedSet_AllProfiles_EchoConfirms(t *testing.T) {
+	cases := []struct {
+		profile string
+		level   string
+	}{
+		{"silent", "1"},
+		{"standard", "2"},
+		{"sport", "3"},
+		{"ludicrous", "4"},
 	}
 
-	if result.SpeedProfile != "silent" {
-		t.Errorf("expected profile=silent, got %q", result.SpeedProfile)
-	}
+	for _, tc := range cases {
+		response := auxPushall("PRINTING", `"spd_lvl":"`+tc.level+`"`)
+		fc := &fakeCommandClient{responses: [][]byte{nil, response}}
+		drv := newCommandDriver(fc)
 
-	pubs := fc.getPublished()
-	if !strings.Contains(pubs[0], "M220 S20") {
-		t.Errorf("expected M220 S20, got: %s", pubs[0])
-	}
-}
+		result, err := drv.SpeedSet(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), tc.profile)
+		if err != nil {
+			t.Fatalf("SpeedSet(%s): unexpected error: %v", tc.profile, err)
+		}
 
-func TestSpeedSet_Standard_Success(t *testing.T) {
-	response := pushallResponse("PRINTING")
-	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
-	drv := newCommandDriver(fc)
+		if result.SpeedProfile != tc.profile {
+			t.Errorf("SpeedSet(%s): got profile %q", tc.profile, result.SpeedProfile)
+		}
 
-	result, err := drv.SpeedSet(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), "standard")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result.SpeedProfile != "standard" {
-		t.Errorf("expected profile=standard, got %q", result.SpeedProfile)
-	}
-
-	pubs := fc.getPublished()
-	if !strings.Contains(pubs[0], "M220 S100") {
-		t.Errorf("expected M220 S100, got: %s", pubs[0])
+		pubs := fc.getPublished()
+		if !strings.Contains(pubs[0], `"command":"print_speed"`) {
+			t.Errorf("SpeedSet(%s): expected print_speed command, got: %s", tc.profile, pubs[0])
+		}
+		if !strings.Contains(pubs[0], `"param":"`+tc.level+`"`) {
+			t.Errorf("SpeedSet(%s): expected param %s, got: %s", tc.profile, tc.level, pubs[0])
+		}
 	}
 }
 
-func TestSpeedSet_Sport_Success(t *testing.T) {
-	response := pushallResponse("PAUSED")
+func TestSpeedSet_WrongLevelEcho_TimesOut(t *testing.T) {
+	response := auxPushall("PRINTING", `"spd_lvl":"2"`)
 	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 	drv := newCommandDriver(fc)
 
-	_, err := drv.SpeedSet(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), "sport")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := drv.SpeedSet(shortCtx(t), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), "sport")
+	if err == nil {
+		t.Fatal("expected timeout error")
 	}
 
-	pubs := fc.getPublished()
-	if !strings.Contains(pubs[0], "M220 S150") {
-		t.Errorf("expected M220 S150, got: %s", pubs[0])
-	}
-}
-
-func TestSpeedSet_Ludicrous_Success(t *testing.T) {
-	response := pushallResponse("PRINTING")
-	fc := &fakeCommandClient{responses: [][]byte{nil, response}}
-	drv := newCommandDriver(fc)
-
-	result, err := drv.SpeedSet(context.Background(), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), "ludicrous")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result.SpeedProfile != "ludicrous" {
-		t.Errorf("expected profile=ludicrous, got %q", result.SpeedProfile)
-	}
-
-	pubs := fc.getPublished()
-	if !strings.Contains(pubs[0], "M220 S300") {
-		t.Errorf("expected M220 S300, got: %s", pubs[0])
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit code 4, got %v", err)
 	}
 }
 
@@ -349,26 +411,26 @@ func TestFanKeyToGcode_AllKeys(t *testing.T) {
 	}
 }
 
-func TestSpeedProfileToPercent_AllProfiles(t *testing.T) {
+func TestSpeedProfileToLevel_AllProfiles(t *testing.T) {
 	cases := []struct {
 		profile string
-		percent int
+		level   int
 		ok      bool
 	}{
-		{"silent", 20, true},
-		{"standard", 100, true},
-		{"sport", 150, true},
-		{"ludicrous", 300, true},
+		{"silent", 1, true},
+		{"standard", 2, true},
+		{"sport", 3, true},
+		{"ludicrous", 4, true},
 		{"unknown", 0, false},
 	}
 
 	for _, tc := range cases {
-		percent, ok := speedProfileToPercent(tc.profile)
+		level, ok := speedProfileToLevel(tc.profile)
 		if ok != tc.ok {
-			t.Errorf("speedProfileToPercent(%q): got ok=%v, want %v", tc.profile, ok, tc.ok)
+			t.Errorf("speedProfileToLevel(%q): got ok=%v, want %v", tc.profile, ok, tc.ok)
 		}
-		if ok && percent != tc.percent {
-			t.Errorf("speedProfileToPercent(%q): got %d, want %d", tc.profile, percent, tc.percent)
+		if ok && level != tc.level {
+			t.Errorf("speedProfileToLevel(%q): got %d, want %d", tc.profile, level, tc.level)
 		}
 	}
 }
@@ -376,16 +438,17 @@ func TestSpeedProfileToPercent_AllProfiles(t *testing.T) {
 func TestFanSet_PercentToPWMConversion(t *testing.T) {
 	cases := []struct {
 		percent  int
+		echoGear string // printer-side gear echo: round(percent*15/100)
 		expected string // substring to find in command
 	}{
-		{0, "M106 S0"},
-		{50, "M106 S127"}, // round(50 * 255 / 100) = 128, but rounding varies
-		{100, "M106 S255"},
-		{25, "M106 S64"}, // round(25 * 255 / 100) = 64
+		{0, "0", "M106 S0"},
+		{50, "8", "M106 S128"},
+		{100, "15", "M106 S255"},
+		{25, "4", "M106 S64"},
 	}
 
 	for _, tc := range cases {
-		response := pushallResponse("IDLE")
+		response := auxPushall("IDLE", `"cooling_fan_speed":"`+tc.echoGear+`"`)
 		fc := &fakeCommandClient{responses: [][]byte{nil, response}}
 		drv := newCommandDriver(fc)
 
@@ -397,8 +460,7 @@ func TestFanSet_PercentToPWMConversion(t *testing.T) {
 
 		pubs := fc.getPublished()
 		if !strings.Contains(pubs[0], tc.expected) {
-			// Be lenient with rounding: check if PWM is within 1 of expected
-			t.Logf("FanSet(%d%%): got %s, expected substring %s (may differ due to rounding)", tc.percent, pubs[0], tc.expected)
+			t.Errorf("FanSet(%d%%): got %s, expected substring %s", tc.percent, pubs[0], tc.expected)
 		}
 	}
 }
