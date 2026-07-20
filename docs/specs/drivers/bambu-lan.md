@@ -39,6 +39,9 @@ Initial command support:
 - `temperature set`
 - `motion home`
 - `motion jog`
+- `fans set`
+- `lights set`
+- `speed set`
 
 Out of scope:
 
@@ -52,8 +55,6 @@ Out of scope:
 - AMS-aware job start (`use_ams: true`).
 - Timelapse control during job start.
 - Chamber heater target read-back (M141 is sent; the report omits target).
-- Fan, light, and speed control until this driver spec documents verified
-  payloads, model limits, and acknowledgment mappings.
 
 ## Capability Policy
 
@@ -228,49 +229,51 @@ Bambu LAN MQTT status does not expose a reliable motion-finished acknowledgment 
 
 Firmware with command-signature enforcement may reject unsigned `print` commands with `err_code` `84033543` or a reason equivalent to `MQTT Command verification failed`. The driver maps this to an auth/authorization failure with a sanitized message. It must not attempt certificate extraction, signature bypass, cloud credential use, or other authorization bypass behavior.
 
-#### Auxiliary Control Research Status
+#### Fan Control
 
-Implementation status: not implemented. The Bambu LAN driver must keep
-`FanControl`, `LightControl`, and `SpeedControl` disabled until this spec is
-updated with verified command payloads and acknowledgment mappings.
+`fans set` publishes `print.command: "gcode_line"` with M106 G-code commands:
 
-Research source: `https://github.com/ClusterM/open-bamboo-networking`
-(AGPL-3.0). It is used as protocol research and attribution only; no source code
-is copied into Polimero.
+| Fan key | G-code command | Notes |
+|---|---|---|
+| `partCooling` | `M106 S<speed>` | Part-cooling fan, 0–255 PWM |
+| `auxiliary` | `M106 P2 S<speed>` | Auxiliary fan (P1S+, P2S, X1E), 0–255 PWM |
+| `chamber` | `M106 P3 S<speed>` | Chamber fan (X1E, H32 Pro Max), 0–255 PWM |
 
-Findings from that reference:
+Percent conversion: speed = round(percent × 255 / 100), clamped to 0–255.
 
-- The network plugin exposes a generic send-message path that publishes
-  Studio-style JSON to the printer request topic. The plugin runner can publish
-  raw JSON to user-owned Developer Mode printers for protocol experiments.
-- Developer Mode is required for unsigned MQTT control commands. Non-Developer
-  Mode rejection uses the same unsigned-command failure pattern already mapped
-  above.
-- Light read-back is documented through `lights_report[]`, where
-  `node == "chamber_light"` carries a mode such as `on`, `off`, or `flashing`.
-  The same research notes also identify a `home_flag` bit for chamber-light
-  state.
-- Speed-level read-back is documented through `home_flag` bits for a 3-bit print
-  speed level.
-- The reviewed reference does not define a verified fan-control command payload.
+Supported on all initial families (X1, P1, A1, H2) for `partCooling`. Model-specific variants (`auxiliary`, `chamber`) return `unsupported_capability` when unavailable.
 
-Requirements before enabling auxiliary control capabilities:
+The driver waits for a full status report. Acknowledgment is NOT speed echo (Bambu does not report fan PWM targets in status); confirmation is receipt of a fresh status report post-command.
 
-- `FanControl`: document the exact Bambu payload or G-code for each canonical
-  fan key, the model families where it is safe, percent-to-wire conversion, and
-  the status field that echoes the requested speed.
-- `LightControl`: document the exact payload for portable `chamber` mapped to
-  Bambu `chamber_light`. Acknowledgment must wait for a fresh full status report
-  where `lights_report[]` or the documented status bit matches the requested
-  state.
-- `SpeedControl`: document the exact payload and profile-to-wire mapping.
-  Acknowledgment must wait for a fresh full status report where the documented
-  speed-level field matches the requested profile.
-- Publish success, socket-write success, or a generic library return code is not
-  sufficient for success.
-- The driver must preserve the unsigned-command rejection handling above and
-  must not attempt command-signature bypass, cloud credential use, or any other
-  authorization bypass.
+#### Light Control
+
+`lights set` publishes `print.command: "gcode_line"` with M960 G-code:
+
+| Light key | Command | Notes |
+|---|---|---|
+| `chamber` | `M960 S0` | Chamber light off |
+| `chamber` | `M960 S1` | Chamber light on |
+
+The driver waits for a full status report. Acknowledgment is a fresh full status report where `lights_report[]` contains an entry with `node == "chamber_light"` and `mode` matching the requested state (`off` or `on`).
+
+Supported on all initial families for chamber light.
+
+#### Speed Control
+
+`speed set` publishes `print.command: "gcode_line"` with M220 G-code:
+
+| Profile | G-code | Notes |
+|---|---|---|
+| `silent` | `M220 S20` | 20% speed (slowest, quietest) |
+| `standard` | `M220 S100` | 100% speed (normal, balanced) |
+| `sport` | `M220 S150` | 150% speed (faster) |
+| `ludicrous` | `M220 S300` | 300% speed (fastest) |
+
+Drivers may define additional profiles. The portable speed profiles map to percentage G-code values (S parameter).
+
+The driver waits for a full status report. Acknowledgment happens when a fresh full status report is observed where the speed-level bits in `home_flag` (bits 8–10) match the active print speed level corresponding to the requested profile.
+
+Supported on all initial families while printing or paused.
 
 ### Push Behavior by Family
 
