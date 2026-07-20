@@ -25,6 +25,9 @@ Implemented commands:
 - `temperature set`
 - `motion home`
 - `motion jog`
+- `fans set`
+- `lights set`
+- `speed set`
 
 Out of scope in this slice:
 
@@ -48,6 +51,9 @@ Capabilities for `moonraker`:
 - `JobCancel: true`
 - `TemperatureWrite: true`
 - `MotionControl: true`
+- `FanControl: true`
+- `LightControl: true`
+- `SpeedControl: true`
 - `Discovery: false`
 - `TLSRefresh: false`
 - `CameraStream: false`
@@ -132,6 +138,18 @@ Authentication:
 - Jog: relative move sequence `G91`, `G1 ... F...`, `G90`.
 - Returns accepted or complete per the motion contract.
 
+### Auxiliary Control
+
+Fan, light, and speed control use Moonraker's gcode-script endpoint with the same G-code commands as Bambu LAN:
+
+- **Fans**: `M106 S<pwm>` for partCooling, `M106 P2 S<pwm>` for auxiliary, `M106 P3 S<pwm>` for chamber
+  - Percent conversion: pwm = round(percent × 255 / 100)
+  - Driver sends command and blocks until completion (no explicit acknowledgment)
+- **Lights**: `M960 S1` (on) / `M960 S0` (off) for chamber light
+  - Requires Bambu-compatible Klipper macro or custom macro
+- **Speed**: `M220 S<percent>` for speed profiles (silent=20%, standard=100%, sport=150%, ludicrous=300%)
+  - Driver sends command and blocks until completion
+
 ## Error Mapping
 
 - Auth failures: exit code `3`.
@@ -159,7 +177,7 @@ emits sanitized JSON Lines events for Moonraker HTTP operations.
 - Phase: `request`
 - Operations: `ConnectCheck`, `Status`, `FileList`, `FileDownload`,
   `FileUpload`, `JobStart`, `JobPause`, `JobResume`, `JobCancel`,
-  `TemperatureSet`, `MotionHome`, `MotionJog`
+  `TemperatureSet`, `MotionHome`, `MotionJog`, `FanSet`, `LightSet`, `SpeedSet`
 
 Each event includes safe request metadata (`method`, path, optional HTTP
 status), duration, and optional byte counts. Errors are emitted as sanitized
