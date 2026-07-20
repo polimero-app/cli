@@ -24,13 +24,10 @@ Implemented feature areas:
 - Job control (start, pause, resume, cancel)
 - Temperature control (set targets)
 - Motion control (home, jog)
+- Auxiliary controls (fan speed, light state, print speed profile)
 - Protocol trace diagnostics (`--protocol-trace`)
 
-Accepted but not yet implemented command areas:
-
-- `fans`
-- `lights`
-- `speed`
+Accepted but not yet implemented command areas: None currently.
 
 ---
 
@@ -1002,7 +999,106 @@ Sample JSON output:
 
 ---
 
-## 13. Shell completion (`completion`)
+## 13. Auxiliary controls (`fans`, `lights`, `speed`)
+
+### 13.1 `fans set <printer> <fan> <percent>`
+
+Set fan speed to a percentage. Supported fan keys vary by driver.
+
+**Arguments:**
+- `<printer>`: printer profile name
+- `<fan>`: fan key (`partCooling`, `auxiliary`, `chamber` or driver-specific)
+- `<percent>`: speed percentage, `0` to `100` (0 = off)
+
+**Flags:** standard flags (--yes, --timeout, --insecure, --protocol-trace, --output)
+
+**Human output example:**
+```text
+Fan partCooling on office-x1 set to 75% (accepted)
+```
+
+**JSON output example:**
+```json
+{
+  "ok": true,
+  "data": {
+    "profile": "office-x1",
+    "driver": "bambu-lan",
+    "action": "fan set",
+    "fan": "partCooling",
+    "percent": 75,
+    "state": "accepted"
+  },
+  "error": null,
+  "meta": { "command": "fans set", "durationMs": 42 }
+}
+```
+
+### 13.2 `lights set <printer> <light> <state>`
+
+Set light state (on/off). Supported lights vary by driver.
+
+**Arguments:**
+- `<printer>`: printer profile name
+- `<light>`: light key (typically `chamber`)
+- `<state>`: `on` or `off`
+
+**Flags:** standard flags (--yes, --timeout, --insecure, --protocol-trace, --output)
+
+**Human output example:**
+```text
+Light chamber on office-x1 set to on (accepted)
+```
+
+**JSON output example:**
+```json
+{
+  "ok": true,
+  "data": {
+    "profile": "office-x1",
+    "driver": "bambu-lan",
+    "action": "light set",
+    "light": "chamber",
+    "state": "on"
+  },
+  "error": null,
+  "meta": { "command": "lights set", "durationMs": 38 }
+}
+```
+
+### 13.3 `speed set <printer> <profile>`
+
+Set print speed profile. Supported profiles: `silent`, `standard`, `sport`, `ludicrous`.
+
+**Arguments:**
+- `<printer>`: printer profile name
+- `<profile>`: speed profile name
+
+**Flags:** standard flags (--yes, --timeout, --insecure, --protocol-trace, --output)
+
+**Human output example:**
+```text
+Speed on office-x1 set to sport (accepted)
+```
+
+**JSON output example:**
+```json
+{
+  "ok": true,
+  "data": {
+    "profile": "office-x1",
+    "driver": "bambu-lan",
+    "action": "speed set",
+    "speedProfile": "sport"
+  },
+  "error": null,
+  "meta": { "command": "speed set", "durationMs": 45 }
+}
+```
+
+---
+
+## 15. Shell completion (`completion`)
 
 Generate shell completion scripts:
 
@@ -1021,23 +1117,23 @@ source <(polimero completion bash)
 
 ---
 
-## 14. Common workflows
+## 16. Common workflows
 
-## 14.1 Add printer and verify status
+## 16.1 Add printer and verify status
 
 ```bash
 polimero printer add office-x1 --driver bambu-lan --host 192.168.1.40 --serial 01S00A123456789 --access-code-file ~/.secrets/office-x1.access
 polimero status office-x1
 ```
 
-## 14.2 Upload and start a print
+## 16.2 Upload and start a print
 
 ```bash
 polimero files upload office-x1 ./models/benchy.3mf sdcard:/models/
 polimero jobs start office-x1 sdcard:/models/benchy.3mf --yes
 ```
 
-## 14.3 Pause, resume, cancel
+## 16.3 Pause, resume, cancel
 
 ```bash
 polimero jobs pause office-x1 --yes
@@ -1045,7 +1141,7 @@ polimero jobs resume office-x1 --yes
 polimero jobs cancel office-x1 --yes
 ```
 
-## 14.4 Capture diagnostics
+## 16.4 Capture diagnostics
 
 ```bash
 polimero status office-x1 --output json --protocol-trace ./status-trace.jsonl
@@ -1053,7 +1149,7 @@ polimero status office-x1 --output json --protocol-trace ./status-trace.jsonl
 
 ---
 
-## 15. Error behavior and examples
+## 17. Error behavior and examples
 
 Common error codes in JSON:
 
@@ -1117,7 +1213,7 @@ Sample invalid state error:
 
 ---
 
-## 16. Full command reference (quick index)
+## 18. Full command reference (quick index)
 
 ```text
 polimero
