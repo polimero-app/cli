@@ -51,6 +51,30 @@ func CheckStatePrecondition(ctx context.Context, out, errOut io.Writer, format o
 		})
 }
 
+// CheckIdlePrecondition fetches printer status and requires the idle state,
+// writing an invalid_printer_state error shaped "cannot <action> while
+// <state>" otherwise.
+func CheckIdlePrecondition(ctx context.Context, out, errOut io.Writer, format output.Format, cmdName, action string, rp *profile.Resolved, log *slog.Logger) (*driver.StatusResult, error) {
+	status, err := rp.Driver.Status(ctx, rp.Input, rp.Secrets, log)
+	if err != nil {
+		return nil, WriteError(out, errOut, format, cmdName, err)
+	}
+	if status == nil {
+		return nil, WriteError(out, errOut, format, cmdName, apperr.New(1, "driver returned nil status result"))
+	}
+	if status.State != "idle" {
+		return nil, cmderr.WriteDetail(out, errOut, format, cmdName, 2,
+			"invalid_printer_state",
+			fmt.Sprintf("cannot %s while %s", action, status.State),
+			map[string]any{
+				"profile":       rp.Name,
+				"currentState":  status.State,
+				"requiredState": "idle",
+			})
+	}
+	return status, nil
+}
+
 // CheckConfirmation prompts for an interactive "yes" unless yes is set,
 // writing a config_error when confirmation is unavailable or declined.
 func CheckConfirmation(out, errOut io.Writer, format output.Format, cmdName string, yes bool, promptMsg string, prompter tty.Prompter) error {

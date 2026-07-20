@@ -7,6 +7,7 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/cmderr"
+	"github.com/polimero-app/cli/internal/cmdrun"
 	"github.com/polimero-app/cli/internal/devicepath"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
@@ -74,40 +75,40 @@ func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLe
 
 	dp, err := devicepath.Parse(devicePath)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
 	}
 	if dp.BaseName() == "" {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart,
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart,
 			apperr.New(2, "device path must name a file"))
 	}
 	devicePath = dp.String()
 
 	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, traceErr)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
-	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, jobDrv, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
 	}
 
-	if !rp.driver.Capabilities().JobStart {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart,
-			apperr.Newf(5, "driver %q does not support job start", rp.pi.Driver))
+	if !rp.Driver.Capabilities().JobStart {
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart,
+			apperr.Newf(5, "driver %q does not support job start", rp.Input.Driver))
 	}
 
-	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.Timeout)
 	defer cancel()
 
-	if _, err := checkStatePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart,
-		rp.name, []string{"idle"}, rp, deps, ctx); err != nil {
+	if _, err := cmdrun.CheckStatePrecondition(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart,
+		[]string{"idle"}, rp, deps.Log); err != nil {
 		return err
 	}
 
-	prompt := fmt.Sprintf("Start %s on %s? Type 'yes' to continue: ", devicePath, rp.name)
-	if err := checkConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, yes, prompt, deps); err != nil {
+	prompt := fmt.Sprintf("Start %s on %s? Type 'yes' to continue: ", devicePath, rp.Name)
+	if err := cmdrun.CheckConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, yes, prompt, deps.Prompter); err != nil {
 		return err
 	}
 
@@ -117,14 +118,14 @@ func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLe
 	}
 
 	start := time.Now()
-	result, err := rp.jobDrv.JobStart(ctx, rp.pi, rp.secrets, deps.Log, devicePath, opts)
+	result, err := jobDrv.JobStart(ctx, rp.Input, rp.Secrets, deps.Log, devicePath, opts)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart, err)
 	}
 	durationMs := time.Since(start).Milliseconds()
 
 	if err := checkExpectedState(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStart,
-		rp.name, "start", "printing", result); err != nil {
+		rp.Name, "start", "printing", result); err != nil {
 		return err
 	}
 
@@ -132,6 +133,6 @@ func runStart(cmd *cobra.Command, nameArg, devicePath string, plate *int, skipLe
 	if protocolTrace != "" {
 		tracePath = &protocolTrace
 	}
-	return writeActionSuccess(cmd.OutOrStdout(), format, commandStart, rp.name, rp.pi.Driver,
+	return writeActionSuccess(cmd.OutOrStdout(), format, commandStart, rp.Name, rp.Input.Driver,
 		"start", devicePath, plate, result, durationMs, tracePath)
 }

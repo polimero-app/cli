@@ -9,8 +9,10 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/cmderr"
+	"github.com/polimero-app/cli/internal/cmdrun"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/profile"
 	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
@@ -67,54 +69,42 @@ func runHome(cmd *cobra.Command, nameArg, axisFlag string, yes bool, timeoutFlag
 
 	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, traceErr)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	// Parse and validate axis list.
 	axes, axisNames, err := parseAxes(axisFlag)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, err)
 	}
 
-	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := profile.Resolve(traceCtx, nameArg, timeoutFlag, insecureFlag, deps.KC, deps.GetDriver)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, err)
+	}
+	motionDrv, ok := rp.Driver.(driver.MotionDriver)
+	if !ok || !rp.Driver.Capabilities().MotionControl {
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome,
+			apperr.Newf(5, "driver %q does not support motion control", rp.Input.Driver))
 	}
 
-	if !rp.driver.Capabilities().MotionControl {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome,
-			apperr.Newf(5, "driver %q does not support motion control", rp.pi.Driver))
-	}
-
-	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.Timeout)
 	defer cancel()
 
-	if _, err := checkIdlePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, rp.name, "home", rp, deps, ctx); err != nil {
+	if _, err := cmdrun.CheckIdlePrecondition(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, "home", rp, deps.Log); err != nil {
 		return err
 	}
 
-	if !yes {
-		if !deps.Prompter.IsTerminal() {
-			return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, 2,
-				"config_error", "non-interactive mode requires --yes", nil)
-		}
-		prompt := fmt.Sprintf("Home %s on %s? Type 'yes' to continue: ", strings.Join(axisNames, ", "), rp.name)
-		answer, readErr := deps.Prompter.ReadLine(prompt)
-		if readErr != nil {
-			return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome,
-				apperr.Newf(1, "cannot read confirmation: %s", readErr))
-		}
-		if answer != "yes" {
-			return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, 2,
-				"config_error", "confirmation declined", nil)
-		}
+	prompt := fmt.Sprintf("Home %s on %s? Type 'yes' to continue: ", strings.Join(axisNames, ", "), rp.Name)
+	if err := cmdrun.CheckConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, yes, prompt, deps.Prompter); err != nil {
+		return err
 	}
 
 	start := time.Now()
-	result, err := rp.motionDrv.MotionHome(ctx, rp.pi, rp.secrets, deps.Log, axes)
+	result, err := motionDrv.MotionHome(ctx, rp.Input, rp.Secrets, deps.Log, axes)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandHome, err)
 	}
 	durationMs := time.Since(start).Milliseconds()
 
@@ -122,7 +112,7 @@ func runHome(cmd *cobra.Command, nameArg, axisFlag string, yes bool, timeoutFlag
 	if protocolTrace != "" {
 		tracePath = &protocolTrace
 	}
-	return writeHomeSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, axisNames, result, durationMs, tracePath)
+	return writeHomeSuccess(cmd.OutOrStdout(), format, rp.Name, rp.Input.Driver, axisNames, result, durationMs, tracePath)
 }
 
 func parseAxes(axisFlag string) ([]driver.Axis, []string, error) {

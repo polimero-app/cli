@@ -10,8 +10,10 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/cmderr"
+	"github.com/polimero-app/cli/internal/cmdrun"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/profile"
 	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
@@ -89,13 +91,13 @@ func runSet(cmd *cobra.Command, nameArg string,
 
 	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	// Step 2: validate that at least one target was given and bounds are safe.
 	if !hasNozzle && !hasBed && !hasChamber {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
 			"unsafe_value", "at least one of --nozzle, --bed, --chamber is required", nil)
 	}
 	if hasNozzle {
@@ -115,58 +117,28 @@ func runSet(cmd *cobra.Command, nameArg string,
 	}
 
 	// Step 1: resolve profile and secrets.
-	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := profile.Resolve(traceCtx, nameArg, timeoutFlag, insecureFlag, deps.KC, deps.GetDriver)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+	}
+	tempDrv, ok := rp.Driver.(driver.TemperatureDriver)
+	if !ok || !rp.Driver.Capabilities().TemperatureWrite {
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
+			apperr.Newf(5, "driver %q does not support temperature control", rp.Input.Driver))
 	}
 
-	// Check capability.
-	if !rp.driver.Capabilities().TemperatureWrite {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-			apperr.Newf(5, "driver %q does not support temperature control", rp.pi.Driver))
-	}
-
-	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.Timeout)
 	defer cancel()
 
-	// Step 3: query current status for precondition check.
-	status, err := rp.driver.Status(ctx, rp.pi, rp.secrets, deps.Log)
-	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
-	}
-	if status == nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-			apperr.New(1, "driver returned nil status result"))
-	}
-
-	// Step 4: check state precondition.
-	if status.State != "idle" {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
-			"invalid_printer_state",
-			fmt.Sprintf("cannot set temperature while %s", status.State),
-			map[string]any{
-				"profile":       rp.name,
-				"currentState":  status.State,
-				"requiredState": "idle",
-			})
+	// Steps 3-4: check the idle-state precondition.
+	if _, err := cmdrun.CheckIdlePrecondition(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, "set temperature", rp, deps.Log); err != nil {
+		return err
 	}
 
 	// Step 5: prompt for confirmation.
-	if !yes {
-		if !deps.Prompter.IsTerminal() {
-			return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
-				"config_error", "non-interactive mode requires --yes", nil)
-		}
-		prompt := fmt.Sprintf("Set %s on %s? Type 'yes' to continue: ", targetSummary(nozzle, bed, chamber, hasNozzle, hasBed, hasChamber), rp.name)
-		answer, readErr := deps.Prompter.ReadLine(prompt)
-		if readErr != nil {
-			return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-				apperr.Newf(1, "cannot read confirmation: %s", readErr))
-		}
-		if answer != "yes" {
-			return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
-				"config_error", "confirmation declined", nil)
-		}
+	prompt := fmt.Sprintf("Set %s on %s? Type 'yes' to continue: ", targetSummary(nozzle, bed, chamber, hasNozzle, hasBed, hasChamber), rp.Name)
+	if err := cmdrun.CheckConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, yes, prompt, deps.Prompter); err != nil {
+		return err
 	}
 
 	// Build targets.
@@ -186,19 +158,19 @@ func runSet(cmd *cobra.Command, nameArg string,
 
 	// Step 6: dispatch to driver.
 	start := time.Now()
-	result, err := rp.tempDrv.TemperatureSet(ctx, rp.pi, rp.secrets, deps.Log, targets)
+	result, err := tempDrv.TemperatureSet(ctx, rp.Input, rp.Secrets, deps.Log, targets)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
 	}
 	durationMs := time.Since(start).Milliseconds()
 
-	return writeSetSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, result, durationMs, protocolTrace)
+	return writeSetSuccess(cmd.OutOrStdout(), format, rp.Name, rp.Input.Driver, result, durationMs, protocolTrace)
 }
 
 func checkBound(out, errOut io.Writer, format output.Format, target string, value, min, max float64) error {
 	// NaN compares false against any bound, so reject non-finite values first.
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return writeDetailError(out, errOut, format, commandSet, 2, "unsafe_value",
+		return cmderr.WriteDetail(out, errOut, format, commandSet, 2, "unsafe_value",
 			fmt.Sprintf("%s target must be a finite number", target),
 			map[string]any{
 				"target":  target,
@@ -208,7 +180,7 @@ func checkBound(out, errOut io.Writer, format output.Format, target string, valu
 			})
 	}
 	if value < min || value > max {
-		return writeDetailError(out, errOut, format, commandSet, 2, "unsafe_value",
+		return cmderr.WriteDetail(out, errOut, format, commandSet, 2, "unsafe_value",
 			fmt.Sprintf("%s target out of range", target),
 			map[string]any{
 				"target":  target,

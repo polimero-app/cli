@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/cmderr"
+	"github.com/polimero-app/cli/internal/cmdrun"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/profile"
 	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
@@ -74,13 +77,13 @@ func runJog(cmd *cobra.Command, nameArg string,
 
 	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, traceErr)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
 	// Validate at least one axis given.
 	if !hasX && !hasY && !hasZ {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, 2,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, 2,
 			"unsafe_value", "at least one of --x, --y, --z is required", nil)
 	}
 
@@ -101,38 +104,26 @@ func runJog(cmd *cobra.Command, nameArg string,
 		}
 	}
 
-	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := profile.Resolve(traceCtx, nameArg, timeoutFlag, insecureFlag, deps.KC, deps.GetDriver)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, err)
+	}
+	motionDrv, ok := rp.Driver.(driver.MotionDriver)
+	if !ok || !rp.Driver.Capabilities().MotionControl {
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog,
+			apperr.Newf(5, "driver %q does not support motion control", rp.Input.Driver))
 	}
 
-	if !rp.driver.Capabilities().MotionControl {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog,
-			apperr.Newf(5, "driver %q does not support motion control", rp.pi.Driver))
-	}
-
-	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.Timeout)
 	defer cancel()
 
-	if _, err := checkIdlePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, rp.name, "move", rp, deps, ctx); err != nil {
+	if _, err := cmdrun.CheckIdlePrecondition(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, "move", rp, deps.Log); err != nil {
 		return err
 	}
 
-	if !yes {
-		if !deps.Prompter.IsTerminal() {
-			return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, 2,
-				"config_error", "non-interactive mode requires --yes", nil)
-		}
-		prompt := fmt.Sprintf("Jog %s on %s? Type 'yes' to continue: ", jogSummary(x, y, z, hasX, hasY, hasZ, feedrate), rp.name)
-		answer, readErr := deps.Prompter.ReadLine(prompt)
-		if readErr != nil {
-			return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog,
-				apperr.Newf(1, "cannot read confirmation: %s", readErr))
-		}
-		if answer != "yes" {
-			return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, 2,
-				"config_error", "confirmation declined", nil)
-		}
+	prompt := fmt.Sprintf("Jog %s on %s? Type 'yes' to continue: ", jogSummary(x, y, z, hasX, hasY, hasZ, feedrate), rp.Name)
+	if err := cmdrun.CheckConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, yes, prompt, deps.Prompter); err != nil {
+		return err
 	}
 
 	delta := driver.JogDelta{FeedrateMmPerMin: feedrate}
@@ -150,9 +141,9 @@ func runJog(cmd *cobra.Command, nameArg string,
 	}
 
 	start := time.Now()
-	result, err := rp.motionDrv.MotionJog(ctx, rp.pi, rp.secrets, deps.Log, delta)
+	result, err := motionDrv.MotionJog(ctx, rp.Input, rp.Secrets, deps.Log, delta)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandJog, err)
 	}
 	durationMs := time.Since(start).Milliseconds()
 
@@ -160,13 +151,13 @@ func runJog(cmd *cobra.Command, nameArg string,
 	if protocolTrace != "" {
 		tracePath = &protocolTrace
 	}
-	return writeJogSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, delta, result, durationMs, tracePath)
+	return writeJogSuccess(cmd.OutOrStdout(), format, rp.Name, rp.Input.Driver, delta, result, durationMs, tracePath)
 }
 
 func checkJogBound(out, errOut io.Writer, format output.Format, axis string, value float64) error {
 	// NaN compares false against any bound, so reject non-finite values first.
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return writeDetailError(out, errOut, format, commandJog, 2, "unsafe_value",
+		return cmderr.WriteDetail(out, errOut, format, commandJog, 2, "unsafe_value",
 			"jog distance must be a finite number",
 			map[string]any{
 				"axis":    axis,
@@ -176,7 +167,7 @@ func checkJogBound(out, errOut io.Writer, format output.Format, axis string, val
 			})
 	}
 	if value < jogMin || value > jogMax {
-		return writeDetailError(out, errOut, format, commandJog, 2, "unsafe_value",
+		return cmderr.WriteDetail(out, errOut, format, commandJog, 2, "unsafe_value",
 			"jog distance out of range",
 			map[string]any{
 				"axis":    axis,

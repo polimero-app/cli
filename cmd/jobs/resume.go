@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
+	"github.com/polimero-app/cli/internal/cmdrun"
 	"github.com/polimero-app/cli/internal/output"
 	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
@@ -51,42 +52,42 @@ func runResume(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string,
 
 	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, traceErr)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
-	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, jobDrv, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, err)
 	}
 
-	if !rp.driver.Capabilities().JobResume {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume,
-			apperr.Newf(5, "driver %q does not support job resume", rp.pi.Driver))
+	if !rp.Driver.Capabilities().JobResume {
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume,
+			apperr.Newf(5, "driver %q does not support job resume", rp.Input.Driver))
 	}
 
-	ctx, cancel := context.WithTimeout(traceCtx, rp.timeout)
+	ctx, cancel := context.WithTimeout(traceCtx, rp.Timeout)
 	defer cancel()
 
-	if _, err := checkStatePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume,
-		rp.name, []string{"paused"}, rp, deps, ctx); err != nil {
+	if _, err := cmdrun.CheckStatePrecondition(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume,
+		[]string{"paused"}, rp, deps.Log); err != nil {
 		return err
 	}
 
-	prompt := fmt.Sprintf("Resume the paused print on %s? Type 'yes' to continue: ", rp.name)
-	if err := checkConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, yes, prompt, deps); err != nil {
+	prompt := fmt.Sprintf("Resume the paused print on %s? Type 'yes' to continue: ", rp.Name)
+	if err := cmdrun.CheckConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, yes, prompt, deps.Prompter); err != nil {
 		return err
 	}
 
 	start := time.Now()
-	result, err := rp.jobDrv.JobResume(ctx, rp.pi, rp.secrets, deps.Log)
+	result, err := jobDrv.JobResume(ctx, rp.Input, rp.Secrets, deps.Log)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume, err)
 	}
 	durationMs := time.Since(start).Milliseconds()
 
 	if err := checkExpectedState(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandResume,
-		rp.name, "resume", "printing", result); err != nil {
+		rp.Name, "resume", "printing", result); err != nil {
 		return err
 	}
 
@@ -94,6 +95,6 @@ func runResume(cmd *cobra.Command, nameArg string, yes bool, timeoutFlag string,
 	if protocolTrace != "" {
 		tracePath = &protocolTrace
 	}
-	return writeActionSuccess(cmd.OutOrStdout(), format, commandResume, rp.name, rp.pi.Driver,
+	return writeActionSuccess(cmd.OutOrStdout(), format, commandResume, rp.Name, rp.Input.Driver,
 		"resume", "", nil, result, durationMs, tracePath)
 }
