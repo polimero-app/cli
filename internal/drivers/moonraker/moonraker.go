@@ -64,8 +64,10 @@ func (d *Driver) Capabilities() driver.Capabilities {
 		TemperatureWrite: true,
 		MotionControl:    true,
 		FanControl:       true,
-		LightControl:     true,
-		SpeedControl:     true,
+		// LightControl stays false: stock Klipper has no portable light
+		// command and no way to confirm a light state (ADR 0014).
+		LightControl: false,
+		SpeedControl: true,
 	}
 }
 
@@ -865,18 +867,29 @@ func asUnixTimeString(v any) (string, bool) {
 	return s, true
 }
 
-// FanSet sends M106 G-code via gcode-script to set fan speed.
-// Moonraker executes the script synchronously and returns when complete.
+// FanSet sends M106 G-code via gcode-script to set the part-cooling fan,
+// then confirms the new speed by reading the fan object back from Klipper.
+// Stock Klipper's M106 has no fan index, so only partCooling is supported;
+// auxiliary/chamber fans would need SET_FAN_SPEED with a configured fan name.
 func (d *Driver) FanSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, target driver.FanTarget) (driver.FanControlResult, error) {
-	fanGcode, supported := fanKeyToGcode(target.Fan)
-	if !supported {
+	if target.Fan != "partCooling" {
 		return driver.FanControlResult{}, apperr.New(5, fmt.Sprintf("unsupported fan key: %s", target.Fan))
 	}
 
 	pwm := int(math.Round(float64(target.SpeedPercent) * 255 / 100))
-	gcode := fmt.Sprintf("%s S%d", fanGcode, pwm)
+	gcode := fmt.Sprintf("M106 S%d", pwm)
 
 	if err := d.runGCodeScript(ctx, p, s, "FanSet", gcode); err != nil {
+		return driver.FanControlResult{}, err
+	}
+
+	// Klipper reports fan.speed as 0.0-1.0; PWM rounding shifts the echo by
+	// less than one percentage point.
+	err := d.pollObjectEcho(ctx, p, s, "FanSet", "fan", func(obj map[string]any) bool {
+		speed, ok := asFloat(obj["speed"])
+		return ok && math.Abs(speed*100-float64(target.SpeedPercent)) <= 1
+	})
+	if err != nil {
 		return driver.FanControlResult{}, err
 	}
 
@@ -888,32 +901,8 @@ func (d *Driver) FanSet(ctx context.Context, p driver.ProfileInput, s driver.Sec
 	}, nil
 }
 
-// LightSet sends M960 G-code via gcode-script to set light state.
-func (d *Driver) LightSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, target driver.LightTarget) (driver.LightControlResult, error) {
-	if target.Light != "chamber" {
-		return driver.LightControlResult{}, apperr.New(5, fmt.Sprintf("unsupported light key: %s", target.Light))
-	}
-
-	var gcode string
-	if target.State == driver.LightStateOn {
-		gcode = "M960 S1"
-	} else {
-		gcode = "M960 S0"
-	}
-
-	if err := d.runGCodeScript(ctx, p, s, "LightSet", gcode); err != nil {
-		return driver.LightControlResult{}, err
-	}
-
-	return driver.LightControlResult{
-		Light:        "chamber",
-		State:        target.State,
-		Warnings:     []driver.StatusWarning{},
-		Capabilities: d.Capabilities(),
-	}, nil
-}
-
-// SpeedSet sends M220 G-code via gcode-script to set print speed profile.
+// SpeedSet sends M220 G-code via gcode-script to set the print speed factor,
+// then confirms it by reading gcode_move.speed_factor back from Klipper.
 func (d *Driver) SpeedSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, profile string) (driver.SpeedControlResult, error) {
 	speedPercent, supported := speedProfileToPercent(profile)
 	if !supported {
@@ -926,6 +915,15 @@ func (d *Driver) SpeedSet(ctx context.Context, p driver.ProfileInput, s driver.S
 		return driver.SpeedControlResult{}, err
 	}
 
+	// Klipper reports gcode_move.speed_factor as a multiplier (1.0 = 100%).
+	err := d.pollObjectEcho(ctx, p, s, "SpeedSet", "gcode_move", func(obj map[string]any) bool {
+		factor, ok := asFloat(obj["speed_factor"])
+		return ok && math.Abs(factor*100-float64(speedPercent)) < 0.5
+	})
+	if err != nil {
+		return driver.SpeedControlResult{}, err
+	}
+
 	return driver.SpeedControlResult{
 		SpeedProfile: profile,
 		Warnings:     []driver.StatusWarning{},
@@ -933,18 +931,29 @@ func (d *Driver) SpeedSet(ctx context.Context, p driver.ProfileInput, s driver.S
 	}, nil
 }
 
-// fanKeyToGcode maps a canonical fan key to its M106 G-code prefix.
-// Returns (gcode, supported).
-func fanKeyToGcode(fan string) (string, bool) {
-	switch fan {
-	case "partCooling":
-		return "M106", true
-	case "auxiliary":
-		return "M106 P2", true
-	case "chamber":
-		return "M106 P3", true
-	default:
-		return "", false
+// pollObjectEcho polls a single Klipper printer object until check accepts its
+// status fields or ctx expires. The first check runs immediately; retries use
+// the same cadence as waitForState.
+func (d *Driver) pollObjectEcho(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, operation, object string, check func(map[string]any) bool) error {
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var payload struct {
+			Status map[string]any `json:"status"`
+		}
+		q := url.Values{}
+		q.Add(object, "")
+		if err := d.requestJSON(ctx, p, s, operation, http.MethodGet, "/printer/objects/query", q, &payload); err != nil {
+			return err
+		}
+		if obj, ok := payload.Status[object].(map[string]any); ok && check(obj) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return classifyHTTPError(ctx.Err())
+		case <-ticker.C:
+		}
 	}
 }
 

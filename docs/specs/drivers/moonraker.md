@@ -26,7 +26,6 @@ Implemented commands:
 - `motion home`
 - `motion jog`
 - `fans set`
-- `lights set`
 - `speed set`
 
 Out of scope in this slice:
@@ -35,6 +34,9 @@ Out of scope in this slice:
 - `printer tls refresh`
 - `camera stream`
 - `camera snapshot`
+- `lights set` (stock Klipper has no portable light command and no way to
+  confirm a light state; ADR 0014 forbids advertising an unconfirmable
+  capability. A later spec revision may add `SET_LED`-based control.)
 - Cloud auth or cloud APIs
 
 ## Capability Policy
@@ -52,7 +54,7 @@ Capabilities for `moonraker`:
 - `TemperatureWrite: true`
 - `MotionControl: true`
 - `FanControl: true`
-- `LightControl: true`
+- `LightControl: false`
 - `SpeedControl: true`
 - `Discovery: false`
 - `TLSRefresh: false`
@@ -140,15 +142,23 @@ Authentication:
 
 ### Auxiliary Control
 
-Fan, light, and speed control use Moonraker's gcode-script endpoint with the same G-code commands as Bambu LAN:
+Fan and speed control send standard Klipper G-code through the gcode-script
+endpoint, then confirm the effect by reading the corresponding printer object
+back through `/printer/objects/query`, bounded by the command timeout:
 
-- **Fans**: `M106 S<pwm>` for partCooling, `M106 P2 S<pwm>` for auxiliary, `M106 P3 S<pwm>` for chamber
-  - Percent conversion: pwm = round(percent × 255 / 100)
-  - Driver sends command and blocks until completion (no explicit acknowledgment)
-- **Lights**: `M960 S1` (on) / `M960 S0` (off) for chamber light
-  - Requires Bambu-compatible Klipper macro or custom macro
-- **Speed**: `M220 S<percent>` for speed profiles (silent=20%, standard=100%, sport=150%, ludicrous=300%)
-  - Driver sends command and blocks until completion
+- **Fans**: `M106 S<pwm>` for `partCooling` only.
+  - Percent conversion: pwm = round(percent × 255 / 100).
+  - Acknowledgment: poll the `fan` object until `speed` (0.0–1.0) echoes the
+    requested percentage within 1 point; timeout fails with exit code `4`.
+  - `auxiliary` and `chamber` fail with exit code `5`: stock Klipper's `M106`
+    has no fan index, and portable mapping to `SET_FAN_SPEED` fan names does
+    not exist. A later spec revision may add configured fan-name mapping.
+- **Speed**: `M220 S<percent>` for speed profiles (silent=20%, standard=100%,
+  sport=150%, ludicrous=300%).
+  - Acknowledgment: poll the `gcode_move` object until `speed_factor` echoes
+    the requested factor; timeout fails with exit code `4`.
+
+Light control is not supported; see Capability Policy.
 
 ## Error Mapping
 
@@ -177,7 +187,7 @@ emits sanitized JSON Lines events for Moonraker HTTP operations.
 - Phase: `request`
 - Operations: `ConnectCheck`, `Status`, `FileList`, `FileDownload`,
   `FileUpload`, `JobStart`, `JobPause`, `JobResume`, `JobCancel`,
-  `TemperatureSet`, `MotionHome`, `MotionJog`, `FanSet`, `LightSet`, `SpeedSet`
+  `TemperatureSet`, `MotionHome`, `MotionJog`, `FanSet`, `SpeedSet`
 
 Each event includes safe request metadata (`method`, path, optional HTTP
 status), duration, and optional byte counts. Errors are emitted as sanitized

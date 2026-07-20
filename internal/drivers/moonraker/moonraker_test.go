@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/driver"
@@ -278,12 +279,44 @@ func TestNormalizeBaseURL_SchemeValidation(t *testing.T) {
 
 // Auxiliary control tests
 
-func TestFanSet_PartCooling_Success(t *testing.T) {
-	var gotQuery string
+// auxServer serves gcode-script and objects-query endpoints, capturing scripts
+// and answering object queries with the given status JSON.
+func auxServer(t *testing.T, statusJSON string) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var scripts []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.RawQuery
-		_, _ = w.Write([]byte(`{"result":{}}`))
+		switch r.URL.Path {
+		case "/printer/gcode/script":
+			mu.Lock()
+			scripts = append(scripts, r.URL.Query().Get("script"))
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"result":{}}`))
+		case "/printer/objects/query":
+			_, _ = w.Write([]byte(`{"result":{"status":{` + statusJSON + `}}}`))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]string, len(scripts))
+		copy(out, scripts)
+		return out
+	}
+}
+
+func auxShortCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func TestFanSet_PartCooling_EchoConfirms(t *testing.T) {
+	srv, scripts := auxServer(t, `"fan":{"speed":0.6}`)
 	defer srv.Close()
 
 	drv := New()
@@ -296,135 +329,75 @@ func TestFanSet_PartCooling_Success(t *testing.T) {
 	if result.Fan != "partCooling" || result.SpeedPercent != 60 {
 		t.Errorf("result = %+v, want partCooling/60", result)
 	}
-	if !strings.Contains(gotQuery, "M106+S") {
-		t.Errorf("query = %q, want M106+S", gotQuery)
+	got := scripts()
+	if len(got) != 1 || got[0] != "M106 S153" {
+		t.Errorf("scripts = %v, want [M106 S153]", got)
 	}
 }
 
-func TestFanSet_Auxiliary_Success(t *testing.T) {
-	var gotQuery string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.RawQuery
-		_, _ = w.Write([]byte(`{"result":{}}`))
-	}))
+func TestFanSet_NoEcho_TimesOut(t *testing.T) {
+	srv, _ := auxServer(t, `"fan":{"speed":0.0}`)
 	defer srv.Close()
 
 	drv := New()
-	target := driver.FanTarget{Fan: "auxiliary", SpeedPercent: 100}
-	result, err := drv.FanSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
-	if err != nil {
-		t.Fatalf("FanSet error: %v", err)
-	}
-
-	if result.Fan != "auxiliary" {
-		t.Errorf("fan = %q, want auxiliary", result.Fan)
-	}
-	if !strings.Contains(gotQuery, "M106+P2+S255") {
-		t.Errorf("query = %q, want M106+P2+S255", gotQuery)
-	}
-}
-
-func TestFanSet_UnsupportedFan(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"result":{}}`))
-	}))
-	defer srv.Close()
-
-	drv := New()
-	target := driver.FanTarget{Fan: "unknown", SpeedPercent: 50}
-	_, err := drv.FanSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
+	target := driver.FanTarget{Fan: "partCooling", SpeedPercent: 60}
+	_, err := drv.FanSet(auxShortCtx(t), testProfile(srv.URL), testSecrets(), nil, target)
 	if err == nil {
-		t.Fatal("expected error for unsupported fan")
+		t.Fatal("expected timeout error")
 	}
 
 	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
-		t.Errorf("exit code = %v, want 5", err)
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("exit code = %v, want 4", err)
 	}
 }
 
-func TestLightSet_ChamberOn_Success(t *testing.T) {
-	var gotQuery string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.RawQuery
-		_, _ = w.Write([]byte(`{"result":{}}`))
-	}))
+func TestFanSet_AuxiliaryAndChamber_Unsupported(t *testing.T) {
+	// Stock Klipper M106 has no fan index; only partCooling is portable.
+	srv, scripts := auxServer(t, `"fan":{"speed":0.0}`)
 	defer srv.Close()
 
 	drv := New()
-	target := driver.LightTarget{Light: "chamber", State: driver.LightStateOn}
-	result, err := drv.LightSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
-	if err != nil {
-		t.Fatalf("LightSet error: %v", err)
+	for _, fan := range []string{"auxiliary", "chamber", "unknown"} {
+		target := driver.FanTarget{Fan: fan, SpeedPercent: 50}
+		_, err := drv.FanSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
+		if err == nil {
+			t.Fatalf("FanSet(%s): expected error", fan)
+		}
+		var exitErr *apperr.ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 5 {
+			t.Errorf("FanSet(%s): exit code = %v, want 5", fan, err)
+		}
 	}
-
-	if result.Light != "chamber" || result.State != driver.LightStateOn {
-		t.Errorf("result = %+v, want chamber/on", result)
-	}
-	if !strings.Contains(gotQuery, "M960+S1") {
-		t.Errorf("query = %q, want M960+S1", gotQuery)
+	if got := scripts(); len(got) != 0 {
+		t.Errorf("scripts = %v, want none", got)
 	}
 }
 
-func TestLightSet_ChamberOff_Success(t *testing.T) {
-	var gotQuery string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.RawQuery
-		_, _ = w.Write([]byte(`{"result":{}}`))
-	}))
-	defer srv.Close()
-
+func TestLightControl_NotSupported(t *testing.T) {
 	drv := New()
-	target := driver.LightTarget{Light: "chamber", State: driver.LightStateOff}
-	result, err := drv.LightSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
-	if err != nil {
-		t.Fatalf("LightSet error: %v", err)
+	if drv.Capabilities().LightControl {
+		t.Error("LightControl capability must be false for moonraker")
 	}
-
-	if result.State != driver.LightStateOff {
-		t.Errorf("state = %q, want off", result.State)
-	}
-	if !strings.Contains(gotQuery, "M960+S0") {
-		t.Errorf("query = %q, want M960+S0", gotQuery)
+	if _, ok := any(drv).(driver.LightDriver); ok {
+		t.Error("moonraker driver must not implement LightDriver")
 	}
 }
 
-func TestLightSet_UnsupportedLight(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"result":{}}`))
-	}))
-	defer srv.Close()
-
-	drv := New()
-	target := driver.LightTarget{Light: "unknown", State: driver.LightStateOn}
-	_, err := drv.LightSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
-	if err == nil {
-		t.Fatal("expected error for unsupported light")
-	}
-
-	var exitErr *apperr.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
-		t.Errorf("exit code = %v, want 5", err)
-	}
-}
-
-func TestSpeedSet_AllProfiles(t *testing.T) {
+func TestSpeedSet_AllProfiles_EchoConfirms(t *testing.T) {
 	cases := []struct {
 		profile string
 		percent int
+		factor  string
 	}{
-		{"silent", 20},
-		{"standard", 100},
-		{"sport", 150},
-		{"ludicrous", 300},
+		{"silent", 20, "0.2"},
+		{"standard", 100, "1.0"},
+		{"sport", 150, "1.5"},
+		{"ludicrous", 300, "3.0"},
 	}
 
 	for _, tc := range cases {
-		var gotQuery string
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			gotQuery = r.URL.RawQuery
-			_, _ = w.Write([]byte(`{"result":{}}`))
-		}))
+		srv, scripts := auxServer(t, `"gcode_move":{"speed_factor":`+tc.factor+`}`)
 
 		drv := New()
 		result, err := drv.SpeedSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, tc.profile)
@@ -436,19 +409,33 @@ func TestSpeedSet_AllProfiles(t *testing.T) {
 			t.Errorf("profile = %q, want %q", result.SpeedProfile, tc.profile)
 		}
 
-		expectedGcode := fmt.Sprintf("M220+S%d", tc.percent)
-		if !strings.Contains(gotQuery, expectedGcode) {
-			t.Errorf("SpeedSet(%s) query = %q, want %s", tc.profile, gotQuery, expectedGcode)
+		expected := fmt.Sprintf("M220 S%d", tc.percent)
+		if got := scripts(); len(got) != 1 || got[0] != expected {
+			t.Errorf("SpeedSet(%s) scripts = %v, want [%s]", tc.profile, got, expected)
 		}
 
 		srv.Close()
 	}
 }
 
+func TestSpeedSet_NoEcho_TimesOut(t *testing.T) {
+	srv, _ := auxServer(t, `"gcode_move":{"speed_factor":1.0}`)
+	defer srv.Close()
+
+	drv := New()
+	_, err := drv.SpeedSet(auxShortCtx(t), testProfile(srv.URL), testSecrets(), nil, "sport")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("exit code = %v, want 4", err)
+	}
+}
+
 func TestSpeedSet_UnsupportedProfile(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"result":{}}`))
-	}))
+	srv, scripts := auxServer(t, `"gcode_move":{"speed_factor":1.0}`)
 	defer srv.Close()
 
 	drv := New()
@@ -461,28 +448,8 @@ func TestSpeedSet_UnsupportedProfile(t *testing.T) {
 	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
 		t.Errorf("exit code = %v, want 5", err)
 	}
-}
-
-func TestFanKeyToGcode_AllKeys(t *testing.T) {
-	cases := []struct {
-		key   string
-		gcode string
-		ok    bool
-	}{
-		{"partCooling", "M106", true},
-		{"auxiliary", "M106 P2", true},
-		{"chamber", "M106 P3", true},
-		{"unknown", "", false},
-	}
-
-	for _, tc := range cases {
-		gcode, ok := fanKeyToGcode(tc.key)
-		if ok != tc.ok {
-			t.Errorf("fanKeyToGcode(%q): got ok=%v, want %v", tc.key, ok, tc.ok)
-		}
-		if ok && gcode != tc.gcode {
-			t.Errorf("fanKeyToGcode(%q): got %q, want %q", tc.key, gcode, tc.gcode)
-		}
+	if got := scripts(); len(got) != 0 {
+		t.Errorf("scripts = %v, want none", got)
 	}
 }
 
