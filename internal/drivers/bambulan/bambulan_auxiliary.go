@@ -40,9 +40,12 @@ func (d *Driver) FanSet(ctx context.Context, p driver.ProfileInput, s driver.Sec
 	}
 
 	// Acknowledgment: a report whose fan reading echoes the requested speed
-	// within gear-quantization tolerance. A full report that lacks the fan key
-	// means the connected model does not expose that fan; stop and report
-	// unsupported instead of waiting for an echo that can never arrive.
+	// within gear-quantization tolerance. A full report that carries other fan
+	// readings but lacks the requested fan key means the connected model does
+	// not expose that fan; stop and report unsupported instead of waiting for
+	// an echo that can never arrive. Requiring fan evidence guards against
+	// P1/A1 delta reports that carry a gcode_state transition (and thus pass
+	// isPushallReport) without any fan fields.
 	unsupportedOnModel := false
 	predicate := func(data []byte) bool {
 		status, perr := parseReport(data)
@@ -53,11 +56,14 @@ func (d *Driver) FanSet(ctx context.Context, p driver.ProfileInput, s driver.Sec
 		if present {
 			return absInt(got-target.SpeedPercent) <= fanAckTolerancePercent
 		}
-		if isPushallReport(data) {
+		if isPushallReport(data) && len(status.Fans) > 0 {
+			// ponytail: a delta combining a gcode_state transition with another
+			// fan's change can still misfire here; if that shows up in practice,
+			// upgrade to a print-key-count floor via extractTopLevelKeys.
 			unsupportedOnModel = true
 			return true
 		}
-		return false // delta report without fan fields; keep waiting
+		return false // delta report without decisive fan fields; keep waiting
 	}
 
 	data, err := d.mqttCommand(ctx, p, s, payload, predicate)

@@ -241,7 +241,7 @@ Firmware with command-signature enforcement may reject unsigned `print` commands
 
 Percent conversion: speed = round(percent × 255 / 100), clamped to 0–255.
 
-Supported on all initial families (X1, P1, A1, H2) for `partCooling`. Model-specific variants (`auxiliary`, `chamber`) return `unsupported_capability` when unavailable: if a full status report does not contain the requested fan's speed field (`cooling_fan_speed`, `big_fan1_speed`, `big_fan2_speed`), the driver stops and fails with exit code `5`.
+Supported on all initial families (X1, P1, A1, H2) for `partCooling`. Model-specific variants (`auxiliary`, `chamber`) return `unsupported_capability` when unavailable: if a full status report carries fan speed readings but not the requested fan's field (`cooling_fan_speed`, `big_fan1_speed`, `big_fan2_speed`), the driver stops and fails with exit code `5`. Reports without any fan fields (such as P1/A1 state-transition deltas) are not treated as proof of unavailability; the driver keeps waiting.
 
 Acknowledgment: the driver waits, bounded by the command timeout, for a status report (full or delta) whose reading for the requested fan echoes the requested percentage. Bambu reports fan speeds on a 0–15 gear scale, so the echo is quantized; the driver accepts an echo within 4 percentage points and reports the requested percentage on success. No matching echo before the timeout fails with exit code `4`.
 

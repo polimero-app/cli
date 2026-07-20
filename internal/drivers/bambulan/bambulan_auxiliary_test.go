@@ -156,6 +156,26 @@ func TestFanSet_FanMissingFromFullReport_Unsupported(t *testing.T) {
 	}
 }
 
+func TestFanSet_StateTransitionDeltaWithoutFans_KeepsWaiting(t *testing.T) {
+	// A P1/A1 delta can carry a gcode_state transition without any fan
+	// fields; it must not be mistaken for a full report proving the fan is
+	// unavailable (false exit 5). With no echo following, this times out: 4.
+	delta := auxPushall("PAUSE", "")
+	fc := &fakeCommandClient{responses: [][]byte{nil, delta}}
+	drv := newCommandDriver(fc)
+
+	target := driver.FanTarget{Fan: "chamber", SpeedPercent: 50}
+	_, err := drv.FanSet(shortCtx(t), mqttCommandProfile(), driver.SecretsBundle{}, slog.Default(), target)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Errorf("expected exit code 4, got %v", err)
+	}
+}
+
 func TestFanSet_NoEcho_TimesOut(t *testing.T) {
 	// Fan present but stuck at the old speed: no acknowledgment, exit code 4.
 	response := auxPushall("IDLE", `"cooling_fan_speed":"0"`)
