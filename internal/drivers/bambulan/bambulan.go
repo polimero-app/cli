@@ -138,6 +138,9 @@ func (d *Driver) Capabilities() driver.Capabilities {
 		JobCancel:        true,
 		TemperatureWrite: true,
 		MotionControl:    true,
+		FanControl:       true,
+		LightControl:     true,
+		SpeedControl:     true,
 	}
 }
 
