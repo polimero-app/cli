@@ -187,11 +187,11 @@ JSON invalid-state error example:
   "data": null,
   "error": {
     "code": "invalid_printer_state",
-    "message": "cannot set light: printer state is unknown",
+    "message": "cannot perform action: printer is unknown, expected idle or printing or paused or error",
     "details": {
       "profile": "garage-x1c",
       "currentState": "unknown",
-      "requiredState": "known"
+      "requiredState": "idle or printing or paused or error"
     }
   },
   "meta": {

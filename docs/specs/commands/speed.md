@@ -184,11 +184,11 @@ JSON precondition error example:
   "data": null,
   "error": {
     "code": "invalid_printer_state",
-    "message": "cannot set speed: printer is not printing or paused",
+    "message": "cannot perform action: printer is idle, expected printing or paused",
     "details": {
       "profile": "garage-x1c",
       "currentState": "idle",
-      "requiredState": "printing_or_paused"
+      "requiredState": "printing or paused"
     }
   },
   "meta": {
