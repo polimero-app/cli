@@ -106,10 +106,9 @@ func runSet(cmd *cobra.Command, nameArg, profileArg string, yes bool, timeoutFla
 	if result.SpeedProfile != profileArg {
 		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 1,
 			"speed_action_failed", "speed operation did not result in expected profile", map[string]any{
-				"profile":           rp.name,
-				"expectedProfile":   profileArg,
-				"observedProfile":   result.SpeedProfile,
-				"currentDriverName": rp.pi.Driver,
+				"profile":         rp.name,
+				"expectedProfile": profileArg,
+				"observedProfile": result.SpeedProfile,
 			})
 	}
 

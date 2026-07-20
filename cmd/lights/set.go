@@ -106,16 +106,6 @@ func runSet(cmd *cobra.Command, nameArg, lightArg, stateArg string, yes bool, ti
 		return err
 	}
 
-	if !yes {
-		postcheckCtx, cancelPostcheck := context.WithTimeout(traceCtx, rp.timeout)
-		if _, err := checkStatePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-			rp.name, []string{"idle", "printing", "paused", "error"}, rp, deps, postcheckCtx); err != nil {
-			cancelPostcheck()
-			return err
-		}
-		cancelPostcheck()
-	}
-
 	actionCtx, cancelAction := context.WithTimeout(traceCtx, rp.timeout)
 	defer cancelAction()
 
