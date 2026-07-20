@@ -41,6 +41,9 @@ type Capabilities struct {
 	TemperatureWrite bool `json:"temperatureWrite"`
 	MotionControl    bool `json:"motionControl"`
 	TLSRefresh       bool `json:"tlsRefresh"`
+	FanControl       bool `json:"fanControl"`
+	LightControl     bool `json:"lightControl"`
+	SpeedControl     bool `json:"speedControl"`
 }
 
 // SecretsBundle carries runtime secrets for a printer connection.
