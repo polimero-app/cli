@@ -89,4 +89,4 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" dist/* --clobber
+        run: gh release upload "${{ github.ref_name }}" dist/* --clobber --repo "${{ github.repository }}"
