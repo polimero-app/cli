@@ -9,8 +9,10 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/cmderr"
+	"github.com/polimero-app/cli/internal/cmdrun"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/profile"
 	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
@@ -60,53 +62,53 @@ func runSet(cmd *cobra.Command, nameArg, profileArg string, yes bool, timeoutFla
 	}
 
 	if !speedTokenRE.MatchString(profileArg) {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
 			"invalid_argument", "invalid speed profile syntax", nil)
 	}
 
 	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
-	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := profile.Resolve(traceCtx, nameArg, timeoutFlag, insecureFlag, deps.KC, deps.GetDriver)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+	}
+	speedDrv, ok := rp.Driver.(driver.SpeedDriver)
+	if !ok || !rp.Driver.Capabilities().SpeedControl {
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
+			apperr.Newf(5, "driver %q does not support speed control", rp.Input.Driver))
 	}
 
-	if !rp.driver.Capabilities().SpeedControl {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-			apperr.Newf(5, "driver %q does not support speed control", rp.pi.Driver))
-	}
-
-	precheckCtx, cancelPrecheck := context.WithTimeout(traceCtx, rp.timeout)
-	if _, err := checkStatePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-		rp.name, []string{"printing", "paused"}, rp, deps, precheckCtx); err != nil {
+	precheckCtx, cancelPrecheck := context.WithTimeout(traceCtx, rp.Timeout)
+	if _, err := cmdrun.CheckStatePrecondition(precheckCtx, cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
+		[]string{"printing", "paused"}, rp, deps.Log); err != nil {
 		cancelPrecheck()
 		return err
 	}
 	cancelPrecheck()
 
-	prompt := fmt.Sprintf("Set speed profile %s on %s? Type 'yes' to continue: ", profileArg, rp.name)
-	if err := checkConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, yes, prompt, deps); err != nil {
+	prompt := fmt.Sprintf("Set speed profile %s on %s? Type 'yes' to continue: ", profileArg, rp.Name)
+	if err := cmdrun.CheckConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, yes, prompt, deps.Prompter); err != nil {
 		return err
 	}
 
-	actionCtx, cancelAction := context.WithTimeout(traceCtx, rp.timeout)
+	actionCtx, cancelAction := context.WithTimeout(traceCtx, rp.Timeout)
 	defer cancelAction()
 
 	start := time.Now()
-	result, err := rp.speedDrv.SpeedSet(actionCtx, rp.pi, rp.secrets, deps.Log, profileArg)
+	result, err := speedDrv.SpeedSet(actionCtx, rp.Input, rp.Secrets, deps.Log, profileArg)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
 	}
 	durationMs := time.Since(start).Milliseconds()
 
 	if result.SpeedProfile != profileArg {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 1,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 1,
 			"speed_action_failed", "speed operation did not result in expected profile", map[string]any{
-				"profile":         rp.name,
+				"profile":         rp.Name,
 				"expectedProfile": profileArg,
 				"observedProfile": result.SpeedProfile,
 			})
@@ -117,7 +119,7 @@ func runSet(cmd *cobra.Command, nameArg, profileArg string, yes bool, timeoutFla
 		tracePath = &protocolTrace
 	}
 
-	return writeSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, result, durationMs, tracePath)
+	return writeSuccess(cmd.OutOrStdout(), format, rp.Name, rp.Input.Driver, result, durationMs, tracePath)
 }
 
 func writeSuccess(w io.Writer, format output.Format, profileName, driverName string, result driver.SpeedControlResult, durationMs int64, tracePath *string) error {

@@ -10,8 +10,10 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/cmderr"
+	"github.com/polimero-app/cli/internal/cmdrun"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/profile"
 	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
@@ -64,49 +66,49 @@ func runSet(cmd *cobra.Command, nameArg, lightArg, stateArg string, yes bool, ti
 
 	// 1. Validate light name syntax
 	if !lightTokenRE.MatchString(lightArg) {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
 			"invalid_argument", "invalid light name syntax", nil)
 	}
 
 	// 2. Validate state
 	state := driver.LightState(stateArg)
 	if state != driver.LightStateOn && state != driver.LightStateOff {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
 			"invalid_argument", "invalid light state: must be on or off", nil)
 	}
 
 	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
-	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := profile.Resolve(traceCtx, nameArg, timeoutFlag, insecureFlag, deps.KC, deps.GetDriver)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+	}
+	lightDrv, ok := rp.Driver.(driver.LightDriver)
+	if !ok || !rp.Driver.Capabilities().LightControl {
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
+			apperr.Newf(5, "driver %q does not support light control", rp.Input.Driver))
 	}
 
-	if !rp.driver.Capabilities().LightControl {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-			apperr.Newf(5, "driver %q does not support light control", rp.pi.Driver))
-	}
-
-	precheckCtx, cancelPrecheck := context.WithTimeout(traceCtx, rp.timeout)
+	precheckCtx, cancelPrecheck := context.WithTimeout(traceCtx, rp.Timeout)
 	// Allowed states: idle, printing, paused, error
-	if _, err := checkStatePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-		rp.name, []string{"idle", "printing", "paused", "error"}, rp, deps, precheckCtx); err != nil {
+	if _, err := cmdrun.CheckStatePrecondition(precheckCtx, cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
+		[]string{"idle", "printing", "paused", "error"}, rp, deps.Log); err != nil {
 		cancelPrecheck()
 		return err
 	}
 	cancelPrecheck()
 
 	canonicalLight := normalizeLightKey(lightArg)
-	prompt := fmt.Sprintf("Set %s light %s on %s? Type 'yes' to continue: ", lightArg, stateArg, rp.name)
-	if err := checkConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, yes, prompt, deps); err != nil {
+	prompt := fmt.Sprintf("Set %s light %s on %s? Type 'yes' to continue: ", lightArg, stateArg, rp.Name)
+	if err := cmdrun.CheckConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, yes, prompt, deps.Prompter); err != nil {
 		return err
 	}
 
-	actionCtx, cancelAction := context.WithTimeout(traceCtx, rp.timeout)
+	actionCtx, cancelAction := context.WithTimeout(traceCtx, rp.Timeout)
 	defer cancelAction()
 
 	target := driver.LightTarget{
@@ -115,17 +117,17 @@ func runSet(cmd *cobra.Command, nameArg, lightArg, stateArg string, yes bool, ti
 	}
 
 	start := time.Now()
-	result, err := rp.lightDrv.LightSet(actionCtx, rp.pi, rp.secrets, deps.Log, target)
+	result, err := lightDrv.LightSet(actionCtx, rp.Input, rp.Secrets, deps.Log, target)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
 	}
 	durationMs := time.Since(start).Milliseconds()
 
 	// Verify driver-confirmed state matches target
 	if result.State != state || result.Light != canonicalLight {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 1,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 1,
 			"light_action_failed", "light operation did not result in expected state", map[string]any{
-				"profile":       rp.name,
+				"profile":       rp.Name,
 				"expectedLight": canonicalLight,
 				"expectedState": state,
 				"observedLight": result.Light,
@@ -138,7 +140,7 @@ func runSet(cmd *cobra.Command, nameArg, lightArg, stateArg string, yes bool, ti
 		tracePath = &protocolTrace
 	}
 
-	return writeSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, result, durationMs, tracePath)
+	return writeSuccess(cmd.OutOrStdout(), format, rp.Name, rp.Input.Driver, result, durationMs, tracePath)
 }
 
 func normalizeLightKey(light string) string {

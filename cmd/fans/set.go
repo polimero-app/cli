@@ -11,8 +11,10 @@ import (
 
 	"github.com/polimero-app/cli/internal/apperr"
 	"github.com/polimero-app/cli/internal/cmderr"
+	"github.com/polimero-app/cli/internal/cmdrun"
 	"github.com/polimero-app/cli/internal/driver"
 	"github.com/polimero-app/cli/internal/output"
+	"github.com/polimero-app/cli/internal/profile"
 	"github.com/polimero-app/cli/internal/protocoltrace"
 	"github.com/spf13/cobra"
 )
@@ -65,14 +67,14 @@ func runSet(cmd *cobra.Command, nameArg, fanArg, percentArg string, yes bool, ti
 
 	// 1. Validate fan name syntax
 	if !fanTokenRE.MatchString(fanArg) {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
 			"invalid_argument", "invalid fan name syntax", nil)
 	}
 
 	// 2. Validate speed percentage syntax
 	percent, parseErr := strconv.Atoi(percentArg)
 	if parseErr != nil {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
 			"invalid_argument", "invalid speed percent: must be an integer", nil)
 	}
 
@@ -84,41 +86,41 @@ func runSet(cmd *cobra.Command, nameArg, fanArg, percentArg string, yes bool, ti
 			"minimum": 0,
 			"maximum": 100,
 		}
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 2,
 			"unsafe_value", "fan speed out of range", details)
 	}
 
 	traceCtx, traceCleanup, traceErr := protocoltrace.Setup(cmd.Context(), protocolTrace)
 	if traceErr != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, traceErr)
 	}
 	defer protocoltrace.Finish(traceCleanup, cmd.ErrOrStderr(), &retErr)
 
-	rp, err := resolveProfile(traceCtx, nameArg, timeoutFlag, insecureFlag, deps)
+	rp, err := profile.Resolve(traceCtx, nameArg, timeoutFlag, insecureFlag, deps.KC, deps.GetDriver)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+	}
+	fanDrv, ok := rp.Driver.(driver.FanDriver)
+	if !ok || !rp.Driver.Capabilities().FanControl {
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
+			apperr.Newf(5, "driver %q does not support fan control", rp.Input.Driver))
 	}
 
-	if !rp.driver.Capabilities().FanControl {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-			apperr.Newf(5, "driver %q does not support fan control", rp.pi.Driver))
-	}
-
-	precheckCtx, cancelPrecheck := context.WithTimeout(traceCtx, rp.timeout)
-	if _, err := checkStatePrecondition(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
-		rp.name, []string{"idle", "printing", "paused"}, rp, deps, precheckCtx); err != nil {
+	precheckCtx, cancelPrecheck := context.WithTimeout(traceCtx, rp.Timeout)
+	if _, err := cmdrun.CheckStatePrecondition(precheckCtx, cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet,
+		[]string{"idle", "printing", "paused"}, rp, deps.Log); err != nil {
 		cancelPrecheck()
 		return err
 	}
 	cancelPrecheck()
 
 	canonicalFan := normalizeFanKey(fanArg)
-	prompt := fmt.Sprintf("Set %s fan to %d%% on %s? Type 'yes' to continue: ", fanArg, percent, rp.name)
-	if err := checkConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, yes, prompt, deps); err != nil {
+	prompt := fmt.Sprintf("Set %s fan to %d%% on %s? Type 'yes' to continue: ", fanArg, percent, rp.Name)
+	if err := cmdrun.CheckConfirmation(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, yes, prompt, deps.Prompter); err != nil {
 		return err
 	}
 
-	actionCtx, cancelAction := context.WithTimeout(traceCtx, rp.timeout)
+	actionCtx, cancelAction := context.WithTimeout(traceCtx, rp.Timeout)
 	defer cancelAction()
 
 	target := driver.FanTarget{
@@ -127,17 +129,17 @@ func runSet(cmd *cobra.Command, nameArg, fanArg, percentArg string, yes bool, ti
 	}
 
 	start := time.Now()
-	result, err := rp.fanDrv.FanSet(actionCtx, rp.pi, rp.secrets, deps.Log, target)
+	result, err := fanDrv.FanSet(actionCtx, rp.Input, rp.Secrets, deps.Log, target)
 	if err != nil {
-		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
+		return cmdrun.WriteError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, err)
 	}
 	durationMs := time.Since(start).Milliseconds()
 
 	// Verify driver-confirmed state matches target
 	if result.SpeedPercent != percent || result.Fan != canonicalFan {
-		return writeDetailError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 1,
+		return cmderr.WriteDetail(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandSet, 1,
 			"fan_action_failed", "fan operation did not result in expected state", map[string]any{
-				"profile":              rp.name,
+				"profile":              rp.Name,
 				"expectedFan":          canonicalFan,
 				"expectedSpeedPercent": percent,
 				"observedFan":          result.Fan,
@@ -150,7 +152,7 @@ func runSet(cmd *cobra.Command, nameArg, fanArg, percentArg string, yes bool, ti
 		tracePath = &protocolTrace
 	}
 
-	return writeSuccess(cmd.OutOrStdout(), format, rp.name, rp.pi.Driver, result, durationMs, tracePath)
+	return writeSuccess(cmd.OutOrStdout(), format, rp.Name, rp.Input.Driver, result, durationMs, tracePath)
 }
 
 func normalizeFanKey(fan string) string {
