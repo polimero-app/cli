@@ -79,6 +79,9 @@ polimero [command]
 - `jobs`
 - `temperature`
 - `motion`
+- `fans`
+- `lights`
+- `speed`
 - `completion`
 
 ### 3.3 Global flags
@@ -1147,4 +1150,8 @@ polimero temperature set <printer>
 
 polimero motion home <printer>
 polimero motion jog <printer>
+
+polimero fans set <printer> <fan> <percent>
+polimero lights set <printer> <light> <state>
+polimero speed set <printer> <profile>
 ```
