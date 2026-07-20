@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -62,6 +63,9 @@ func (d *Driver) Capabilities() driver.Capabilities {
 		JobCancel:        true,
 		TemperatureWrite: true,
 		MotionControl:    true,
+		FanControl:       true,
+		LightControl:     true,
+		SpeedControl:     true,
 	}
 }
 
@@ -859,4 +863,104 @@ func asUnixTimeString(v any) (string, bool) {
 	t := time.Unix(int64(f), 0).UTC()
 	s := t.Format(time.RFC3339)
 	return s, true
+}
+
+// FanSet sends M106 G-code via gcode-script to set fan speed.
+// Moonraker executes the script synchronously and returns when complete.
+func (d *Driver) FanSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, target driver.FanTarget) (driver.FanControlResult, error) {
+	fanGcode, supported := fanKeyToGcode(target.Fan)
+	if !supported {
+		return driver.FanControlResult{}, apperr.New(5, fmt.Sprintf("unsupported fan key: %s", target.Fan))
+	}
+
+	pwm := int(math.Round(float64(target.SpeedPercent) * 255 / 100))
+	gcode := fmt.Sprintf("%s S%d", fanGcode, pwm)
+
+	if err := d.runGCodeScript(ctx, p, s, "FanSet", gcode); err != nil {
+		return driver.FanControlResult{}, err
+	}
+
+	return driver.FanControlResult{
+		Fan:          target.Fan,
+		SpeedPercent: target.SpeedPercent,
+		Warnings:     []driver.StatusWarning{},
+		Capabilities: d.Capabilities(),
+	}, nil
+}
+
+// LightSet sends M960 G-code via gcode-script to set light state.
+func (d *Driver) LightSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, target driver.LightTarget) (driver.LightControlResult, error) {
+	if target.Light != "chamber" {
+		return driver.LightControlResult{}, apperr.New(5, fmt.Sprintf("unsupported light key: %s", target.Light))
+	}
+
+	var gcode string
+	if target.State == driver.LightStateOn {
+		gcode = "M960 S1"
+	} else {
+		gcode = "M960 S0"
+	}
+
+	if err := d.runGCodeScript(ctx, p, s, "LightSet", gcode); err != nil {
+		return driver.LightControlResult{}, err
+	}
+
+	return driver.LightControlResult{
+		Light:        "chamber",
+		State:        target.State,
+		Warnings:     []driver.StatusWarning{},
+		Capabilities: d.Capabilities(),
+	}, nil
+}
+
+// SpeedSet sends M220 G-code via gcode-script to set print speed profile.
+func (d *Driver) SpeedSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, profile string) (driver.SpeedControlResult, error) {
+	speedPercent, supported := speedProfileToPercent(profile)
+	if !supported {
+		return driver.SpeedControlResult{}, apperr.New(5, fmt.Sprintf("unsupported speed profile: %s", profile))
+	}
+
+	gcode := fmt.Sprintf("M220 S%d", speedPercent)
+
+	if err := d.runGCodeScript(ctx, p, s, "SpeedSet", gcode); err != nil {
+		return driver.SpeedControlResult{}, err
+	}
+
+	return driver.SpeedControlResult{
+		SpeedProfile: profile,
+		Warnings:     []driver.StatusWarning{},
+		Capabilities: d.Capabilities(),
+	}, nil
+}
+
+// fanKeyToGcode maps a canonical fan key to its M106 G-code prefix.
+// Returns (gcode, supported).
+func fanKeyToGcode(fan string) (string, bool) {
+	switch fan {
+	case "partCooling":
+		return "M106", true
+	case "auxiliary":
+		return "M106 P2", true
+	case "chamber":
+		return "M106 P3", true
+	default:
+		return "", false
+	}
+}
+
+// speedProfileToPercent maps a speed profile to its M220 S percentage.
+// Returns (percent, supported).
+func speedProfileToPercent(profile string) (int, bool) {
+	switch profile {
+	case "silent":
+		return 20, true
+	case "standard":
+		return 100, true
+	case "sport":
+		return 150, true
+	case "ludicrous":
+		return 300, true
+	default:
+		return 0, false
+	}
 }
