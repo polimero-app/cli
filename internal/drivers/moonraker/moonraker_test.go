@@ -3,6 +3,7 @@ package moonraker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -271,6 +272,240 @@ func TestNormalizeBaseURL_SchemeValidation(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Fatalf("normalizeBaseURL(%q) = %q, want %q", tc.host, got, tc.want)
+		}
+	}
+}
+
+// Auxiliary control tests
+
+func TestFanSet_PartCooling_Success(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer srv.Close()
+
+	drv := New()
+	target := driver.FanTarget{Fan: "partCooling", SpeedPercent: 60}
+	result, err := drv.FanSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
+	if err != nil {
+		t.Fatalf("FanSet error: %v", err)
+	}
+
+	if result.Fan != "partCooling" || result.SpeedPercent != 60 {
+		t.Errorf("result = %+v, want partCooling/60", result)
+	}
+	if !strings.Contains(gotQuery, "M106+S") {
+		t.Errorf("query = %q, want M106+S", gotQuery)
+	}
+}
+
+func TestFanSet_Auxiliary_Success(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer srv.Close()
+
+	drv := New()
+	target := driver.FanTarget{Fan: "auxiliary", SpeedPercent: 100}
+	result, err := drv.FanSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
+	if err != nil {
+		t.Fatalf("FanSet error: %v", err)
+	}
+
+	if result.Fan != "auxiliary" {
+		t.Errorf("fan = %q, want auxiliary", result.Fan)
+	}
+	if !strings.Contains(gotQuery, "M106+P2+S255") {
+		t.Errorf("query = %q, want M106+P2+S255", gotQuery)
+	}
+}
+
+func TestFanSet_UnsupportedFan(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer srv.Close()
+
+	drv := New()
+	target := driver.FanTarget{Fan: "unknown", SpeedPercent: 50}
+	_, err := drv.FanSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
+	if err == nil {
+		t.Fatal("expected error for unsupported fan")
+	}
+
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
+		t.Errorf("exit code = %v, want 5", err)
+	}
+}
+
+func TestLightSet_ChamberOn_Success(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer srv.Close()
+
+	drv := New()
+	target := driver.LightTarget{Light: "chamber", State: driver.LightStateOn}
+	result, err := drv.LightSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
+	if err != nil {
+		t.Fatalf("LightSet error: %v", err)
+	}
+
+	if result.Light != "chamber" || result.State != driver.LightStateOn {
+		t.Errorf("result = %+v, want chamber/on", result)
+	}
+	if !strings.Contains(gotQuery, "M960+S1") {
+		t.Errorf("query = %q, want M960+S1", gotQuery)
+	}
+}
+
+func TestLightSet_ChamberOff_Success(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer srv.Close()
+
+	drv := New()
+	target := driver.LightTarget{Light: "chamber", State: driver.LightStateOff}
+	result, err := drv.LightSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
+	if err != nil {
+		t.Fatalf("LightSet error: %v", err)
+	}
+
+	if result.State != driver.LightStateOff {
+		t.Errorf("state = %q, want off", result.State)
+	}
+	if !strings.Contains(gotQuery, "M960+S0") {
+		t.Errorf("query = %q, want M960+S0", gotQuery)
+	}
+}
+
+func TestLightSet_UnsupportedLight(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer srv.Close()
+
+	drv := New()
+	target := driver.LightTarget{Light: "unknown", State: driver.LightStateOn}
+	_, err := drv.LightSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, target)
+	if err == nil {
+		t.Fatal("expected error for unsupported light")
+	}
+
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
+		t.Errorf("exit code = %v, want 5", err)
+	}
+}
+
+func TestSpeedSet_AllProfiles(t *testing.T) {
+	cases := []struct {
+		profile string
+		percent int
+	}{
+		{"silent", 20},
+		{"standard", 100},
+		{"sport", 150},
+		{"ludicrous", 300},
+	}
+
+	for _, tc := range cases {
+		var gotQuery string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.RawQuery
+			_, _ = w.Write([]byte(`{"result":{}}`))
+		}))
+
+		drv := New()
+		result, err := drv.SpeedSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, tc.profile)
+		if err != nil {
+			t.Fatalf("SpeedSet(%s) error: %v", tc.profile, err)
+		}
+
+		if result.SpeedProfile != tc.profile {
+			t.Errorf("profile = %q, want %q", result.SpeedProfile, tc.profile)
+		}
+
+		expectedGcode := fmt.Sprintf("M220+S%d", tc.percent)
+		if !strings.Contains(gotQuery, expectedGcode) {
+			t.Errorf("SpeedSet(%s) query = %q, want %s", tc.profile, gotQuery, expectedGcode)
+		}
+
+		srv.Close()
+	}
+}
+
+func TestSpeedSet_UnsupportedProfile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer srv.Close()
+
+	drv := New()
+	_, err := drv.SpeedSet(context.Background(), testProfile(srv.URL), testSecrets(), nil, "unknown")
+	if err == nil {
+		t.Fatal("expected error for unsupported profile")
+	}
+
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
+		t.Errorf("exit code = %v, want 5", err)
+	}
+}
+
+func TestFanKeyToGcode_AllKeys(t *testing.T) {
+	cases := []struct {
+		key   string
+		gcode string
+		ok    bool
+	}{
+		{"partCooling", "M106", true},
+		{"auxiliary", "M106 P2", true},
+		{"chamber", "M106 P3", true},
+		{"unknown", "", false},
+	}
+
+	for _, tc := range cases {
+		gcode, ok := fanKeyToGcode(tc.key)
+		if ok != tc.ok {
+			t.Errorf("fanKeyToGcode(%q): got ok=%v, want %v", tc.key, ok, tc.ok)
+		}
+		if ok && gcode != tc.gcode {
+			t.Errorf("fanKeyToGcode(%q): got %q, want %q", tc.key, gcode, tc.gcode)
+		}
+	}
+}
+
+func TestSpeedProfileToPercent_AllProfiles(t *testing.T) {
+	cases := []struct {
+		profile string
+		percent int
+		ok      bool
+	}{
+		{"silent", 20, true},
+		{"standard", 100, true},
+		{"sport", 150, true},
+		{"ludicrous", 300, true},
+		{"unknown", 0, false},
+	}
+
+	for _, tc := range cases {
+		percent, ok := speedProfileToPercent(tc.profile)
+		if ok != tc.ok {
+			t.Errorf("speedProfileToPercent(%q): got ok=%v, want %v", tc.profile, ok, tc.ok)
+		}
+		if ok && percent != tc.percent {
+			t.Errorf("speedProfileToPercent(%q): got %d, want %d", tc.profile, percent, tc.percent)
 		}
 	}
 }
