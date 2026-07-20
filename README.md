@@ -84,3 +84,11 @@ If target FFmpeg pkg-config metadata is not on the default lookup path, set
 ### Moonraker
 
 * https://moonraker.readthedocs.io/
+
+## Disclaimer
+
+This project was built with AI assistance. It has been tested on real hardware (BambuLab A1 Mini and BambuLab H2C) but comes with no guarantees whatsoever. Use at your own risk - the author assumes zero liability for damages, printer or system failures, or data loss arising from its use.
+
+## License
+
+This project is licensed under the GNU AFFERO GENERAL PUBLIC LICENSE - see the [LICENSE](LICENSE) file for details.
