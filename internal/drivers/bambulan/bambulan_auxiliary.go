@@ -94,8 +94,11 @@ func (d *Driver) FanSet(ctx context.Context, p driver.ProfileInput, s driver.Sec
 	}, nil
 }
 
-// LightSet sends M960 G-code to control the chamber light and waits for a
-// status report where lights_report shows the requested state.
+// LightSet sends a system/ledctrl command to control the chamber light and
+// waits for a status report where lights_report shows the requested state.
+// ledctrl is the documented, universal Bambu light command; unlike the M960
+// G-code (which A1 mini and H2C firmware silently ignore), it is honored
+// across all initial families.
 func (d *Driver) LightSet(ctx context.Context, p driver.ProfileInput, s driver.SecretsBundle, _ *slog.Logger, target driver.LightTarget) (driver.LightControlResult, error) {
 	if !d.Capabilities().LightControl {
 		return driver.LightControlResult{}, apperr.New(5, "light control is not supported by this printer")
@@ -105,14 +108,12 @@ func (d *Driver) LightSet(ctx context.Context, p driver.ProfileInput, s driver.S
 		return driver.LightControlResult{}, apperr.New(5, fmt.Sprintf("unsupported light key: %s", target.Light))
 	}
 
-	var gcode string
+	ledMode := "off"
 	if target.State == driver.LightStateOn {
-		gcode = "M960 S1\n"
-	} else {
-		gcode = "M960 S0\n"
+		ledMode = "on"
 	}
 
-	payload, err := buildGcodeLinePayload(gcode)
+	payload, err := buildLedCtrlPayload("chamber_light", ledMode)
 	if err != nil {
 		return driver.LightControlResult{}, apperr.Wrap(4, "failed to build light command", err)
 	}
@@ -197,6 +198,40 @@ func (d *Driver) SpeedSet(ctx context.Context, p driver.ProfileInput, s driver.S
 		Warnings:     warnings,
 		Capabilities: d.Capabilities(),
 	}, nil
+}
+
+// buildLedCtrlPayload constructs the Bambu system/ledctrl MQTT payload JSON.
+// led_on_time/led_off_time/loop_times/interval_time are only meaningful for
+// "flashing" mode but the firmware expects them present regardless of mode.
+func buildLedCtrlPayload(node, mode string) (string, error) {
+	type ledCtrlCmd struct {
+		SequenceID   string `json:"sequence_id"`
+		Command      string `json:"command"`
+		LedNode      string `json:"led_node"`
+		LedMode      string `json:"led_mode"`
+		LedOnTime    int    `json:"led_on_time"`
+		LedOffTime   int    `json:"led_off_time"`
+		LoopTimes    int    `json:"loop_times"`
+		IntervalTime int    `json:"interval_time"`
+	}
+	type payload struct {
+		System ledCtrlCmd `json:"system"`
+	}
+	pl := payload{System: ledCtrlCmd{
+		SequenceID:   nextSequenceID(),
+		Command:      "ledctrl",
+		LedNode:      node,
+		LedMode:      mode,
+		LedOnTime:    500,
+		LedOffTime:   500,
+		LoopTimes:    1,
+		IntervalTime: 1000,
+	}}
+	b, err := json.Marshal(pl)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // buildPrintSpeedPayload constructs the Bambu print_speed MQTT payload JSON.

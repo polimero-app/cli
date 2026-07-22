@@ -247,8 +247,8 @@ func TestLightSet_ChamberOn_EchoConfirms(t *testing.T) {
 	}
 
 	pubs := fc.getPublished()
-	if !strings.Contains(pubs[0], "M960 S1") {
-		t.Errorf("expected M960 S1, got: %s", pubs[0])
+	if !strings.Contains(pubs[0], `"command":"ledctrl"`) || !strings.Contains(pubs[0], `"led_node":"chamber_light"`) || !strings.Contains(pubs[0], `"led_mode":"on"`) {
+		t.Errorf("expected ledctrl chamber_light on, got: %s", pubs[0])
 	}
 }
 
@@ -268,8 +268,8 @@ func TestLightSet_ChamberOff_EchoConfirms(t *testing.T) {
 	}
 
 	pubs := fc.getPublished()
-	if !strings.Contains(pubs[0], "M960 S0") {
-		t.Errorf("expected M960 S0, got: %s", pubs[0])
+	if !strings.Contains(pubs[0], `"command":"ledctrl"`) || !strings.Contains(pubs[0], `"led_node":"chamber_light"`) || !strings.Contains(pubs[0], `"led_mode":"off"`) {
+		t.Errorf("expected ledctrl chamber_light off, got: %s", pubs[0])
 	}
 }
 

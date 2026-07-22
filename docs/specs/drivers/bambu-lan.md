@@ -247,12 +247,12 @@ Acknowledgment: the driver waits, bounded by the command timeout, for a status r
 
 #### Light Control
 
-`lights set` publishes `print.command: "gcode_line"` with M960 G-code:
+`lights set` publishes `system.command: "ledctrl"` with `led_node: "chamber_light"` and `led_mode` set to `on` or `off` (`led_on_time`/`led_off_time`/`loop_times`/`interval_time` are included with fixed values as required by the firmware, though only meaningful for `flashing` mode). M960 G-code is not used: A1 mini and H2C firmware silently ignore it.
 
-| Light key | Command | Notes |
+| Light key | `led_mode` | Notes |
 |---|---|---|
-| `chamber` | `M960 S0` | Chamber light off |
-| `chamber` | `M960 S1` | Chamber light on |
+| `chamber` | `off` | Chamber light off |
+| `chamber` | `on` | Chamber light on |
 
 The driver waits, bounded by the command timeout, for a status report (full or delta) where `lights_report[]` contains an entry with `node == "chamber_light"` and `mode` matching the requested state (`off` or `on`). No matching entry before the timeout fails with exit code `4`.
 
