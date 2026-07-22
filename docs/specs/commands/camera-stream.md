@@ -11,7 +11,7 @@ Start a local HTTP server that proxies the printer's camera feed and print the U
 ## Syntax
 
 ```text
-polimero camera stream <name> [--port <port>] [--timeout <duration>] [--insecure] [--protocol-trace <file>] [--output <format>]
+polimero camera stream <name> [--port <port>] [--timeout <duration>] [--format <format>] [--insecure] [--protocol-trace <file>] [--output <format>]
 ```
 
 ## Arguments
@@ -22,6 +22,7 @@ polimero camera stream <name> [--port <port>] [--timeout <duration>] [--insecure
 
 - `--port <port>`: local HTTP server port. Default: `8080`. Must be a valid port number (1–65535). Fails with exit code `2` if the port is already in use.
 - `--timeout <duration>`: auto-stop after this duration. Optional. No default (runs until Ctrl+C). Must parse as a Go duration and be greater than zero.
+- `--format <format>`: output stream format. Optional. Values: `mjpeg`. When set to `mjpeg` and the source is H.264, the command transcodes the stream to multipart MJPEG for browser viewing. When the source is already MJPEG, this flag is a no-op. Invalid values fail with exit code `2`.
 - `--insecure`: skip TLS verification for the camera endpoint for this invocation, regardless of the profile `insecure` setting.
 - `--protocol-trace <file>`: optional. Writes sanitized JSON Lines protocol diagnostics to a new local file. The file must not already exist. Trace output may include camera endpoint probes, selected protocol (`mjpeg` or `h264`), TLS fingerprint verification status, byte counts, durations, and sanitized stream error categories. It must not include access codes, TLS private material, raw camera frames, H.264 access units, MJPEG frame bytes, decoded images, or unsanitized camera protocol errors.
 - `--output <format>`: global flag. Values: `human`, `json`. Default: `human`.
@@ -56,6 +57,7 @@ If the TLS fingerprint is missing for a secure profile, the command fails with e
 - The command is read-only. It does not send state-changing commands to the printer.
 - The command resolves the printer profile, loads secrets, and calls the driver's `CameraStream` operation.
 - The driver returns a raw stream and a format descriptor (`mjpeg` or `h264`).
+- When `--format mjpeg` is set and the driver returns an H.264 stream, the command transcodes the stream: it parses H.264 Annex-B into access units, decodes each frame via libavcodec, JPEG-encodes at quality 80, and serves the result as multipart MJPEG. When the source is already MJPEG, `--format mjpeg` is a no-op.
 - The command layer starts an HTTP server on `127.0.0.1:<port>` and serves the stream at `/stream`.
 - The upstream camera feed cannot be duplicated: `/stream` serves at most one client at a time. Additional concurrent requests receive `503 Service Unavailable` until the active client disconnects.
 - All other HTTP paths return `404`.
@@ -168,6 +170,7 @@ JSON error example:
 - TLS fingerprint mismatch (TOFU violation).
 - `--port` out of range or already in use.
 - `--timeout` invalid or zero.
+- `--format` invalid value.
 - Protocol trace path already exists or cannot be created.
 - Camera endpoint unreachable (both ports refused or timed out).
 - Driver does not support `CameraStream`.
@@ -207,11 +210,14 @@ JSON error example:
 - Fails before connecting when the protocol trace file cannot be created.
 - Does not leak access code, raw auth payloads, camera payloads, decoded images, or TLS material in protocol trace output.
 - Does not leak access code or TLS material in output or logs.
+- `--format mjpeg` with native MJPEG source is a no-op (serves MJPEG directly).
+- `--format mjpeg` with H.264 source transcodes and serves multipart MJPEG.
+- `--format mjpeg` with H.264 source reports format as `mjpeg` in JSON output.
+- Invalid `--format` value fails with exit code `2`.
 
 ## Non-goals
 
 - Binding the HTTP server to non-localhost addresses.
-- Transcoding H.264 to a browser-native format.
 - Cloud camera (TUTK/Agora p2p).
 - Recording or saving the stream to disk.
 - Multiple simultaneous streams from one command invocation.

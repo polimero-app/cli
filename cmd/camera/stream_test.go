@@ -655,3 +655,95 @@ func freePort(t *testing.T) int {
 	_ = ln.Close()
 	return port
 }
+
+func TestStream_InvalidFormat_ExitsCode2(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	deps := makeDeps(t, dir, kc, defaultDriver())
+	_, err := runCmd(t, deps, "myprinter", "--format", "bogus")
+	var exitErr *apperr.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Errorf("expected exit 2, got %v", err)
+	}
+}
+
+func TestStream_FormatMJPEG_NativeSource_NoOp(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	drv := &stubDriver{
+		caps: driver.Capabilities{CameraStream: true},
+		streamRes: &driver.CameraStreamResult{
+			Format:       driver.CameraFormatMJPEG,
+			Stream:       io.NopCloser(strings.NewReader("fake-mjpeg")),
+			Capabilities: driver.Capabilities{CameraStream: true},
+		},
+	}
+	deps := makeDeps(t, dir, kc, drv)
+	port := freePort(t)
+	out, err := runCmd(t, deps, "myprinter", "--format", "mjpeg", "--timeout", "1ms", "--port", portStr(port))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Native MJPEG source with --format mjpeg is a no-op — still shows MJPEG.
+	if !strings.Contains(out, "MJPEG (open in browser)") {
+		t.Errorf("expected MJPEG format description, got:\n%s", out)
+	}
+}
+
+func TestStream_FormatMJPEG_H264Source_TranscodesOutput(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	drv := &stubDriver{
+		caps: driver.Capabilities{CameraStream: true},
+		streamRes: &driver.CameraStreamResult{
+			Format:       driver.CameraFormatH264,
+			Stream:       io.NopCloser(strings.NewReader("fake-h264")),
+			Capabilities: driver.Capabilities{CameraStream: true},
+		},
+	}
+	deps := makeDeps(t, dir, kc, drv)
+	port := freePort(t)
+	out, err := runCmd(t, deps, "myprinter", "--format", "mjpeg", "--timeout", "1ms", "--port", portStr(port))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// H.264 source with --format mjpeg reports MJPEG output.
+	if !strings.Contains(out, "MJPEG (open in browser)") {
+		t.Errorf("expected MJPEG format description for transcoded stream, got:\n%s", out)
+	}
+}
+
+func TestStream_FormatMJPEG_H264Source_JSONOutput(t *testing.T) {
+	dir := t.TempDir()
+	kc := keychain.NewMock()
+	seedProfile(t, dir, kc, "myprinter", false)
+	drv := &stubDriver{
+		caps: driver.Capabilities{CameraStream: true},
+		streamRes: &driver.CameraStreamResult{
+			Format:       driver.CameraFormatH264,
+			Stream:       io.NopCloser(strings.NewReader("fake-h264")),
+			Capabilities: driver.Capabilities{CameraStream: true},
+		},
+	}
+	deps := makeDeps(t, dir, kc, drv)
+	port := freePort(t)
+	out, err := runCmd(t, deps, "myprinter", "--output", "json", "--format", "mjpeg", "--timeout", "1ms", "--port", portStr(port))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var env struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Format string `json:"format"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("failed to parse JSON: %v\noutput: %s", err, out)
+	}
+	if env.Data.Format != "mjpeg" {
+		t.Errorf("expected format=mjpeg in JSON, got %q", env.Data.Format)
+	}
+}

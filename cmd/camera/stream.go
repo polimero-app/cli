@@ -30,6 +30,7 @@ func streamCommandWithDeps(deps Deps) *cobra.Command {
 		timeout       string
 		insecure      bool
 		protocolTrace string
+		formatFlag    string
 	}
 
 	cmd := &cobra.Command{
@@ -42,17 +43,18 @@ func streamCommandWithDeps(deps Deps) *cobra.Command {
 			if len(args) > 1 {
 				return writeUsageError(cmd, commandStream, fmt.Sprintf("expected exactly one profile name, got %d", len(args)))
 			}
-			return runStream(cmd, args[0], flags.port, flags.timeout, flags.insecure, flags.protocolTrace, deps)
+			return runStream(cmd, args[0], flags.port, flags.timeout, flags.insecure, flags.protocolTrace, flags.formatFlag, deps)
 		},
 	}
 	cmd.Flags().IntVar(&flags.port, "port", 8080, "local HTTP server port")
 	cmd.Flags().StringVar(&flags.timeout, "timeout", "", "auto-stop after this duration (e.g. 30m)")
 	cmd.Flags().BoolVar(&flags.insecure, "insecure", false, "skip TLS fingerprint verification for this invocation")
 	cmd.Flags().StringVar(&flags.protocolTrace, "protocol-trace", "", "write protocol diagnostics to this file (JSON Lines)")
+	cmd.Flags().StringVar(&flags.formatFlag, "format", "", "output format for stream: mjpeg (transcode H.264 to MJPEG for browser viewing)")
 	return cmd
 }
 
-func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string, insecureFlag bool, protocolTrace string, deps Deps) (retErr error) {
+func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string, insecureFlag bool, protocolTrace string, formatFlag string, deps Deps) (retErr error) {
 	formatStr, _ := cmd.Root().PersistentFlags().GetString("output")
 	format, fmtErr := output.ParseFormat(formatStr)
 	if fmtErr != nil {
@@ -60,6 +62,10 @@ func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string,
 	}
 
 	if err := validateFlags(port, timeoutFlag); err != nil {
+		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
+	}
+
+	if err := validateFormatFlag(formatFlag); err != nil {
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
 	}
 
@@ -86,7 +92,7 @@ func runStream(cmd *cobra.Command, nameArg string, port int, timeoutFlag string,
 		defer timer.Stop()
 	}
 
-	return serve(cmd, streamCtx, name, port, format, result)
+	return serve(cmd, streamCtx, name, port, format, formatFlag, result)
 }
 
 func validateFlags(port int, timeoutFlag string) error {
@@ -103,6 +109,15 @@ func validateFlags(port int, timeoutFlag string) error {
 		}
 	}
 	return nil
+}
+
+func validateFormatFlag(formatFlag string) error {
+	switch formatFlag {
+	case "", "mjpeg":
+		return nil
+	default:
+		return apperr.Newf(2, "invalid --format %q: must be \"mjpeg\" or omitted", formatFlag)
+	}
 }
 
 func openStream(ctx context.Context, cmd *cobra.Command, nameArg, timeoutFlag string, insecureFlag bool, deps Deps) (*driver.CameraStreamResult, string, error) {
@@ -187,7 +202,7 @@ func streamHandler(stream io.Reader, contentType string) http.Handler {
 	})
 }
 
-func serve(cmd *cobra.Command, ctx context.Context, name string, port int, format output.Format, result *driver.CameraStreamResult) error {
+func serve(cmd *cobra.Command, ctx context.Context, name string, port int, format output.Format, formatFlag string, result *driver.CameraStreamResult) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
 	// Check port availability before starting the server.
@@ -200,14 +215,25 @@ func serve(cmd *cobra.Command, ctx context.Context, name string, port int, forma
 
 	url := fmt.Sprintf("http://%s/stream", addr)
 
-	contentType, err := streamContentType(result.Format)
+	// Determine effective serving format and content type.
+	servingFormat := result.Format
+	if formatFlag == "mjpeg" && result.Format == driver.CameraFormatH264 {
+		servingFormat = driver.CameraFormatMJPEG
+	}
+
+	contentType, err := streamContentType(servingFormat)
 	if err != nil {
 		_ = ln.Close()
 		return writeError(cmd.OutOrStdout(), cmd.ErrOrStderr(), format, commandStream, err)
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/stream", streamHandler(result.Stream, contentType))
+	if formatFlag == "mjpeg" && result.Format == driver.CameraFormatH264 {
+		// Transcode H.264 → MJPEG for browser viewing.
+		mux.Handle("/stream", mjpegTranscodeHandler(result.Stream))
+	} else {
+		mux.Handle("/stream", streamHandler(result.Stream, contentType))
+	}
 
 	srv := &http.Server{
 		Handler:     requireLoopbackHost(mux),
@@ -216,9 +242,9 @@ func serve(cmd *cobra.Command, ctx context.Context, name string, port int, forma
 
 	// Write output once server is ready.
 	if format == output.FormatJSON {
-		_ = writeStreamJSONSuccess(cmd.OutOrStdout(), name, url, string(result.Format), port)
+		_ = writeStreamJSONSuccess(cmd.OutOrStdout(), name, url, string(servingFormat), port)
 	} else {
-		writeHumanStart(cmd.OutOrStdout(), name, result.Format, url)
+		writeHumanStart(cmd.OutOrStdout(), name, servingFormat, url)
 	}
 
 	// Start server in background.
