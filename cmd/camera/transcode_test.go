@@ -13,8 +13,8 @@ import (
 func TestAnnexBScanner_ParsesNALUs(t *testing.T) {
 	// Build an Annex-B stream: SPS + PPS + IDR (each with 4-byte start code).
 	sps := []byte{0x67, 0x42, 0xc0, 0x0a} // NALU type 7
-	pps := []byte{0x68, 0xcb, 0x83}        // NALU type 8
-	idr := []byte{0x65, 0x88, 0x84}        // NALU type 5
+	pps := []byte{0x68, 0xcb, 0x83}       // NALU type 8
+	idr := []byte{0x65, 0x88, 0x84}       // NALU type 5
 
 	var buf bytes.Buffer
 	for _, nalu := range [][]byte{sps, pps, idr} {
