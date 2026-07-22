@@ -6,7 +6,7 @@ Instructions for agents working in this repository.
 
 Polimero is a greenfield Go CLI for interacting with 3D printers through brand-specific drivers behind a stable command surface.
 
-Current phase: printer-management, network read, and control command slices are implemented (`printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, `files upload`, `jobs start`, `jobs pause`, `jobs resume`, `jobs cancel`, `temperature set`, `motion home`, `motion jog`), plus the `--trace` protocol diagnostics flag. Auxiliary control specs (fans, lights, speed) are accepted but not yet implemented. Keep using accepted ADRs and specs to authorize new behavior before implementation.
+Current phase: printer-management, network read, and control command slices are implemented (`printer add`, `printer list`, `printer remove`, `printer drivers`, `printer discover`, `printer tls refresh`, `status`, `camera stream`, `camera snapshot`, `files roots`, `files list`, `files download`, `files upload`, `jobs start`, `jobs pause`, `jobs resume`, `jobs cancel`, `temperature set`, `motion home`, `motion jog`, `fans set`, `lights set`, `speed set`), plus the `--protocol-trace` diagnostics flag and `camera stream --format mjpeg` transcoding. Implemented drivers: `bambu-lan` and `moonraker`. Keep using accepted ADRs and specs to authorize new behavior before implementation.
 
 Primary references:
 
@@ -111,7 +111,7 @@ Initial Bambu scope:
 
 - X1, P1, A1, and H2 families.
 - LAN access code only.
-- Implemented commands: discovery, TLS refresh, read-only status, camera streaming, camera snapshot, file management (roots, list, download, upload), job control (start, pause, resume, cancel), temperature targets, and motion (home, jog).
+- Implemented commands: discovery, TLS refresh, read-only status, camera streaming (including `--format mjpeg` transcoding), camera snapshot, file management (roots, list, download, upload), job control (start, pause, resume, cancel), temperature targets, motion (home, jog), and auxiliary controls (fans, lights, speed).
 - Capability-gated behavior.
 
 Out of scope unless a later accepted ADR/spec says otherwise:
@@ -122,6 +122,20 @@ Out of scope unless a later accepted ADR/spec says otherwise:
 - Authorization bypass.
 
 Protocol research may use official docs, user-owned device observations, and compatible public OSS references with attribution and license review.
+
+## Moonraker Rules
+
+Moonraker scope:
+
+- Klipper-based printers (e.g. Sonic Pad, Nebula deployments) reachable over HTTP(S).
+- API key only, stored in the existing keychain access-code slot.
+- Implemented commands: read-only status, file management (roots, list, download, upload), job control (start, pause, resume, cancel), temperature targets, motion (home, jog), and auxiliary controls (fans, speed).
+- `lights set` is unsupported: stock Klipper has no portable, confirmable light command, and ADR 0014 forbids advertising an unconfirmable capability.
+
+Out of scope unless a later accepted ADR/spec says otherwise:
+
+- `printer discover`, `printer tls refresh`, `camera stream`, `camera snapshot`.
+- Cloud auth or cloud APIs.
 
 ## Testing Expectations
 
