@@ -209,6 +209,73 @@ func TestRTSPStream_FatalDecodeErrorDoesNotDeadlock(t *testing.T) {
 	}
 }
 
+// TestRTSPStream_SlowReaderGetsNewestFrame is a regression test for the live
+// view showing an ever-growing backlog instead of the current frame: the
+// data channel used to be a 256-deep FIFO that dropped the newest frame
+// once full, so a decoder slower than the camera's frame rate spent its
+// whole life chewing through stale frames instead of the latest one. It
+// must instead evict the stale buffered frame and keep only the newest.
+func TestRTSPStream_SlowReaderGetsNewestFrame(t *testing.T) {
+	h, medi, port := startRTSPSTestServer(t)
+
+	clientTLS := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test server uses a throwaway self-signed cert
+	c, cliMedi, forma, rtpDec, err := connectRTSPSH264(clientTLS, "127.0.0.1", "testcode", port, 5*time.Second)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	stream, err := newRTSPStream(c, cliMedi, forma, rtpDec)
+	if err != nil {
+		t.Fatalf("newRTSPStream: %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-h.playCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client never reached PLAY state")
+	}
+
+	// Every access unit below carries its own SPS/PPS and marker=true, so
+	// each RTP write completes one whole access unit (see rtph264 Decoder:
+	// a packet with Marker set closes out the frame buffer immediately).
+	writeFrame := func(ts uint32, seqStart uint16, payload byte) {
+		t.Helper()
+		pkts := []*rtp.Packet{
+			{Header: rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: seqStart, Timestamp: ts, SSRC: 1}, Payload: []byte{0x67, 0x01}},                      // SPS
+			{Header: rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: seqStart + 1, Timestamp: ts, SSRC: 1}, Payload: []byte{0x68, 0x02}},                  // PPS
+			{Header: rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: seqStart + 2, Timestamp: ts, Marker: true, SSRC: 1}, Payload: []byte{0x65, payload}}, // IDR
+		}
+		for _, pkt := range pkts {
+			if err := h.stream.WritePacketRTP(medi, pkt); err != nil {
+				t.Fatalf("write RTP packet: %v", err)
+			}
+		}
+	}
+
+	// Send three frames back-to-back without reading any of them, as a
+	// decoder that can't keep up with the camera would. Give the
+	// single connection-reader goroutine time to process all three before
+	// the first Read call.
+	writeFrame(0, 0, 0xAA)
+	writeFrame(90000, 3, 0xBB)
+	writeFrame(180000, 6, 0xCC)
+	time.Sleep(500 * time.Millisecond)
+
+	buf := make([]byte, 4096)
+	n, err := stream.Read(buf)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	got := buf[:n]
+	if !bytes.Contains(got, []byte{0x65, 0xCC}) {
+		t.Fatalf("Read returned stale frame, want newest (0xCC): %x", got)
+	}
+	if bytes.Contains(got, []byte{0x65, 0xAA}) || bytes.Contains(got, []byte{0x65, 0xBB}) {
+		t.Fatalf("Read returned a backlog of stale frames instead of just the newest: %x", got)
+	}
+}
+
 // TestRTSPStream_CloseWhileStreaming verifies a plain Close with no error
 // terminates the stream and unblocks a concurrent reader.
 func TestRTSPStream_CloseWhileStreaming(t *testing.T) {

@@ -114,7 +114,12 @@ func dialRTSPS(ctx context.Context, tlsCfg *tls.Config, host, accessCode string)
 // starts playback, and returns the resulting stream. On error the client has
 // been closed.
 func newRTSPStream(c *gortsplib.Client, medi *description.Media, forma *format.H264, rtpDec *rtph264.Decoder) (io.ReadCloser, error) {
-	dataCh := make(chan []byte, 256)
+	// ponytail: capacity 1, not a deep FIFO. This is a live view: if the
+	// consumer (H.264 decode + JPEG encode) falls behind the camera's
+	// frame rate, we want it to skip straight to the newest frame, not
+	// wade through a growing backlog of stale ones (that backlog is what
+	// made the stream look like a slow-motion replay instead of live).
+	dataCh := make(chan []byte, 1)
 	s := &rtspStream{
 		client: c,
 		dataCh: dataCh,
@@ -152,10 +157,19 @@ func newRTSPStream(c *gortsplib.Client, medi *description.Media, forma *format.H
 		if len(data) == 0 {
 			return
 		}
-		// Non-blocking send: drop frame if channel is full (reader too slow).
+		// Reader too slow: evict the stale buffered frame (if any) so the
+		// newest one always wins, instead of piling up behind it.
 		select {
 		case dataCh <- data:
 		default:
+			select {
+			case <-dataCh:
+			default:
+			}
+			select {
+			case dataCh <- data:
+			default:
+			}
 		}
 	})
 
